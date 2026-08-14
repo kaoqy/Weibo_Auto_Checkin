@@ -1,6 +1,8 @@
 """账号管理 API。"""
 from __future__ import annotations
 
+import requests
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
@@ -91,7 +93,7 @@ def verify_one(account_id: int, user: dict = Depends(auth.require_admin)):
         idx = (acc.get("proxy_index") or 0) % len(opts.proxies)
         proxy = opts.proxies[idx]
         channel = "socks"
-    session = __import__("requests").Session()
+    session = requests.Session()
     session.headers.update({
         "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) "
                       "AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148",

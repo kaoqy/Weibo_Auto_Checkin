@@ -6,7 +6,7 @@ import threading
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from .. import auth, database, scheduler
+from .. import auth, database, scheduler, notifier
 
 router = APIRouter(prefix="/api", tags=["tasks"])
 
@@ -97,8 +97,7 @@ def reload_schedule(user: dict = Depends(auth.require_admin)):
 @router.post("/notify/test")
 def test_notify(user: dict = Depends(auth.require_admin)):
     """发送一条测试 TG 消息。"""
-    ok = __import__("..notifier", fromlist=["send_text_message"]).send_text_message(
-        "✅ 这是一条来自微博签到管理面板的测试消息")
+    ok = notifier.send_text_message("✅ 这是一条来自微博签到管理面板的测试消息")
     return {"ok": ok}
 
 
