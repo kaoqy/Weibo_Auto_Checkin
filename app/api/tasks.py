@@ -1,0 +1,107 @@
+"""任务与调度 API。"""
+from __future__ import annotations
+
+import threading
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+
+from .. import auth, database, scheduler
+
+router = APIRouter(prefix="/api", tags=["tasks"])
+
+
+class CronIn(BaseModel):
+    cron: str = "0 7 * * *"
+    enabled: bool = True
+
+
+@router.post("/checkin/run")
+def run_now(user: dict = Depends(auth.require_admin)):
+    """手动触发一次签到（立即返回，签到在后台线程执行）。"""
+    def _worker():
+        scheduler.run_checkin("manual")
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+    return {"ok": True, "message": "签到任务已启动"}
+
+
+@router.get("/checkin/status")
+def checkin_status(user: dict = Depends(auth.require_admin)):
+    run = scheduler.get_current_run()
+    if run is None:
+        return {"running": False}
+    running = run.get("status") == "running"
+    return {
+        "running": running,
+        "run": run,
+    }
+
+
+@router.get("/checkin/last")
+def last_run(user: dict = Depends(auth.require_admin)):
+    return {"summary": scheduler._last_run_summary}
+
+
+@router.get("/tasks")
+def list_tasks(limit: int = 20, user: dict = Depends(auth.require_admin)):
+    return database.get_tasks(limit)
+
+
+@router.get("/logs")
+def list_logs(limit: int = 50, account_id: int | None = None, user: dict = Depends(auth.require_admin)):
+    return database.get_logs(limit, account_id)
+
+
+@router.get("/logs/grouped")
+def list_logs_grouped(limit: int = 20, user: dict = Depends(auth.require_admin)):
+    """按日期分组、单次执行归并的日志。"""
+    return database.get_logs_grouped(limit)
+
+
+@router.get("/logs/stats")
+def log_stats(user: dict = Depends(auth.require_admin)):
+    return database.get_log_stats()
+
+
+@router.get("/settings")
+def get_settings(user: dict = Depends(auth.require_admin)):
+    return database.get_settings()
+
+
+@router.post("/settings")
+def update_settings(values: dict, user: dict = Depends(auth.require_admin)):
+    # 只允许更新已知 key
+    known = {
+        "tg_bot_token", "tg_user_id", "tg_enabled",
+        "schedule_enabled", "schedule_cron",
+        "anti_ban_enabled", "anti_ban_wait_min", "anti_ban_wait_max",
+        "anti_ban_window_hour",
+        "proxies", "proxy_force", "proxy_fallback",
+        "checkin_delay_min", "checkin_delay_max",
+    }
+    updates = {k: v for k, v in values.items() if k in known}
+    database.set_settings(updates)
+    # 若涉及调度，重建定时任务
+    if "schedule_enabled" in updates or "schedule_cron" in updates:
+        scheduler.reload_schedule()
+    return database.get_settings()
+
+
+@router.post("/settings/reload-schedule")
+def reload_schedule(user: dict = Depends(auth.require_admin)):
+    scheduler.reload_schedule()
+    return {"ok": True}
+
+
+@router.post("/notify/test")
+def test_notify(user: dict = Depends(auth.require_admin)):
+    """发送一条测试 TG 消息。"""
+    ok = __import__("..notifier", fromlist=["send_text_message"]).send_text_message(
+        "✅ 这是一条来自微博签到管理面板的测试消息")
+    return {"ok": ok}
+
+
+@router.get("/notifications")
+def notifications(limit: int = 10, user: dict = Depends(auth.require_admin)):
+    return database.get_notifications(limit)

@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>登录 · 微博签到管理面板</title>
+  <link rel="stylesheet" href="/style.css" />
+  <style>
+    .login-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg)}
+    .login-card{width:360px;max-width:92vw;background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:34px 30px;box-shadow:var(--shadow)}
+    .login-brand{display:flex;align-items:center;gap:12px;margin-bottom:24px}
+    .login-brand .logo{width:46px;height:46px;border-radius:13px;display:grid;place-items:center;background:var(--accent);color:var(--accent-ink);font-weight:800;font-size:19px;box-shadow:0 4px 12px rgba(224,36,94,.35)}
+    .login-brand h1{margin:0;font-size:18px}
+    .login-brand p{margin:2px 0 0;color:var(--muted);font-size:12px}
+    .login-card label{display:block;font-size:13px;color:var(--muted);font-weight:600;margin:14px 0 6px}
+    .login-card input{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:9px;background:var(--surface-2);color:var(--ink);font:inherit;outline:none}
+    .login-card input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(224,36,94,.15)}
+    .login-card .btn{width:100%;margin-top:22px;padding:11px}
+    .login-err{color:var(--danger);font-size:13px;margin-top:10px;min-height:18px}
+  </style>
+</head>
+<body>
+<div class="login-wrap">
+  <form class="login-card" id="loginForm">
+    <div class="login-brand">
+      <div class="logo">签</div>
+      <div>
+        <h1>微博签到管理面板</h1>
+        <p>请登录后继续操作</p>
+      </div>
+    </div>
+    <label>用户名</label>
+    <input type="text" id="username" autocomplete="username" required autofocus />
+    <label>密码</label>
+    <input type="password" id="password" autocomplete="current-password" required />
+    <button class="btn btn-primary" type="submit" id="loginBtn">登 录</button>
+    <div class="login-err" id="err"></div>
+  </form>
+</div>
+<script>
+const form = document.getElementById('loginForm'),
+  err = document.getElementById('err'),
+  btn = document.getElementById('loginBtn');
+form.addEventListener('submit', async e => {
+  e.preventDefault();
+  err.textContent = '';
+  btn.disabled = true; btn.textContent = '登录中…';
+  try {
+    const r = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({username: username.value.trim(), password: password.value}),
+    });
+    const d = await r.json();
+    if (!r.ok) { err.textContent = d.detail || '登录失败'; return; }
+    location.href = '/';
+  } catch(ex) { err.textContent = '网络错误：' + ex; }
+  finally { btn.disabled = false; btn.textContent = '登 录'; }
+});
+</script>
+</body>
+</html>

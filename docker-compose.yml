@@ -1,0 +1,38 @@
+# ============================================================
+# 微博超话签到管理面板 · Docker Compose 部署
+#   用法: docker compose up -d
+#   数据持久化: ./data 目录挂载为 /app/data（SQLite 数据库）
+# ============================================================
+name: weibo-checkin
+
+services:
+  weibo-checkin:
+    image: ${WCM_IMAGE:-weibo-checkin:latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: weibo-checkin
+    restart: unless-stopped
+    ports:
+      - "${WCM_PORT:-8000}:8000"
+    environment:
+      - TZ=Asia/Shanghai
+      - APP_HOST=0.0.0.0
+      - APP_PORT=8000
+      - WCM_ADMIN_USER=${WCM_ADMIN_USER:-admin}
+      - WCM_ADMIN_PASSWORD=${WCM_ADMIN_PASSWORD:-}
+    volumes:
+      # SQLite 数据库持久化到宿主机 ./data
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request,sys,os; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:'+os.environ['APP_PORT']+'/api/health', timeout=3).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

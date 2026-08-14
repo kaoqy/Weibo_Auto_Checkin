@@ -1,0 +1,22 @@
+# Docker 构建上下文排除项
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# 运行时数据（含 Cookie，绝不进镜像）
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# 测试与无关文件
+.pytest_cache/
+node_modules/
+package*.json
+tests/
+*.log
+.DS_Store
+.git/
+.dockerignore

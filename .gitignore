@@ -1,0 +1,27 @@
+# 虚拟环境
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# 运行时数据（含 Cookie，务必忽略）
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# 部署配置（含密钥，勿提交）
+.env
+*.env
+
+# 测试/临时
+.pytest_cache/
+node_modules/
+*.log
+.DS_Store
+
+# 部署辅助脚本（含服务器信息，勿提交）
+rebuild.py
+ssh_tmp.py
+ssh_run.py
+remote_deploy.py

@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>微博超话签到管理面板</title>
+  <link rel="stylesheet" href="/style.css" />
+  <script>!function(){try{const t=localStorage.getItem('wcm-theme')||'system';document.documentElement.dataset.theme=t}catch(e){}}()</script>
+</head>
+<body>
+  <div class="app">
+    <!-- 侧边栏 -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">签</div>
+        <div class="brand-text">
+          <strong>微博签到</strong>
+          <span>管理面板</span>
+        </div>
+      </div>
+      <nav>
+        <button class="nav-item active" data-view="dashboard">
+          <span class="nav-ico">📊</span>仪表盘
+        </button>
+        <button class="nav-item" data-view="accounts">
+          <span class="nav-ico">👥</span>账号管理
+        </button>
+        <button class="nav-item" data-view="logs">
+          <span class="nav-ico">📜</span>签到日志
+        </button>
+        <button class="nav-item" data-view="settings">
+          <span class="nav-ico">⚙️</span>设置
+        </button>
+      </nav>
+      <div class="side-foot">
+        <label class="theme-control">
+          外观
+          <select id="theme">
+            <option value="system">跟随系统</option>
+            <option value="light">白天</option>
+            <option value="dark">黑夜</option>
+          </select>
+        </label>
+        <div class="ver">v1.0.0</div>
+      </div>
+    </aside>
+
+    <!-- 主内容 -->
+    <main class="main">
+      <header class="topbar">
+        <h1 id="view-title">仪表盘</h1>
+        <div class="topbar-actions">
+          <a class="toplink" href="/cookiegen.html">🍪 Cookie生成器</a>
+          <button class="btn btn-ghost" id="btn-health" title="服务状态">●</button>
+          <button class="btn btn-primary" id="btn-run">▶ 立即签到</button>
+          <button class="btn btn-ghost" id="btn-user" title="账户">👤</button>
+        </div>
+      </header>
+
+      <!-- 仪表盘 -->
+      <section class="view" id="view-dashboard">
+        <div class="stat-grid" id="statGrid"></div>
+        <div class="card">
+          <div class="card-head"><h2>最近任务</h2></div>
+          <div class="table-wrap"><table id="recentTasks"><thead><tr><th>任务ID</th><th>触发</th><th>状态</th><th>开始</th><th>结束</th></tr></thead><tbody></tbody></table></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>账号状态</h2><button class="btn btn-ghost btn-sm" id="btn-refresh-acc">刷新</button></div>
+          <div class="table-wrap"><table id="dashAccounts"><thead><tr><th>账号</th><th>状态</th><th>上次签到</th><th>说明</th></tr></thead><tbody></tbody></table></div>
+        </div>
+      </section>
+
+      <!-- 账号管理 -->
+      <section class="view" id="view-accounts" hidden>
+        <div class="card">
+          <div class="card-head">
+            <h2>账号列表</h2>
+            <div>
+              <button class="btn btn-ghost btn-sm" id="btn-qr-add">📱 扫码添加</button>
+              <button class="btn btn-primary btn-sm" id="btn-add-acc">＋ 添加账号</button>
+            </div>
+          </div>
+          <div class="table-wrap"><table id="accTable"><thead><tr><th>ID</th><th>名称</th><th>状态</th><th>Cookie</th><th>上次签到</th><th>操作</th></tr></thead><tbody></tbody></table></div>
+        </div>
+      </section>
+
+      <!-- 日志 -->
+      <section class="view" id="view-logs" hidden>
+        <div class="card">
+          <div class="card-head"><h2>签到日志</h2><button class="btn btn-ghost btn-sm" id="btn-refresh-logs">刷新</button></div>
+          <div class="log-list" id="logList"></div>
+        </div>
+      </section>
+
+      <!-- 设置 -->
+      <section class="view" id="view-settings" hidden>
+        <div class="settings-grid">
+          <div class="card">
+            <div class="card-head"><h2>Telegram 通知</h2></div>
+            <div class="form">
+              <label>启用 TG 推送<input type="checkbox" id="s-tg_enabled" /></label>
+              <label>Bot Token <input id="s-tg_bot_token" placeholder="123456:ABC-DEF..." autocomplete="off" /></label>
+              <label>Chat / User ID <input id="s-tg_user_id" placeholder="987654321" /></label>
+              <div class="form-actions">
+                <button class="btn btn-ghost" id="btn-test-tg">测试推送</button>
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>定时签到</h2></div>
+            <div class="form">
+              <label>启用定时<input type="checkbox" id="s-schedule_enabled" /></label>
+              <label>Cron 表达式 <input id="s-schedule_cron" placeholder="0 7 * * *" /><small>默认每天 7:00</small></label>
+              <div class="form-actions"><button class="btn btn-ghost" id="btn-save-schedule">保存</button></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>防封策略</h2></div>
+            <div class="form">
+              <label>启用防封等待<input type="checkbox" id="s-anti_ban_enabled" /></label>
+              <div class="row2">
+                <label>最小等待(s)<input type="number" id="s-anti_ban_wait_min" /></label>
+                <label>最大等待(s)<input type="number" id="s-anti_ban_wait_max" /></label>
+              </div>
+              <label>窗口(凌晨N点前)<input type="number" id="s-anti_ban_window_hour" /></label>
+              <small class="hint">账号之间随机等待，降低风控风险</small>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>网络 / 代理</h2></div>
+            <div class="form">
+              <label>SOCKS5 节点（每行一个）<textarea id="s-proxies" rows="3" placeholder="socks5://user:pass@host:port"></textarea></label>
+              <div class="row2">
+                <label><input type="checkbox" id="s-proxy_force" /> 严格代理（失败不回退直连）</label>
+                <label><input type="checkbox" id="s-proxy_fallback" checked /> 失败回退直连</label>
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>签到参数</h2></div>
+            <div class="form">
+              <div class="row2">
+                <label>超话最小延时(s)<input type="number" id="s-checkin_delay_min" /></label>
+                <label>超话最大延时(s)<input type="number" id="s-checkin_delay_max" /></label>
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>账户</h2></div>
+            <div class="form">
+              <div class="row2">
+                <label>原密码<input type="password" id="p-old" autocomplete="off" /></label>
+                <label>新密码<input type="password" id="p-new" autocomplete="off" /></label>
+              </div>
+              <div class="form-actions">
+                <button class="btn btn-ghost" id="btn-change-pwd">修改密码</button>
+                <button class="btn btn-danger" id="btn-logout">退出登录</button>
+              </div>
+              <small class="hint" id="pwd-status"></small>
+            </div>
+          </div>
+        </div>
+        <div class="card settings-save">
+          <button class="btn btn-primary" id="btn-save-all">💾 保存全部设置</button>
+          <span class="save-status" id="saveStatus"></span>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- 弹窗：账号编辑 -->
+  <div class="modal-mask" id="accModal" hidden>
+    <div class="modal">
+      <div class="modal-head">
+        <h2 id="accModalTitle">添加账号</h2>
+        <button class="modal-close" id="accModalClose">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="form">
+          <label>账号名称<input id="m-name" placeholder="例如：小号1" /></label>
+          <label>Cookie（键值对字符串）<textarea id="m-cookie" rows="6" placeholder="XSRF-TOKEN=xxx; MLOGIN=1; SCF=xxx; SUB=xxx; SUBP=xxx; ALF=xxx"></textarea></label>
+          <label>备注<input id="m-remark" placeholder="可选" /></label>
+          <label class="inline"><input type="checkbox" id="m-enabled" checked /> 启用自动签到</label>
+          <label class="inline"><input type="checkbox" id="m-proxy_round" /> 加入代理轮换</label>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-ghost" id="accModalCancel">取消</button>
+        <button class="btn btn-primary" id="accModalSave">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 弹窗：手动运行状态 -->
+  <div class="modal-mask" id="runModal" hidden>
+    <div class="modal modal-sm">
+      <div class="modal-head"><h2>签到运行中</h2><button class="modal-close" id="runModalClose">×</button></div>
+      <div class="modal-body">
+        <div class="run-progress"><div class="run-bar" id="runBar"></div></div>
+        <div class="run-info" id="runInfo">准备中…</div>
+        <div class="run-lines" id="runLines"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 弹窗：扫码登录添加账号 -->
+  <div class="modal-mask" id="qrModal" hidden>
+    <div class="modal">
+      <div class="modal-head">
+        <h2>📱 微博扫码添加账号</h2>
+        <button class="modal-close" id="qrModalClose">×</button>
+      </div>
+      <div class="modal-body qr-body">
+        <p class="qr-tip">请用<b>微博 App</b> 扫描下方二维码并确认登录，成功后自动添加为账号</p>
+        <div class="qr-box"><img id="qrImage" alt="二维码" /></div>
+        <div class="qr-status" id="qrStatus">正在获取二维码…</div>
+        <div class="qr-name">
+          <label>账号名称（可选，留空自动获取昵称）</label>
+          <input id="qrName" placeholder="例如：我的主号" />
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-ghost" id="qrRefresh">↻ 刷新二维码</button>
+        <button class="btn btn-primary" id="qrImportBtn" disabled>导入账号</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <script src="/app.js"></script>
+</body>
+</html>

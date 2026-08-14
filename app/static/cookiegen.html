@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cookie 生成器 · 微博签到管理面板</title>
+  <script>!function(){try{const t=localStorage.getItem('cookie-ui-theme')||'system';document.documentElement.dataset.theme=t}catch(e){}}()</script>
+  <style>
+    :root { color-scheme:light; --ink:#1a1a1a; --muted:#6b7280; --line:#e5e7eb; --surface:#fff; --surface-2:#fafafa; --bg:#f4f5f7; --accent:#e0245e; --accent-soft:#fde8ef; --accent-ink:#fff; --danger:#dc2626; --danger-soft:#fee2e2; --success:#16a34a; --success-soft:#dcfce7; --radius:14px; --shadow:0 8px 24px rgba(0,0,0,.06); }
+    html[data-theme="dark"] { color-scheme:dark; --ink:#e6e8eb; --muted:#9aa0a8; --line:#2a2f37; --surface:#181b20; --surface-2:#1f232a; --bg:#0f1115; --accent:#f54868; --accent-soft:#3a1c26; --accent-ink:#fff; --danger:#f87171; --danger-soft:#3a1518; --success:#34d399; --success-soft:#123a2c; --shadow:0 8px 24px rgba(0,0,0,.4); }
+    @media(prefers-color-scheme:dark){html[data-theme="system"]{color-scheme:dark;--ink:#e6e8eb;--muted:#9aa0a8;--line:#2a2f37;--surface:#181b20;--surface-2:#1f232a;--bg:#0f1115;--accent:#f54868;--accent-soft:#3a1c26;--accent-ink:#fff;--danger:#f87171;--danger-soft:#3a1518;--success:#34d399;--success-soft:#123a2c;--shadow:0 8px 24px rgba(0,0,0,.4)}}
+    *{box-sizing:border-box}
+    body{margin:0;min-height:100vh;color:var(--ink);background:var(--bg);font:14px/1.5 ui-sans-serif,system-ui,"PingFang SC","Microsoft YaHei",sans-serif}
+    .topbar{position:sticky;top:0;z-index:10;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--bg) 92%,transparent);backdrop-filter:blur(10px);display:flex;align-items:center;justify-content:space-between;padding:0 22px;height:52px}
+    .topbar a{color:var(--muted);text-decoration:none;font-size:13px;margin-left:14px}
+    .topbar a:hover{color:var(--accent)}
+    .brand{font-weight:700;color:var(--ink)}
+    .shell{max-width:980px;margin:0 auto;padding:26px 20px 60px}
+    .notice{display:flex;gap:10px;border:1px solid var(--line);background:var(--surface);border-radius:13px;padding:13px 16px;font-size:13px;margin-bottom:20px;box-shadow:var(--shadow)}
+    .toolbar{display:flex;justify-content:space-between;align-items:center;margin:18px 0;flex-wrap:wrap;gap:10px}
+    .count{color:var(--muted);font-size:14px}
+    button{border:1px solid transparent;cursor:pointer;padding:9px 14px;border-radius:9px;font:inherit;font-weight:600;transition:.2s}
+    button:hover{transform:translateY(-1px)}
+    .primary{background:var(--accent);color:var(--accent-ink);box-shadow:0 4px 12px rgba(224,36,94,.3)}
+    .secondary{background:var(--surface-2);color:var(--ink);border-color:var(--line)}
+    .danger{background:var(--danger-soft);color:var(--danger)}
+    .success{background:var(--success-soft);color:var(--success)}
+    .account{border:1px solid var(--line);background:var(--surface);border-radius:14px;padding:20px;margin:13px 0;box-shadow:var(--shadow)}
+    .account-head{display:flex;gap:12px;align-items:center;margin-bottom:14px}
+    .badge{width:32px;height:32px;border-radius:10px;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent);font-weight:800;font-size:13px}
+    input,textarea{width:100%;color:var(--ink);background:var(--surface-2);border:1px solid var(--line);border-radius:9px;font:inherit;outline:none;padding:9px 11px}
+    textarea{min-height:90px;font-family:ui-monospace,Consolas,monospace;font-size:12px;resize:vertical}
+    input:focus,textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(224,36,94,.15)}
+    .name{max-width:320px}
+    label{display:block;margin:11px 0 6px;font-size:12px;color:var(--muted);font-weight:700}
+    .hint{font-size:12px;color:var(--muted);margin:7px 0 0}
+    .cookies{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px;margin-top:12px}
+    .cookies label{margin:0 0 5px}
+    .output{border:1px solid var(--line);background:var(--surface);padding:18px;border-radius:14px;margin-top:24px;box-shadow:var(--shadow)}
+    pre{max-height:300px;overflow:auto;margin:8px 0 0;padding:14px;border-radius:11px;background:#171717;color:#ededed;font:12px/1.55 ui-monospace,Consolas,monospace;white-space:pre-wrap;word-break:break-word}
+    .actions{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}
+    .top-actions{display:flex;gap:8px}
+    .status{margin-top:10px;font-size:13px;min-height:18px}
+    .status.ok{color:var(--success)} .status.bad{color:var(--danger)}
+    @media(max-width:680px){.cookies{grid-template-columns:1fr}.name{max-width:none}}
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <span class="brand">微博 Cookie 配置生成器</span>
+    <div>
+      <a href="/">← 返回管理面板</a>
+      <label class="theme-control" style="margin-left:14px">外观
+        <select id="theme" style="background:var(--surface-2);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:5px 8px">
+          <option value="system">跟随系统</option><option value="light">白天</option><option value="dark">黑夜</option>
+        </select>
+      </label>
+    </div>
+  </div>
+  <main class="shell">
+    <div class="notice"><b>🔒 本地安全</b><span>Cookie 解析在你浏览器本地完成。生成后可「一键导入账号管理」保存到服务器（需已登录），或下载 JSON 自行保存。请勿把 Cookie 发给他人。</span></div>
+    <div class="toolbar">
+      <span class="count" id="count">0 个账号</span>
+      <div class="top-actions">
+        <input type="file" id="importFile" accept="application/json,.json" hidden>
+        <button class="secondary" id="import">导入 JSON</button>
+        <button class="secondary" id="add">＋ 添加账号</button>
+      </div>
+    </div>
+    <section id="accounts"></section>
+    <section class="output">
+      <label>生成预览</label>
+      <pre id="preview">{&#10;  "accounts": []&#10;}</pre>
+      <div class="actions">
+        <button class="primary" id="importAll">⬇ 一键导入账号管理</button>
+        <button class="secondary" id="download">↓ 下载 JSON</button>
+        <button class="secondary" id="copy">复制 JSON</button>
+        <button class="danger" id="clear">清空全部</button>
+      </div>
+      <div class="status" id="status"></div>
+    </section>
+  </main>
+  <template id="card">
+    <article class="account">
+      <div class="account-head"><div class="badge"></div><input class="name" aria-label="账号名称" placeholder="例如：账号 1" /><button class="danger remove" type="button">删除</button></div>
+      <label>完整 Cookie 字符串</label>
+      <textarea class="raw" spellcheck="false" placeholder="粘贴格式：XSRF-TOKEN=xxx; MLOGIN=1; ALF=xxx; SCF=xxx; SUB=xxx; SUBP=xxx; SSOLoginState=xxx"></textarea>
+      <p class="hint">自动提取 ALF、SCF、SUB、SUBP、SSOLoginState、XSRF-TOKEN；其他字段不写入。</p>
+      <div class="cookies"></div>
+    </article>
+  </template>
+  <script>
+    const wanted = ['ALF','SCF','SUB','SUBP','SSOLoginState','XSRF-TOKEN'];
+    const accountsEl = document.querySelector('#accounts'), preview = document.querySelector('#preview');
+    const themeSelect = document.querySelector('#theme');
+    themeSelect.value = document.documentElement.dataset.theme || 'system';
+    themeSelect.onchange = () => { const t=themeSelect.value; document.documentElement.dataset.theme=t; try{localStorage.setItem('cookie-ui-theme',t)}catch(e){} };
+
+    function parse(raw) { const out={}; String(raw||'').split(';').forEach(item=>{ const i=item.indexOf('='); if(i>0) out[item.slice(0,i).trim()]=item.slice(i+1).trim(); }); return out; }
+    function card(data={}) {
+      const node = document.querySelector('#card').content.firstElementChild.cloneNode(true);
+      const fields = node.querySelector('.cookies');
+      wanted.forEach(k => fields.insertAdjacentHTML('beforeend', `<div><label>${k}</label><input data-key="${k}" autocomplete="off" spellcheck="false" /></div>`));
+      node.querySelector('.name').value = data.name || '';
+      wanted.forEach(k => node.querySelector(`[data-key="${k}"]`).value = (data.cookie||{})[k] || '');
+      const raw = node.querySelector('.raw');
+      raw.addEventListener('input', () => {
+        const parsed = parse(raw.value);
+        wanted.forEach(k => node.querySelector(`[data-key="${k}"]`).value = parsed[k] || '');
+        render();
+      });
+      node.querySelectorAll('input').forEach(x => x.addEventListener('input', render));
+      node.querySelector('.remove').onclick = () => { node.remove(); render(); };
+      accountsEl.append(node); render();
+    }
+    function payload() {
+      return { accounts: [...accountsEl.querySelectorAll('.account')].map((node,i) => {
+        let cookie = {};
+        wanted.forEach(k => { const v = node.querySelector(`[data-key="${k}"]`).value.trim(); if(v) cookie[k]=v; });
+        return { name: node.querySelector('.name').value.trim() || `账号${i+1}`, cookie };
+      }) };
+    }
+    function render() {
+      const data = payload();
+      preview.textContent = JSON.stringify(data, null, 2);
+      document.querySelector('#count').textContent = `${data.accounts.length} 个账号`;
+      accountsEl.querySelectorAll('.account').forEach((c,i)=>c.querySelector('.badge').textContent=i+1);
+    }
+    document.querySelector('#add').onclick = () => card();
+    const importFile = document.querySelector('#importFile');
+    document.querySelector('#import').onclick = () => importFile.click();
+    importFile.onchange = async () => {
+      const file = importFile.files[0]; if(!file) return;
+      try {
+        const data = JSON.parse(await file.text());
+        if(!data || !Array.isArray(data.accounts)) throw new Error();
+        accountsEl.replaceChildren(); data.accounts.forEach(a=>card(a)); render();
+      } catch { alert('导入失败：请选择包含 accounts 数组的有效 JSON 配置文件。'); }
+      finally { importFile.value=''; }
+    };
+    document.querySelector('#download').onclick = () => {
+      const blob = new Blob([JSON.stringify(payload(),null,2)], {type:'application/json'});
+      const a = Object.assign(document.createElement('a'), {href:URL.createObjectURL(blob), download:'weibo_accounts.json'});
+      a.click(); URL.revokeObjectURL(a.href);
+    };
+    document.querySelector('#copy').onclick = async () => {
+      try { await navigator.clipboard.writeText(JSON.stringify(payload(),null,2)); flash('已复制 ✓'); }
+      catch { alert('复制失败，请从预览区域手动复制。'); }
+    };
+    document.querySelector('#clear').onclick = () => { accountsEl.replaceChildren(); render(); };
+    const statusEl = document.querySelector('#status');
+    function flash(msg, cls='') { statusEl.textContent=msg; statusEl.className='status '+cls; setTimeout(()=>statusEl.textContent='',3000); }
+
+    // 一键导入账号管理
+    document.querySelector('#importAll').onclick = async () => {
+      const data = payload();
+      if (!data.accounts.length) { flash('没有可导入的账号', 'bad'); return; }
+      const btn = document.querySelector('#importAll');
+      btn.disabled = true; const old = btn.textContent; btn.textContent = '导入中…';
+      try {
+        let okCount = 0, errCount = 0;
+        for (const acc of data.accounts) {
+          const r = await fetch('/api/accounts', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({ name: acc.name, cookie_raw: Object.entries(acc.cookie).map(([k,v])=>k+'='+v).join('; '), enabled: true }),
+          });
+          if (r.ok) okCount++; else errCount++;
+        }
+        flash(`导入完成：成功 ${okCount}，失败 ${errCount}`, errCount ? 'bad' : 'ok');
+      } catch (ex) {
+        flash('导入失败：' + ex, 'bad');
+        if (String(ex).includes('401')) { location.href='/login.html'; }
+      }
+      finally { btn.disabled=false; btn.textContent=old; }
+    };
+    render();
+  </script>
+</body>
+</html>

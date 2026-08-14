@@ -1,0 +1,32 @@
+# ============================================================
+# 微博签到管理面板 · 生产 compose（部署到远端服务器用）
+# 仅拉取镜像运行，不含 build；数据挂载到宿主目录。
+#
+# 服务器上用法:
+#   docker compose -f compose.prod.yml up -d
+# 或由 deploy.sh 的 remote 子命令自动处理
+# ============================================================
+name: weibo-checkin
+
+services:
+  weibo-checkin:
+    image: ${WCM_IMAGE:-weibo-checkin:latest}
+    container_name: weibo-checkin
+    restart: unless-stopped
+    ports:
+      - "${WCM_PORT:-8000}:8000"
+    environment:
+      - TZ=Asia/Shanghai
+      - APP_HOST=0.0.0.0
+      - APP_PORT=8000
+      - WCM_ADMIN_USER=${WCM_ADMIN_USER:-admin}
+      - WCM_ADMIN_PASSWORD=${WCM_ADMIN_PASSWORD:-}
+    volumes:
+      - ${WCM_DATA_DIR:-./data}:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request,sys,os; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:'+os.environ['APP_PORT']+'/api/health', timeout=3).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
