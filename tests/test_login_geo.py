@@ -192,12 +192,17 @@ def test_check_qrcode_success_finalizes(monkeypatch):
     class _PageEval:
         _cookies = [{"name": "SUB", "value": "sub-after-check"},
                     {"name": "SUBP", "value": "sp"}]
-        async def evaluate(self, *a, **k):
-            return {"code": 20000000, "msg": "ok", "data": {"uid": "888"}}
+        async def evaluate(self, expr, *a, **k):
+            # uid 提取脚本 → 返回 uid 字符串；状态查询脚本 → 返回状态 dict
+            if "window.config" in expr:
+                return "888"
+            return {"code": 20000000, "msg": "ok"}
         async def goto(self, *a, **k):
             pass
         async def wait_for_timeout(self, *a, **k):
             pass
+        async def wait_for_url(self, *a, **k):
+            pass  # 模拟页面已跳转
         async def cookies(self):
             return self._cookies
 

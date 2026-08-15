@@ -316,11 +316,12 @@ async def generate_qrcode() -> dict:
 
 
 async def check_qrcode(qrid: str) -> dict:
-    """在真实浏览器上下文里轮询扫码状态，返回可序列化结果。
+    """检测扫码状态（以页面自动跳转 m.weibo.cn 为准，接口仅作辅助提示）。
 
-    扫码确认成功后，微博服务端会把登录态通过 crossdomain 回调写入浏览器
-    （触发 passport/weibo 域 cookie 下发）。这里在检测到成功后主动等待并导航到
-    crossdomain 页面，确保拿到完整 Cookie，让前端“等待手机确认”后能真正回调成功。
+    核心逻辑（按用户反馈）：扫码确认成功后，后端浏览器里的登录页会自动重定向到
+    m.weibo.cn，无需依赖 qrcode/check 接口的 retcode 判断成败。只要检测到页面
+    已跳转，就从浏览器上下文抓取完整 Cookie（SUB/SUBP 等）。接口查询失败（400、
+    rid 失效等）不再误判为「过期」——过期仅由二维码生命周期 TTL 兜底判定。
     """
     await _sweep_idle_browser()
     sess = QR_SESSIONS.get(qrid)
@@ -328,10 +329,78 @@ async def check_qrcode(qrid: str) -> dict:
         return {"status": "expired", "message": "二维码不存在或已过期"}
     if time.time() - sess["created_at"] > QR_TTL:
         sess["status"] = "expired"
-        return {"status": "expired", "message": "二维码已过期"}
+        return {"status": "expired", "message": "二维码已过期，请重新生成"}
 
     page = await _ensure_browser()
-    rid = sess.get("rid") or await _get_rid(page)
+
+    # ① 会话已成功 → 直接返回已抓 Cookie
+    if sess.get("status") == "success":
+        ck = sess.get("cookies") or {}
+        return {"status": "success", "message": "扫码登录成功", "cookies": ck,
+                "has_cookie": bool(ck.get("SUB")), "uid": sess.get("uid", "")}
+
+    # ② 关键：页面是否已自动重定向到 m.weibo.cn（扫码确认成功的标志）
+    try:
+        cur_url = (page.url or "").lower()
+    except Exception:
+        cur_url = ""
+    if "m.weibo.cn" in cur_url:
+        cookies, uid = await _finalize_with_uid(page, sess)
+        if cookies.get("SUB") or cookies:
+            sess["status"] = "success"
+            return {"status": "success", "message": "扫码登录成功", "cookies": cookies,
+                    "has_cookie": bool(cookies.get("SUB")), "uid": uid}
+
+    # ③ 接口仅作状态提示（pending/scanned）；出错/400 不判过期
+    retcode, msg = await _query_status(page, sess, qrid)
+
+    if retcode == 20000000:
+        # 接口确认成功：页面应即将跳转——短等待后抓 Cookie（最多 ~4s）
+        jumped = False
+        try:
+            await page.wait_for_url(
+                "**m.weibo.cn**", timeout=4000, wait_until="domcontentloaded")
+            jumped = True
+        except Exception:
+            jumped = False
+        cookies, uid = await _finalize_with_uid(page, sess)
+        if jumped or cookies.get("SUB"):
+            sess["status"] = "success"
+            return {"status": "success", "message": msg or "扫码登录成功",
+                    "cookies": cookies, "has_cookie": bool(cookies.get("SUB")), "uid": uid}
+        # 页面还没跳 → 让前端继续轮询
+        sess["status"] = "scanned"
+        return {"status": "scanned", "message": "已确认，正在获取登录态…"}
+
+    if retcode == 50114002:
+        sess["status"] = "scanned"
+        return {"status": "scanned", "message": msg or "已扫码，请在手机上确认"}
+
+    if retcode == 50114001:
+        sess["status"] = "pending"
+        return {"status": "pending", "message": msg or "等待扫码"}
+
+    if retcode in (50114003, 50114004):
+        # 接口认为过期：但可能是 rid 失效误报，用户可能其实已扫。不判死，
+        # 交由页面跳转检测与 TTL 兜底；这里保持 pending 提示。
+        sess["status"] = "pending"
+        return {"status": "pending", "message": "等待扫码（二维码待刷新）…"}
+
+    # retcode in (None, -1, 其他未知) → 接口查询失败（400/rid失效/风控），不判过期
+    sess["status"] = "pending"
+    return {"status": "pending", "message": msg or "正在确认扫码状态…"}
+
+
+async def _query_status(page, sess: dict, qrid: str) -> tuple:
+    """调用 qrcode/check 接口查询状态；失败返回 (None, 提示)，不抛异常。"""
+    rid = sess.get("rid") or ""
+    if not rid:
+        try:
+            rid = await _get_rid(page)
+        except Exception:
+            rid = ""
+    if not rid or rid in ("getriderror", "nodetector"):
+        return None, "正在确认扫码状态…"
     try:
         result = await page.evaluate(
             """([qrid, rid]) => fetch(
@@ -341,42 +410,55 @@ async def check_qrcode(qrid: str) -> dict:
                 + '&rid=' + encodeURIComponent(rid)
                 + '&ver=20250520',
                 {credentials: 'include', headers: {'Accept': 'application/json'}}
-            ).then(r => r.json()).then(d => ({code: d.retcode, msg: d.msg, data: d.data}))
+            ).then(r => r.json()).then(d => ({code: d.retcode, msg: d.msg}))
              .catch(e => ({code: -1, msg: String(e)}))""",
             [qrid, rid],
         )
+        return result.get("code"), result.get("msg") or ""
     except Exception as exc:
         log.warning("扫码状态查询异常: %s", exc)
-        return {"status": "unknown", "message": f"查询异常：{str(exc)[:100]}"}
+        return None, "正在确认扫码状态…"
 
-    retcode = result.get("code")
-    msg = result.get("msg", "")
-    # 状态映射
-    if retcode == 20000000:
-        # 确认成功：等待服务端跨域写入 cookie，并用真实浏览器收集完整登录态
-        sess["status"] = "success"
-        uid = (result.get("data") or {}).get("uid", "")
-        sess["uid"] = uid or sess.get("uid", "")
-        cookies = await _finalize_cookies(page)
-        sess["cookies"] = cookies
-        return {
-            "status": "success", "message": msg or "扫码登录成功",
-            "cookies": cookies,
-            "has_cookie": bool(cookies.get("SUB")),
-            "uid": sess["uid"],
-        }
-    elif retcode == 50114001:
-        sess["status"] = "pending"
-        return {"status": "pending", "message": msg or "等待扫码"}
-    elif retcode == 50114002:
-        sess["status"] = "scanned"
-        return {"status": "scanned", "message": msg or "已扫码，等待确认"}
-    elif retcode in (50114003, 50114004):
-        sess["status"] = "expired"
-        return {"status": "expired", "message": msg or "二维码失效"}
-    else:
-        sess["status"] = "unknown"
-        return {"status": "unknown", "message": msg or f"未知状态({retcode})"}
+
+async def _finalize_with_uid(page, sess: dict):
+    """页面已跳转/确认后抓取完整 Cookie，并尽力提取 uid。"""
+    cookies = await _finalize_cookies(page)
+    sess["cookies"] = cookies
+    uid = sess.get("uid", "")
+    if not uid:
+        uid = await _extract_uid(page)
+        if uid:
+            sess["uid"] = uid
+    return cookies, uid
+
+
+async def _extract_uid(page) -> str:
+    """从 m.weibo.cn 页面或接口提取当前登录用户 uid。"""
+    try:
+        v = await page.evaluate(
+            """() => {
+                try {
+                    if (window.config && window.config.userInfo && window.config.userInfo.id)
+                        return String(window.config.userInfo.id);
+                } catch(e){}
+                return '';
+            }"""
+        )
+        if v and isinstance(v, str) and v.strip():
+            return v
+    except Exception:
+        pass
+    # 兜底：SUB cookie 常含 uid（SUB 格式 "xxxx;xxxx"），解析首段数字
+    try:
+        allc = await page.context.cookies()
+        for c in allc:
+            if (c["name"] == "SUB" or c["name"] == "SUBP") and c["value"]:
+                seg = c["value"].split(";")[0].split(":")[0]
+                if seg.isdigit():
+                    return seg
+    except Exception:
+        pass
+    return ""
 
 
 async def _collect_cookies(page) -> dict:
