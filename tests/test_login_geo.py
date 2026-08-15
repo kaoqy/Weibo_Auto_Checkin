@@ -159,6 +159,9 @@ def test_finalize_tries_crossdomain_when_missing_sub(qr_session, monkeypatch):
             pass
         async def cookies(self):
             return self._cookies
+        url = "https://m.weibo.cn"
+        async def wait_for_url(self, *a, **k):
+            pass
 
     page = _PageFull()
 
@@ -205,6 +208,7 @@ def test_check_qrcode_success_finalizes(monkeypatch):
             pass  # 模拟页面已跳转
         async def cookies(self):
             return self._cookies
+        url = "https://m.weibo.cn/"
 
     page = _PageEval()
 

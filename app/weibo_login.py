@@ -358,11 +358,12 @@ async def check_qrcode(qrid: str) -> dict:
     retcode, msg = await _query_status(page, sess, qrid)
 
     if retcode == 20000000:
-        # 接口确认成功：页面应即将跳转——短等待后抓 Cookie（最多 ~4s）
+        # 接口确认成功：passport 回调链需要一点时间把页面自动跳转到 m.weibo.cn
+        # 并把登录态 cookie 写入 context。等跳转（最多 ~12s），再读 cookie。
         jumped = False
         try:
             await page.wait_for_url(
-                "**m.weibo.cn**", timeout=4000, wait_until="domcontentloaded")
+                "**m.weibo.cn**", timeout=12000, wait_until="domcontentloaded")
             jumped = True
         except Exception:
             jumped = False
@@ -482,38 +483,41 @@ _REQUIRED_COOKIES = ("SUB", "SUBP")
 
 
 async def _finalize_cookies(page) -> dict:
-    """扫码确认后，主动走微博跨域回调，确保拿到完整登录 Cookie。
+    """扫码确认后获取完整登录 Cookie。
 
-    扫码成功后仅凭当前页面的 cookie 往往不完整（缺少 SUB 等），
-    需导航到 passport 的 crossdomain 回调地址触发 Set-Cookie。
-    此处等待回调完成并反复收集，最多重试数次。
+    按实际回调流程：扫码确认后，passport 会**自动**走跨域回调链并最终重定向到
+    m.weibo.cn，登录态 cookie（SUB/SUBP/SSOLoginState 等）由这条回调链自动写入
+    browser context。这里只需**等待页面自动跳转到 m.weibo.cn**，然后直接从
+    context 读取全部 cookie —— 不再主动导航裸的 crossdomain（不带回调参数
+    不会触发 Set-Cookie，反而会打断自动跳转）。
     """
-    cookies = await _collect_cookies(page)
-    if all(cookies.get(k) for k in _REQUIRED_COOKIES):
-        return cookies
     try:
-        for _ in range(3):
-            await page.goto(
-                "https://passport.weibo.com/sso/crossdomain",
-                timeout=15000, wait_until="domcontentloaded",
-            )
-            await page.wait_for_timeout(2500)
-            cookies = await _collect_cookies(page)
-            if all(cookies.get(k) for k in _REQUIRED_COOKIES):
-                break
-        # 再导航一次 m.weibo.cn，触发 wap 域登录态写入
-        if all(cookies.get(k) for k in _REQUIRED_COOKIES):
+        # 1) 优先等页面自动跳转到 m.weibo.cn（扫码确认后的目标页，最多 15s）
+        try:
+            await page.wait_for_url("**m.weibo.cn**", timeout=15000,
+                                    wait_until="domcontentloaded")
+        except Exception:
+            pass
+        # 2) 若页面不在 m.weibo.cn，导航过去触发 wap 域跨域 cookie 落齐
+        if "m.weibo.cn" not in (page.url or ""):
             try:
-                await page.goto(
-                    "https://m.weibo.cn",
-                    timeout=15000, wait_until="domcontentloaded",
-                )
+                await page.goto("https://m.weibo.cn", timeout=15000,
+                                wait_until="domcontentloaded")
                 await page.wait_for_timeout(2000)
-                cookies.update(await _collect_cookies(page))
+            except Exception:
+                pass
+        cookies = await _collect_cookies(page)
+        # 3) 若仍缺 SUB，再导航 m.weibo.cn 一次让回调链 cookie 落齐
+        if not cookies.get("SUB"):
+            try:
+                await page.goto("https://m.weibo.cn", timeout=15000,
+                                wait_until="domcontentloaded")
+                await page.wait_for_timeout(2500)
+                cookies = await _collect_cookies(page)
             except Exception:
                 pass
     except Exception as exc:
-        log.warning("crossdomain 获取 cookie: %s", exc)
+        log.warning("finalize cookies: %s", exc)
     return cookies
 
 
