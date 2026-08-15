@@ -369,6 +369,8 @@ function startQrPoll() {
       } else if (st.status === 'scanned') {
         $('#qrStatus').textContent = '✅ 已扫码，请在手机上确认';
         $('#qrStatus').className = 'qr-status success';
+        // 已扫码即允许手动导入（后端会补全 Cookie），避免回调卡住时无法继续
+        $('#qrImportBtn').disabled = false;
       } else if (st.status === 'success') {
         $('#qrStatus').textContent = '✅ 扫码登录成功！';
         $('#qrStatus').className = 'qr-status success';
@@ -381,6 +383,10 @@ function startQrPoll() {
       } else if (st.status === 'error') {
         $('#qrStatus').textContent = '查询失败：' + st.message;
         $('#qrStatus').className = 'qr-status bad';
+      } else if (st.status === 'unknown') {
+        // 未知状态（风控/网络抖动）：循环轮询即可，几分钟后 Qr 会过期
+        $('#qrStatus').textContent = '正在确认扫码状态…';
+        $('#qrStatus').className = 'qr-status';
       }
     } catch(e) { /* 轮询错误忽略，继续 */ }
   }, 2000);

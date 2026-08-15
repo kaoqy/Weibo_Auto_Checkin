@@ -139,19 +139,18 @@ def qr_import_account(data: QrImportAccount, user: dict = Depends(auth.require_a
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("message", "获取 Cookie 失败"))
     cookies = result.get("cookies", {})
-    if not cookies:
-        raise HTTPException(status_code=400, detail="未获取到 Cookie")
-    # 组装 cookie 字符串
     cookie_str = "; ".join(f"{k}={v}" for k, v in cookies.items() if v)
-    name = data.name.strip() or result.get("username") or "扫码账号"
-    # 尝试获取昵称
+    # 缺少 SUB 视为登录不完整，避免导入后签到必然失败
+    if not cookies.get("SUB"):
+        raise HTTPException(status_code=400, detail="未获取到完整登录态（缺少 SUB），请重新扫码")
     uid = result.get("uid", "")
-    if not data.name.strip() and result.get("username"):
-        name = result["username"]
+    name = (data.name or "").strip() or result.get("username") or (
+        f"微博用户{uid}" if uid else "扫码账号"
+    )
     acc_id = database.add_account({
         "name": name,
         "cookie_raw": cookie_str,
         "enabled": True,
         "remark": f"扫码登录 uid={uid}" if uid else "扫码登录",
     })
-    return {"ok": True, "id": acc_id, "name": name, "cookie_length": len(cookie_str)}
+    return {"ok": True, "id": acc_id, "name": name, "cookie_length": len(cookie_str), "uid": uid}

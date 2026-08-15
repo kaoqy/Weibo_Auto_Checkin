@@ -216,7 +216,12 @@ def generate_qrcode() -> dict:
 
 
 def check_qrcode(qrid: str) -> dict:
-    """在真实浏览器上下文里轮询扫码状态，返回可序列化结果。"""
+    """在真实浏览器上下文里轮询扫码状态，返回可序列化结果。
+
+    扫码确认成功后，微博服务端会把登录态通过 crossdomain 回调写入浏览器
+    （触发 passport/weibo 域 cookie 下发）。这里在检测到成功后主动等待并导航到
+    crossdomain 页面，确保拿到完整 Cookie，让前端“等待手机确认”后能真正回调成功。
+    """
     sess = QR_SESSIONS.get(qrid)
     if not sess:
         return {"status": "expired", "message": "二维码不存在或已过期"}
@@ -244,17 +249,17 @@ def check_qrcode(qrid: str) -> dict:
     msg = result.get("msg", "")
     # 状态映射
     if retcode == 20000000:
-        # 确认成功
+        # 确认成功：等待服务端跨域写入 cookie，并用真实浏览器收集完整登录态
         sess["status"] = "success"
-        cookies = _collect_cookies(page)
         uid = (result.get("data") or {}).get("uid", "")
-        sess["uid"] = uid
+        sess["uid"] = uid or sess.get("uid", "")
+        cookies = _finalize_cookies(page)
         sess["cookies"] = cookies
         return {
-            "status": "success", "message": msg,
+            "status": "success", "message": msg or "扫码登录成功",
             "cookies": cookies,
             "has_cookie": bool(cookies.get("SUB")),
-            "uid": uid,
+            "uid": sess["uid"],
         }
     elif retcode == 50114001:
         sess["status"] = "pending"
@@ -283,25 +288,73 @@ def _collect_cookies(page) -> dict:
     return cookies
 
 
+# 需要重点保留的登录态 cookie（缺一不可视为未完成登录）
+_REQUIRED_COOKIES = ("SUB", "SUBP")
+
+
+def _finalize_cookies(page) -> dict:
+    """扫码确认后，主动走微博跨域回调，确保拿到完整登录 Cookie。
+
+    扫码成功后仅凭当前页面的 cookie 往往不完整（缺少 SUB 等），
+    需导航到 passport 的 crossdomain 回调地址触发 Set-Cookie。
+    此处等待回调完成并反复收集，最多重试数次。
+    """
+    cookies = _collect_cookies(page)
+    # 若关键 cookie 已齐全或异常，直接返回
+    if all(cookies.get(k) for k in _REQUIRED_COOKIES):
+        return cookies
+    try:
+        for _ in range(3):
+            page.goto(
+                "https://passport.weibo.com/sso/crossdomain",
+                timeout=15000, wait_until="domcontentloaded",
+            )
+            page.wait_for_timeout(2500)
+            cookies = _collect_cookies(page)
+            if all(cookies.get(k) for k in _REQUIRED_COOKIES):
+                break
+        # 再导航一次 m.weibo.cn，触发 wap 域登录态写入
+        if all(cookies.get(k) for k in _REQUIRED_COOKIES):
+            try:
+                page.goto(
+                    "https://m.weibo.cn",
+                    timeout=15000, wait_until="domcontentloaded",
+                )
+                page.wait_for_timeout(2000)
+                cookies.update(_collect_cookies(page))
+            except Exception:
+                pass
+    except Exception as exc:
+        log.warning("crossdomain 获取 cookie: %s", exc)
+    return cookies
+
+
 def finalize_login(qrid: str) -> dict:
-    """扫码确认后获取完整登录 Cookie。"""
+    """扫码确认后获取完整登录 Cookie。
+
+    允许在 scanned（已扫码/刚确认）状态下调用：会主动触发 crossdomain 回调
+    并尝试补全 Cookie；若仍拿不到 SUB 才视为未完成。
+    """
     sess = QR_SESSIONS.get(qrid)
-    if not sess or sess.get("status") != "success":
-        return {"ok": False, "message": "尚未确认登录"}
+    if not sess:
+        return {"ok": False, "message": "二维码不存在或已过期"}
+    if time.time() - sess.get("created_at", 0) > QR_TTL:
+        return {"ok": False, "message": "二维码已过期，请重新扫码"}
+    # 允许 success / scanned 状态下补 Cookie
+    if sess.get("status") not in ("success", "scanned"):
+        return {"ok": False, "message": "尚未扫码确认，请先扫码并在手机上确认"}
 
     cookies = sess.get("cookies") or {}
-    # 若缺 SUB，尝试触发跨域登录后再收集
+    # 若缺 SUB，触发跨域登录后再收集
     if not cookies.get("SUB"):
         page = _ensure_browser()
         try:
             with _browser_lock:
-                page.goto(
-                    "https://passport.weibo.com/sso/crossdomain",
-                    timeout=15000, wait_until="domcontentloaded",
-                )
-                page.wait_for_timeout(2000)
-            cookies = _collect_cookies(page)
+                cookies = _finalize_cookies(page)
             sess["cookies"] = cookies
+            # 若补全了 SUB，说明已确认成功，修正会话状态
+            if cookies.get("SUB"):
+                sess["status"] = "success"
         except Exception as exc:
             log.warning("crossdomain 获取 cookie: %s", exc)
 
