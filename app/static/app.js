@@ -124,30 +124,46 @@ async function loadAccounts() {
         <td><strong>${esc(a.name)}</strong></td>
         <td>${a.enabled?statusBadge('success'):'<span class="badge gray">已停用</span>'} · ${statusBadge(a.last_status)}</td>
         <td style="color:var(--muted)">${a.cookie_length} 字符</td>
+        <td>${a.proxy? '<span class="badge">'+esc(a.proxy.replace(/socks5.*@/,'socks5://***@').slice(0,28))+'</span>' : '<span class="badge gray">直连</span>'}</td>
         <td>${a.last_checkin||'从未'}</td>
         <td>
           <button class="btn btn-ghost btn-sm" onclick="openAccModal(${a.id})">编辑</button>
           <button class="btn btn-ghost btn-sm" onclick="verifyAcc(${a.id})">校验</button>
           <button class="btn btn-danger btn-sm" onclick="delAcc(${a.id})">删除</button>
         </td>
-      </tr>`).join('') : '<tr><td colspan="6" style="color:var(--muted)">暂无账号</td></tr>';
+      </tr>`).join('') : '<tr><td colspan="7" style="color:var(--muted)">暂无账号</td></tr>';
   } catch(e) { toast('加载账号失败', 'err'); }
 }
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 
 let accModal = (()=>{})();
+async function populateProxySelect(sel, selected='') {
+  // 从设置读取代理列表 + 识别归属地
+  let proxies = [];
+  try {
+    const geo = await api.get('/api/proxies/geo');
+    proxies = geo.map(g => ({ url: g.url, label: g.display + (g.short ? ' (' + g.short + ')' : '') }));
+  } catch(e) { /* 忽略 */ }
+  if (!proxies.length && selected) {
+    proxies = [{ url: selected, label: selected }];
+  }
+  const opt = (v, t) => `<option value="${esc(v)}"${v===selected?' selected':''}>${esc(t)}</option>`;
+  sel.innerHTML = opt('', '自动 / 直连') + proxies.map(p => opt(p.url, p.label)).join('');
+}
+
 function openAccModal(id=null) {
   editingId = id;
   $('#accModalTitle').textContent = id ? '编辑账号' : '添加账号';
   $('#m-name').value = ''; $('#m-cookie').value = ''; $('#m-remark').value='';
-  $('#m-enabled').checked = true; $('#m-proxy_round').checked = false;
+  $('#m-enabled').checked = true;
+  populateProxySelect($('#m-proxy'), '');
   if (id) {
     api.get('/api/accounts/'+id).then(a=>{
       $('#m-name').value = a.name;
       $('#m-cookie').value = a.cookie_raw || a.cookie || '';
       $('#m-remark').value = a.remark||'';
       $('#m-enabled').checked = !!a.enabled;
-      $('#m-proxy_round').checked = a.proxy_index > 0;
+      populateProxySelect($('#m-proxy'), a.proxy || '');
     });
   }
   $('#accModal').hidden = false;
@@ -160,7 +176,7 @@ $('#accModalSave').onclick = async () => {
     cookie_raw: $('#m-cookie').value.trim(),
     remark: $('#m-remark').value.trim(),
     enabled: $('#m-enabled').checked,
-    proxy_index: $('#m-proxy_round').checked ? 1 : 0,
+    proxy: $('#m-proxy').value,
   };
   try {
     if (editingId) await api.put('/api/accounts/'+editingId, body);
@@ -327,6 +343,32 @@ async function loadSettings() {
     $('#s-checkin_delay_max').value = settingsCache.checkin_delay_max||'8';
   } catch(e){ toast('加载设置失败','err'); }
 }
+
+/* ===== 代理归属地识别 ===== */
+$('#btn-detect-geo').onclick = async () => {
+  // 先保存当前 proxies 到后端
+  try {
+    await api.post('/api/settings', collectSettings());
+  } catch(e) { /* 忽略 */ }
+  const box = $('#proxyGeo'), status = $('#geoStatus');
+  box.innerHTML = '';
+  status.textContent = '识别中…';
+  try {
+    const list = await api.get('/api/proxies/geo');
+    status.textContent = '';
+    if (!list.length) { box.innerHTML = '<div class="hint">尚未配置 SOCKS5 节点</div>'; return; }
+    box.innerHTML = list.map(g => `
+      <div class="geo-item ${g.ok?'':'geo-bad'}">
+        <span class="geo-flag">${g.ok? esc(g.display.split(' ')[0] || '🌐') : '❌'}</span>
+        <span class="geo-info">
+          <span class="geo-name">${g.ok ? esc(g.country+' '+g.region+(g.city?' · '+g.city:'')) : '⚠️ '+esc(g.display)}</span>
+          <span class="geo-url" title="${esc(g.url)}">${esc(g.url.replace(/socks5.*@/,'socks5://***@'))}</span>
+        </span>
+      </div>`).join('');
+  } catch(e) {
+    status.textContent = '识别失败：' + e.message;
+  }
+};
 function setVal(id, checked) { $('#'+id).checked = !!checked; }
 function collectSettings() {
   return {

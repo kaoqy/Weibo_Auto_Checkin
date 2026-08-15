@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
 from datetime import datetime
@@ -12,6 +13,8 @@ from pathlib import Path
 
 # 数据库文件默认放在项目根目录下
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "weibo_checkin.db"
+
+log = logging.getLogger("weibo.database")
 
 _local = threading.local()
 
@@ -51,7 +54,8 @@ def init_db() -> None:
             cookie       TEXT NOT NULL DEFAULT '',
             cookie_raw   TEXT NOT NULL DEFAULT '',   -- 原始 cookie 字符串（可选）
             enabled      INTEGER NOT NULL DEFAULT 1,  -- 是否启用自动签到
-            proxy_index  INTEGER NOT NULL DEFAULT 0,  -- 使用的代理节点序号
+            proxy        TEXT NOT NULL DEFAULT '',     -- 该账号使用的 socks 链接（归属地由 proxy_geo 识别）
+            proxy_index  INTEGER NOT NULL DEFAULT 0,  -- 兼容旧字段（已弃用，改用 proxy）
             remark       TEXT NOT NULL DEFAULT '',
             last_status  TEXT NOT NULL DEFAULT 'unknown', -- success/failed/partial/unknown
             last_checkin TEXT,                         -- 上次签到时间
@@ -121,7 +125,17 @@ def init_db() -> None:
         """
     )
     conn.commit()
+    _migrate(conn)
     _seed_defaults(conn)
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """旧库结构迁移：为 accounts 增加 proxy 列（旧版只有 proxy_index）。"""
+    cols = [r["name"] for r in conn.execute("PRAGMA table_info(accounts)").fetchall()]
+    if "proxy" not in cols:
+        conn.execute("ALTER TABLE accounts ADD COLUMN proxy TEXT NOT NULL DEFAULT ''")
+        conn.commit()
+        log.info("accounts 表已迁移：新增 proxy 列")
 
 
 def _seed_defaults(conn: sqlite3.Connection) -> None:
@@ -186,7 +200,7 @@ def add_account(data: dict) -> int:
     cur = conn.execute(
         """
         INSERT INTO accounts
-            (name, cookie, cookie_raw, enabled, proxy_index, remark,
+            (name, cookie, cookie_raw, enabled, proxy, remark,
              last_status, last_message, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, 'unknown', '', ?, ?)
         """,
@@ -195,7 +209,7 @@ def add_account(data: dict) -> int:
             data.get("cookie", ""),
             data.get("cookie_raw", ""),
             1 if data.get("enabled", True) else 0,
-            int(data.get("proxy_index", 0)),
+            data.get("proxy", ""),   # socks 链接或标识
             data.get("remark", ""),
             now, now,
         ),
@@ -206,10 +220,15 @@ def add_account(data: dict) -> int:
 
 def update_account(account_id: int, data: dict) -> bool:
     conn = _get_conn()
-    allowed = ("name", "cookie", "cookie_raw", "enabled", "proxy_index", "remark")
+    allowed = ("name", "cookie", "cookie_raw", "enabled", "proxy", "proxy_index", "remark")
     fields = {k: v for k, v in data.items() if k in allowed}
     if not fields:
         return False
+    # 兼容：旧字段 proxy_index 映射到 proxy 非空时才用
+    if "proxy_index" in fields and "proxy" not in fields:
+        pi = fields.pop("proxy_index")
+        if pi:
+            fields["proxy"] = str(pi)
     sets = ", ".join(f"{k} = ?" for k in fields)
     values = list(fields.values())
     values.append(_now())

@@ -88,6 +88,31 @@ def update_settings(values: dict, user: dict = Depends(auth.require_admin)):
     return database.get_settings()
 
 
+@router.get("/proxies/geo")
+def proxies_geo(user: dict = Depends(auth.require_admin)):
+    """检测配置的所有 SOCKS5 代理的归属地。
+    返回 [{url, ok, country, country_code, region, city, display}]
+    """
+    from .. import proxy_geo
+    from ..weibo_client import parse_proxies
+
+    urls = parse_proxies(database.get_setting("proxies", ""))
+    result = []
+    for u in urls:
+        info = proxy_geo.detect(u)
+        result.append({
+            "url": u,
+            "ok": info.get("ok", False),
+            "country": info.get("country", ""),
+            "country_code": info.get("country_code", ""),
+            "region": info.get("region", ""),
+            "city": info.get("city", ""),
+            "display": proxy_geo.display(u),
+            "short": proxy_geo.short_label(u),
+        })
+    return result
+
+
 @router.post("/settings/reload-schedule")
 def reload_schedule(user: dict = Depends(auth.require_admin)):
     scheduler.reload_schedule()

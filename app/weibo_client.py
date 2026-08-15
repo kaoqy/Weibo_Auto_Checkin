@@ -280,19 +280,25 @@ class CheckinOptions:
 
 
 def run_account_checkin(cookie_dict: dict, opts: CheckinOptions,
+                        proxy_url: str | None = None,
                         proxy_index: int = 0) -> dict:
     """
     对单个账号执行一遍签到。
+    - proxy_url: 账号指定使用的 socks 链接（优先）
+    - proxy_index: 无指定时按 opts.proxies 轮询的序号（兼容旧逻辑）
     返回 dict：{status, channel, total, success, fail, message, results, cookie, cookie_changed}
     """
     cookie_dict = normalize_cookie(cookie_dict)
     if not cookie_dict:
         return _bundle("failed", "Cookie 为空", 0, 0, 0, [], cookie_dict, [])
 
-    # 节点池选择：按账号轮询（proxy_index）
+    # 代理选择：账号指定 proxy_url 优先；否则按 opts.proxies 轮询
     proxy = None
     channel = "direct"
-    if opts.proxies:
+    if proxy_url and proxy_url.strip().startswith(("socks5://", "socks5h://")):
+        proxy = proxy_url.strip()
+        channel = "socks"
+    elif opts.proxies:
         proxy = opts.proxies[proxy_index % len(opts.proxies)]
         channel = "socks"
 

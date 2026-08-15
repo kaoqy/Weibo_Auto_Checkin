@@ -16,7 +16,8 @@ class AccountIn(BaseModel):
     cookie: str = ""
     cookie_raw: str = ""
     enabled: bool = True
-    proxy_index: int = 0
+    proxy: str = ""
+    proxy_index: int | None = None   # 兼容旧字段
     remark: str = ""
 
 
@@ -25,7 +26,8 @@ class AccountUpdate(BaseModel):
     cookie: str | None = None
     cookie_raw: str | None = None
     enabled: bool | None = None
-    proxy_index: int | None = None
+    proxy: str | None = None
+    proxy_index: int | None = None   # 兼容旧字段
     remark: str | None = None
 
 
@@ -35,6 +37,7 @@ def _public(acc: dict) -> dict:
     cookie = acc.get("cookie") or acc.get("cookie_raw") or ""
     acc["cookie_length"] = len(cookie) if cookie else 0
     acc["cookie_preview"] = (cookie[:20] + "…") if len(cookie) > 20 else cookie
+    acc["proxy"] = acc.get("proxy", "") or ""
     return acc
 
 

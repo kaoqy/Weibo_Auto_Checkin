@@ -14,7 +14,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from . import database, notifier
-from .anti_ban import AntiBanPolicy, node_rotation
+from .anti_ban import AntiBanPolicy
 from .weibo_client import CheckinOptions, cookie_to_string, normalize_cookie, run_account_checkin
 
 log = logging.getLogger("weibo.scheduler")
@@ -70,23 +70,44 @@ def run_checkin(trigger_type: str = "manual") -> dict:
 
         overall = []
         total = success = fail = 0
-        for idx, acc in enumerate(accounts, start=1):
-            # 防封等待（首个账号也可能等待）
-            if idx > 1 or policy.should_wait():
-                policy.wait_between_accounts(idx, len(accounts))
+        results_lock = threading.Lock()
 
-            proxy_index = node_rotation(len(opts.proxies), acc.get("proxy_index", 0) or idx)
+        # 按账号指定的 socks 分组；不同 socks → 不同组（可并行）
+        groups: dict[str, list[dict]] = {}
+        group_order: list[str] = []
+        for acc in accounts:
+            proxy = (acc.get("proxy") or "").strip()
+            key = proxy if proxy else "__direct__"   # 无指定归到直连组
+            if key not in groups:
+                groups[key] = []
+                group_order.append(key)
+            groups[key].append(acc)
+
+        n_groups = len(group_order)
+        parallel = n_groups > 1  # 多个不同 socks 才并行
+        log.info("按代理分组：%d 组%s（%s）", n_groups,
+                 "，并行签到" if parallel else "，依次签到",
+                 "、".join(groups[k][0].get("name", "?") if groups[k] else k for k in group_order))
+
+        def _process_one(acc: dict, idx_in_group: int, group_size: int, group_label: str):
+            """处理单个账号签到。返回结果 dict 或 None（并发下由主线程记账）。"""
+            # 防封等待（组内账号间）
+            if idx_in_group > 0 or policy.should_wait():
+                wait = policy.wait_between_accounts(idx_in_group + 1, group_size)
+                if wait and group_label:
+                    log.info("  [%s] 防封等待 %.0fs 后处理 %s", group_label, wait, acc.get("name"))
+
             raw_cookie = acc.get("cookie") or acc.get("cookie_raw") or ""
             cookie_dict = normalize_cookie(raw_cookie)
+            proxy_url = acc.get("proxy") or None
 
-            log.info("👤 账号 %d/%d：%s", idx, len(accounts), acc.get("name"))
-            result = run_account_checkin(cookie_dict, opts, proxy_index=proxy_index)
+            log.info("👤 [%s] 账号：%s", group_label, acc.get("name"))
+            result = run_account_checkin(cookie_dict, opts, proxy_url=proxy_url)
 
-            # 回写刷新后的 Cookie（转成字符串存储）
+            # 回写刷新后的 Cookie
             if result.get("cookie"):
                 new_cookie_str = cookie_to_string(result["cookie"])
                 database.update_account(acc["id"], {"cookie": new_cookie_str})
-                # 若账号之前只有 cookie（非 raw），也同步更新 raw
                 if not acc.get("cookie_raw"):
                     database.update_account(acc["id"], {"cookie_raw": new_cookie_str})
 
@@ -96,13 +117,24 @@ def run_checkin(trigger_type: str = "manual") -> dict:
                 result.get("message") or result.get("status"),
             )
 
+            entry = {
+                "name": acc.get("name", "未命名账号"),
+                "status": result["status"],
+                "message": result.get("message", ""),
+                "channel": result.get("channel", "direct") + (f"[{group_label}]" if group_label else ""),
+                "total": result.get("total", 0),
+                "success": result.get("success", 0),
+                "fail": result.get("fail", 0),
+                "results": result.get("results", []),
+            }
+
             # 记录日志
             database.add_log({
                 "account_id": acc["id"],
                 "account_name": acc.get("name", "未命名账号"),
                 "task_id": task_id,
                 "status": result["status"],
-                "channel": result.get("channel", "direct"),
+                "channel": result.get("channel", "direct") + (f"[{group_label}]" if group_label else ""),
                 "total": result.get("total", 0),
                 "success": result.get("success", 0),
                 "fail": result.get("fail", 0),
@@ -110,22 +142,42 @@ def run_checkin(trigger_type: str = "manual") -> dict:
                 "message": result.get("message", ""),
             })
 
-            overall.append({
-                "name": acc.get("name", "未命名账号"),
-                "status": result["status"],
-                "message": result.get("message", ""),
-                "channel": result.get("channel", "direct"),
-                "total": result.get("total", 0),
-                "success": result.get("success", 0),
-                "fail": result.get("fail", 0),
-                "results": result.get("results", []),
-            })
-            total += result.get("total", 0)
-            success += result.get("success", 0)
-            fail += result.get("fail", 0)
+            with results_lock:
+                overall.append(entry)
+                nonlocal_map["total"] += entry["total"]
+                nonlocal_map["success"] += entry["success"]
+                nonlocal_map["fail"] += entry["fail"]
+                nonlocal_map["done"] += 1
+                _current_run["accounts_done"] = nonlocal_map["done"]
+                _current_run["progress"] = round(nonlocal_map["done"] / len(accounts) * 100)
+            return entry
 
-            _current_run["accounts_done"] = idx
-            _current_run["progress"] = round(idx / len(accounts) * 100)
+        # 用可变字典做并发计数器/合计
+        nonlocal_map = {"total": 0, "success": 0, "fail": 0, "done": 0}
+
+        def _run_group(accounts_in_group: list[dict], label: str):
+            """依次处理组内账号。"""
+            for i, acc in enumerate(accounts_in_group, start=0):
+                _process_one(acc, i, len(accounts_in_group), label)
+
+        if parallel:
+            # 不同 socks 组并行（每个组一个线程）
+            threads = []
+            for label in group_order:
+                t = threading.Thread(
+                    target=_run_group, args=(groups[label], label),
+                    daemon=True,
+                )
+                t.start()
+                threads.append(t)
+            for t in threads:
+                t.join()
+        else:
+            # 只有一个组：依次签到
+            label = group_order[0] if group_order else ""
+            _run_group(groups.get(label, []), label)
+
+        total, success, fail = nonlocal_map["total"], nonlocal_map["success"], nonlocal_map["fail"]
 
         # 汇总
         status = "failed" if fail > 0 and success == 0 else ("partial" if fail > 0 else "success")

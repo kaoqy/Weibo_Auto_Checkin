@@ -177,3 +177,41 @@ def test_static_files(client):
     assert "text/html" in client.get("/").headers["content-type"]
     assert client.get("/app.js").status_code == 200
     assert client.get("/style.css").status_code == 200
+
+
+def test_run_checkin_groups_by_proxy(tmp_path, monkeypatch):
+    """不同 socks 的账号应分组（不同线程），同 socks 顺序。用 mock 验证。"""
+    import app.database as db
+    import app.scheduler as sched
+    from app import auth as auth_mod
+    from app.weibo_client import _bundle
+
+    db_path = tmp_path / "test_group.db"
+    monkeypatch.setattr(db, "DB_PATH", db_path)
+    db._local.conn = None
+    db.init_db()
+    db.create_user("admin", auth_mod.hash_password("sec123456"))
+    db.set_settings({"auth_enabled": "0", "anti_ban_enabled": "0"})
+
+    # 三个账号：两个用 soapA，一个用 soapB
+    a1 = db.add_account({"name": "A1", "cookie_raw": "SUB=a", "proxy": "socks5://p1:1080"})
+    a2 = db.add_account({"name": "A2", "cookie_raw": "SUB=b", "proxy": "socks5://p1:1080"})
+    a3 = db.add_account({"name": "A3", "cookie_raw": "SUB=c", "proxy": "socks5://p2:1080"})
+
+    called = []
+    def fake_checkin(cookie, opts, proxy_url=None, proxy_index=0):
+        called.append(proxy_url)
+        return _bundle("success", "ok", 1, 1, 0,
+                       [{"name": "超话", "success": True, "message": "已签到"}],
+                       dict(cookie), [], proxy_url or "direct")
+
+    from unittest.mock import patch
+    with patch.object(sched, "run_account_checkin", side_effect=fake_checkin):
+        summary = sched.run_checkin("manual")
+
+    assert summary["status"] == "success"
+    assert summary["accounts"] == 3
+    # A1/A2 用 p1 代理，A3 用 p2 代理
+    assert "socks5://p1:1080" in called, f"p1 代理应被调用, got {called}"
+    assert "socks5://p2:1080" in called
+    db._local.conn = None

@@ -81,7 +81,7 @@
               <button class="btn btn-primary btn-sm" id="btn-add-acc">＋ 添加账号</button>
             </div>
           </div>
-          <div class="table-wrap"><table id="accTable"><thead><tr><th>ID</th><th>名称</th><th>状态</th><th>Cookie</th><th>上次签到</th><th>操作</th></tr></thead><tbody></tbody></table></div>
+          <div class="table-wrap"><table id="accTable"><thead><tr><th>ID</th><th>名称</th><th>状态</th><th>Cookie</th><th>代理</th><th>上次签到</th><th>操作</th></tr></thead><tbody></tbody></table></div>
         </div>
       </section>
 
@@ -130,7 +130,13 @@
           <div class="card">
             <div class="card-head"><h2>网络 / 代理</h2></div>
             <div class="form">
-              <label>SOCKS5 节点（每行一个）<textarea id="s-proxies" rows="3" placeholder="socks5://user:pass@host:port"></textarea></label>
+              <label>SOCKS5 节点（每行一个，自动识别归属地）<textarea id="s-proxies" rows="3" placeholder="socks5://user:pass@host:port"></textarea></label>
+              <small class="hint" style="display:block;margin:-8px 0 10px">保存后点下方「识别归属地」查询每个节点的国家/地区，账号可指定用哪个节点。</small>
+              <div class="proxy-geo" id="proxyGeo"></div>
+              <div class="form-actions">
+                <button class="btn btn-ghost" id="btn-detect-geo" type="button">🌍 识别代理归属地</button>
+                <span class="geo-status" id="geoStatus"></span>
+              </div>
               <div class="row2">
                 <label><input type="checkbox" id="s-proxy_force" /> 严格代理（失败不回退直连）</label>
                 <label><input type="checkbox" id="s-proxy_fallback" checked /> 失败回退直连</label>
@@ -181,8 +187,10 @@
           <label>账号名称<input id="m-name" placeholder="例如：小号1" /></label>
           <label>Cookie（键值对字符串）<textarea id="m-cookie" rows="6" placeholder="XSRF-TOKEN=xxx; MLOGIN=1; SCF=xxx; SUB=xxx; SUBP=xxx; ALF=xxx"></textarea></label>
           <label>备注<input id="m-remark" placeholder="可选" /></label>
+          <label>使用代理（指定 socks 节点，不同节点可并行签到）
+            <select id="m-proxy"><option value="">自动 / 直连</option></select>
+          </label>
           <label class="inline"><input type="checkbox" id="m-enabled" checked /> 启用自动签到</label>
-          <label class="inline"><input type="checkbox" id="m-proxy_round" /> 加入代理轮换</label>
         </div>
       </div>
       <div class="modal-foot">
