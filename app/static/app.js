@@ -40,7 +40,7 @@ themeSel.onchange = () => {
 };
 
 /* ===== 导航 ===== */
-const VIEW_TITLES = {dashboard:'仪表盘', accounts:'账号管理', logs:'签到日志', settings:'设置'};
+const VIEW_TITLES = {dashboard:'仪表盘', accounts:'账号管理', proxies:'代理', logs:'签到日志', settings:'设置'};
 $$('.nav-item').forEach(btn => {
   btn.onclick = () => {
     $$('.nav-item').forEach(b=>b.classList.remove('active'));
@@ -50,6 +50,7 @@ $$('.nav-item').forEach(btn => {
     $('#view-title').textContent = VIEW_TITLES[btn.dataset.view];
     if (btn.dataset.view === 'dashboard') loadDashboard();
     if (btn.dataset.view === 'accounts') loadAccounts();
+    if (btn.dataset.view === 'proxies') loadProxies();
     if (btn.dataset.view === 'logs') loadLogs();
     if (btn.dataset.view === 'settings') loadSettings();
   };
@@ -138,11 +139,16 @@ function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&l
 
 let accModal = (()=>{})();
 async function populateProxySelect(sel, selected='') {
-  // 从设置读取代理列表 + 识别归属地
+  // 从管理的代理列表读取（含归属地），账号可选指定
   let proxies = [];
   try {
-    const geo = await api.get('/api/proxies/geo');
-    proxies = geo.map(g => ({ url: g.url, label: g.display + (g.short ? ' (' + g.short + ')' : '') }));
+    const list = await api.get('/api/proxies');
+    proxies = list.filter(p=>p.enabled!==false).map(p => {
+      const cc = p.geo_country_code || '';
+      const flag = cc ? (String.fromCodePoint(0x1F1E6+cc.charCodeAt(0)-65, 0x1F1E6+cc.charCodeAt(1)-65)) : '🌐';
+      const name = p.label || (p.geo_country ? p.geo_country+' '+(p.geo_region||'') : (p.ip||'节点'));
+      return { url: p.url || `${p.ip}:${p.port}`, label: `${flag} ${name}${p.ip?' ('+p.ip+':'+p.port+')':''}` };
+    });
   } catch(e) { /* 忽略 */ }
   if (!proxies.length && selected) {
     proxies = [{ url: selected, label: selected }];
@@ -199,6 +205,126 @@ async function verifyAcc(id) {
     toast(r.valid ? '✅ Cookie 有效' : '❌ ' + r.message, r.valid?'good':'err');
   } catch(e){ toast('校验失败','err'); }
 }
+
+/* ===== 代理管理 ===== */
+let editingProxyId = null;
+function flagEmoji(cc) {
+  if (!cc || cc.length !== 2) return '🌐';
+  const ccU = cc.toUpperCase();
+  return String.fromCodePoint(0x1F1E6 + ccU.charCodeAt(0) - 65, 0x1F1E6 + ccU.charCodeAt(1) - 65);
+}
+
+async function loadProxies() {
+  try {
+    const list = await api.get('/api/proxies');
+    $('#proxyListHint').textContent = list.length ? '' : '添加后，账号管理里可为每个账号指定对应代理（不同节点并行签到）。';
+    const box = $('#proxyList');
+    if (!list.length) {
+      box.innerHTML = '<div style="color:var(--muted);padding:16px;text-align:center">尚未添加代理节点，点击「＋ 添加代理」</div>';
+      return;
+    }
+    box.innerHTML = list.map(p => {
+      const flag = flagEmoji(p.geo_country_code);
+      const host = p.ip || ((p.url||'').replace(/socks5.*@/,'').replace(/^socks5:\/\//,''));
+      const has = p.ip || (p.url||'').includes('socks5');
+      const geoHtml = p.geo_country ? `<div class="proxy-geo-line">${flag} ${esc(p.geo_country)} ${esc(p.geo_region||'')}${p.geo_ip?' · '+esc(p.geo_ip):''}</div>` : (has ? '<div class="proxy-geo-line"><span class="badge gray">归属地未识别</span></div>' : '');
+      return `<div class="proxy-card ${p.enabled===false?'proxy-disabled':''}">
+        <div class="proxy-top">
+          <div class="proxy-flag">${flag}</div>
+          <div class="proxy-main">
+            <div class="proxy-name">${esc(p.label || (p.geo_country? p.geo_country+' '+p.geo_region : host))} ${p.enabled===false?'<span class="badge gray">停用</span>':''}</div>
+            <div class="proxy-meta">${esc(has? host : '请编辑补全')}${p.port?':'+p.port:''}</div>
+          </div>
+          <div class="proxy-actions">
+            <button class="btn btn-ghost btn-sm" onclick="testProxy(${p.id})">测试</button>
+            <button class="btn btn-ghost btn-sm" onclick="openProxyModal(${p.id})">编辑</button>
+            <button class="btn btn-danger btn-sm" onclick="delProxy(${p.id})">删除</button>
+          </div>
+        </div>
+        ${geoHtml}
+        <div class="proxy-test" id="ptest-${p.id}"></div>
+      </div>`;
+    }).join('');
+  } catch(e){ toast('加载代理失败','err'); }
+}
+
+function openProxyModal(id=null) {
+  editingProxyId = id;
+  $('#proxyModalTitle').textContent = id ? '编辑代理' : '添加代理';
+  ['p-url','p-ip','p-port','p-user','p-pwd','p-label'].forEach(i=> $('#'+i).value='');
+  $('#p-geo').innerHTML=''; $('#p-geo-status').textContent='';
+  if (id) {
+    api.get('/api/proxies').then(list=>{
+      const p = list.find(x=>x.id===id);
+      if (!p) return;
+      if (p.ip) $('#p-ip').value = p.ip;
+      if (p.port) $('#p-port').value = p.port;
+      if (p.username) $('#p-user').value = p.username;
+      if (p.label) $('#p-label').value = p.label;
+      $('#p-geo').innerHTML = p.geo_country ? `<div class="geo-preview-item">${flagEmoji(p.geo_country_code)} ${esc(p.geo_country)} ${esc(p.geo_region||'')}</div>` : '';
+    });
+  }
+  $('#proxyModal').hidden = false;
+}
+$('#btn-proxy-add').onclick = () => openProxyModal();
+$('#proxyModalClose').onclick = $('#proxyModalCancel').onclick = ()=> $('#proxyModal').hidden = true;
+
+$('#p-url').oninput = () => {
+  const url = $('#p-url').value.trim();
+  if (!url.includes('socks5://')) return;
+  const m = url.match(/socks5:\/\/(?:([^:@\/]+):([^@\/]*))?@?([^:\/\s]+):(\d+)/);
+  if (m) {
+    $('#p-ip').value = m[3]; $('#p-port').value = m[4];
+    if (m[1]) $('#p-user').value = decodeURIComponent(m[1]);
+    if (m[2]) $('#p-pwd').value = decodeURIComponent(m[2]);
+    $('#p-geo-status').textContent = '已解析，点「识别归属地」…';
+  }
+};
+$('#btn-p-detect').onclick = async () => {
+  const url = buildProxyUrlFromForm();
+  if (!url) { toast('请填写 IP 或链接', 'err'); return; }
+  const st = $('#p-geo-status'); st.textContent = '识别中…';
+  try {
+    const r = await api.post('/api/proxies/detect', { url });
+    if (r.ok) {
+      $('#p-geo').innerHTML = `<div class="geo-preview-item">${flagEmoji(r.country_code)} ${esc(r.country)} ${esc(r.region||'')}（${esc(r.ip)}）</div>`;
+      st.textContent = '✅ 识别成功';
+    } else { $('#p-geo').innerHTML=''; st.textContent = '❌ ' + (r.message||'识别失败'); }
+  } catch(e){ st.textContent = '❌ '+e.message; }
+};
+function buildProxyUrlFromForm() {
+  const ip=$('#p-ip').value.trim(), port=$('#p-port').value.trim();
+  if (!ip || !port) return '';
+  const u=$('#p-user').value.trim(), pw=$('#p-pwd').value.trim();
+  return 'socks5://'+(u?encodeURIComponent(u)+(pw?':'+encodeURIComponent(pw):'')+'@':'')+ip+':'+port;
+}
+$('#proxyModalSave').onclick = async () => {
+  const url = buildProxyUrlFromForm() || $('#p-url').value.trim();
+  if (!url) { toast('请填写 IP/端口 或 完整链接', 'err'); return; }
+  try {
+    if (editingProxyId) await api.put('/api/proxies/'+editingProxyId, { url, label: $('#p-label').value.trim() });
+    else await api.post('/api/proxies', { url, label: $('#p-label').value.trim() });
+    $('#proxyModal').hidden = true;
+    toast('保存成功', 'good');
+    loadProxies();
+  } catch(e){ toast('保存失败：'+e.message, 'err'); }
+};
+async function delProxy(id) {
+  if (!confirm('确定删除该代理？')) return;
+  try { await api.del('/api/proxies/'+id); toast('已删除','good'); loadProxies(); }
+  catch(e){ toast('删除失败','err'); }
+}
+async function testProxy(id) {
+  const el = $('#ptest-'+id); if (el) el.innerHTML = '测试中…';
+  try {
+    const r = await api.post('/api/proxies/'+id+'/test', {});
+    if (el) el.innerHTML = '<span class="'+(r.ok?'t-ok':'t-bad')+'">'+esc(r.message)+'</span>';
+    loadProxies();
+  } catch(e){ if(el) el.innerHTML = '<span class="t-bad">失败</span>'; }
+}
+$('#btn-proxy-test-all').onclick = async () => {
+  try { const list = await api.get('/api/proxies'); for (const p of list) await testProxy(p.id); } catch(e){}
+};
 
 /* ===== 扫码登录添加账号 ===== */
 let qrId = null, qrTimer = null;
@@ -336,7 +462,6 @@ async function loadSettings() {
     $('#s-anti_ban_wait_min').value = settingsCache.anti_ban_wait_min||'120';
     $('#s-anti_ban_wait_max').value = settingsCache.anti_ban_wait_max||'300';
     $('#s-anti_ban_window_hour').value = settingsCache.anti_ban_window_hour||'7';
-    $('#s-proxies').value = settingsCache.proxies||'';
     setVal('s-proxy_force', settingsCache.proxy_force==='1');
     setVal('s-proxy_fallback', settingsCache.proxy_fallback!=='0');
     $('#s-checkin_delay_min').value = settingsCache.checkin_delay_min||'3';
@@ -344,31 +469,6 @@ async function loadSettings() {
   } catch(e){ toast('加载设置失败','err'); }
 }
 
-/* ===== 代理归属地识别 ===== */
-$('#btn-detect-geo').onclick = async () => {
-  // 先保存当前 proxies 到后端
-  try {
-    await api.post('/api/settings', collectSettings());
-  } catch(e) { /* 忽略 */ }
-  const box = $('#proxyGeo'), status = $('#geoStatus');
-  box.innerHTML = '';
-  status.textContent = '识别中…';
-  try {
-    const list = await api.get('/api/proxies/geo');
-    status.textContent = '';
-    if (!list.length) { box.innerHTML = '<div class="hint">尚未配置 SOCKS5 节点</div>'; return; }
-    box.innerHTML = list.map(g => `
-      <div class="geo-item ${g.ok?'':'geo-bad'}">
-        <span class="geo-flag">${g.ok? esc(g.display.split(' ')[0] || '🌐') : '❌'}</span>
-        <span class="geo-info">
-          <span class="geo-name">${g.ok ? esc(g.country+' '+g.region+(g.city?' · '+g.city:'')) : '⚠️ '+esc(g.display)}</span>
-          <span class="geo-url" title="${esc(g.url)}">${esc(g.url.replace(/socks5.*@/,'socks5://***@'))}</span>
-        </span>
-      </div>`).join('');
-  } catch(e) {
-    status.textContent = '识别失败：' + e.message;
-  }
-};
 function setVal(id, checked) { $('#'+id).checked = !!checked; }
 function collectSettings() {
   return {
@@ -381,7 +481,6 @@ function collectSettings() {
     anti_ban_wait_min: $('#s-anti_ban_wait_min').value,
     anti_ban_wait_max: $('#s-anti_ban_wait_max').value,
     anti_ban_window_hour: $('#s-anti_ban_window_hour').value,
-    proxies: $('#s-proxies').value,
     proxy_force: $('#s-proxy_force').checked ? '1':'0',
     proxy_fallback: $('#s-proxy_fallback').checked ? '1':'0',
     checkin_delay_min: $('#s-checkin_delay_min').value,

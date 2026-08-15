@@ -111,6 +111,26 @@ def init_db() -> None:
             created_at    TEXT NOT NULL
         );
 
+        -- SOCKS5 代理节点（归属地自动识别）
+        CREATE TABLE IF NOT EXISTS proxies (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            label        TEXT NOT NULL DEFAULT '',
+            ip           TEXT NOT NULL DEFAULT '',
+            port         INTEGER NOT NULL DEFAULT 0,
+            username     TEXT NOT NULL DEFAULT '',
+            password     TEXT NOT NULL DEFAULT '',
+            url          TEXT NOT NULL DEFAULT '',    -- 完整 socks5:// 链接
+            geo_country   TEXT NOT NULL DEFAULT '',
+            geo_region    TEXT NOT NULL DEFAULT '',
+            geo_country_code TEXT NOT NULL DEFAULT '',
+            geo_ip        TEXT NOT NULL DEFAULT '',
+            enabled      INTEGER NOT NULL DEFAULT 1,
+            remark       TEXT NOT NULL DEFAULT '',
+            last_test     TEXT NOT NULL DEFAULT '',     -- 最近测试结果(ok/fail)
+            created_at   TEXT NOT NULL,
+            updated_at   TEXT NOT NULL
+        );
+
         -- 登录会话（token 存库，便于登出/校验）
         CREATE TABLE IF NOT EXISTS sessions (
             token      TEXT PRIMARY KEY,
@@ -193,6 +213,78 @@ def set_settings(values: dict) -> None:
 
 
 # ========================= 账号 =========================
+
+def add_proxy(data: dict) -> int:
+    conn = _get_conn()
+    now = _now()
+    cur = conn.execute(
+        """
+        INSERT INTO proxies
+            (label, ip, port, username, password, url, geo_country, geo_region,
+             geo_country_code, geo_ip, enabled, remark, last_test, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (data.get("label", ""), data.get("ip", ""), int(data.get("port", 0) or 0),
+         data.get("username", ""), data.get("password", ""), data.get("url", ""),
+         data.get("geo_country", ""), data.get("geo_region", ""),
+         data.get("geo_country_code", ""), data.get("geo_ip", ""),
+         1 if data.get("enabled", True) else 0, data.get("remark", ""),
+         data.get("last_test", ""), now, now),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def update_proxy(proxy_id: int, data: dict) -> bool:
+    conn = _get_conn()
+    allowed = ("label", "ip", "port", "username", "password", "url",
+               "geo_country", "geo_region", "geo_country_code", "geo_ip",
+               "enabled", "remark", "last_test")
+    fields = {k: v for k, v in data.items() if k in allowed}
+    if "enabled" in fields:
+        fields["enabled"] = 1 if fields["enabled"] else 0
+    if not fields:
+        return False
+    sets = ", ".join(f"{k} = ?" for k in fields)
+    values = list(fields.values())
+    values.append(_now())
+    values.append(proxy_id)
+    conn.execute(f"UPDATE proxies SET {sets}, updated_at = ? WHERE id = ?", values)
+    conn.commit()
+    return True
+
+
+def delete_proxy(proxy_id: int) -> bool:
+    conn = _get_conn()
+    cur = conn.execute("DELETE FROM proxies WHERE id = ?", (proxy_id,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def get_proxy(proxy_id: int) -> dict | None:
+    row = _get_conn().execute("SELECT * FROM proxies WHERE id = ?", (proxy_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def get_proxies(include_disabled: bool = True) -> list[dict]:
+    if include_disabled:
+        rows = _get_conn().execute("SELECT * FROM proxies ORDER BY id").fetchall()
+    else:
+        rows = _get_conn().execute(
+            "SELECT * FROM proxies WHERE enabled = 1 ORDER BY id").fetchall()
+    return [dict(r) for r in rows]
+
+
+def build_proxy_url(p: dict) -> str:
+    """由字段拼接 socks5 链接。"""
+    ip, port = p.get("ip", ""), p.get("port", 0)
+    if not ip or not port:
+        return p.get("url", "") or ""
+    user = p.get("username", "")
+    pwd = p.get("password", "")
+    auth = f"{user}:{pwd}@" if user else ""
+    return f"socks5://{auth}{ip}:{port}"
+
 
 def add_account(data: dict) -> int:
     conn = _get_conn()

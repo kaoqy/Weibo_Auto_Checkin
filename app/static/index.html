@@ -25,6 +25,9 @@
         <button class="nav-item" data-view="accounts">
           <span class="nav-ico">👥</span>账号管理
         </button>
+        <button class="nav-item" data-view="proxies">
+          <span class="nav-ico">🌐</span>代理
+        </button>
         <button class="nav-item" data-view="logs">
           <span class="nav-ico">📜</span>签到日志
         </button>
@@ -85,6 +88,22 @@
         </div>
       </section>
 
+      <!-- 代理管理 -->
+      <section class="view" id="view-proxies" hidden>
+        <div class="card">
+          <div class="card-head">
+            <h2>SOCKS5 代理节点</h2>
+            <div>
+              <button class="btn btn-ghost btn-sm" id="btn-proxy-test-all">🧪 测试全部</button>
+              <button class="btn btn-primary btn-sm" id="btn-proxy-add">＋ 添加代理</button>
+            </div>
+          </div>
+          <p class="hint" style="margin:0 0 12px">不同归属地的代理节点会<span class="badge warn">并行</span>签到；相同节点依次签到。账号在「账号管理」里选择对应的代理。</p>
+          <div class="proxy-list" id="proxyList"></div>
+          <div style="color:var(--muted);font-size:12px;margin-top:8px" id="proxyListHint"></div>
+        </div>
+      </section>
+
       <!-- 日志 -->
       <section class="view" id="view-logs" hidden>
         <div class="card">
@@ -128,15 +147,9 @@
             </div>
           </div>
           <div class="card">
-            <div class="card-head"><h2>网络 / 代理</h2></div>
+            <div class="card-head"><h2>代理策略</h2></div>
             <div class="form">
-              <label>SOCKS5 节点（每行一个，自动识别归属地）<textarea id="s-proxies" rows="3" placeholder="socks5://user:pass@host:port"></textarea></label>
-              <small class="hint" style="display:block;margin:-8px 0 10px">保存后点下方「识别归属地」查询每个节点的国家/地区，账号可指定用哪个节点。</small>
-              <div class="proxy-geo" id="proxyGeo"></div>
-              <div class="form-actions">
-                <button class="btn btn-ghost" id="btn-detect-geo" type="button">🌍 识别代理归属地</button>
-                <span class="geo-status" id="geoStatus"></span>
-              </div>
+              <p class="hint" style="margin-bottom:12px">代理节点请到侧栏「<b>🌐 代理</b>」标签页添加/管理（支持手动输入或粘贴链接自动识别归属地），并到「账号管理」为每个账号指定代理。</p>
               <div class="row2">
                 <label><input type="checkbox" id="s-proxy_force" /> 严格代理（失败不回退直连）</label>
                 <label><input type="checkbox" id="s-proxy_fallback" checked /> 失败回退直连</label>
@@ -196,6 +209,42 @@
       <div class="modal-foot">
         <button class="btn btn-ghost" id="accModalCancel">取消</button>
         <button class="btn btn-primary" id="accModalSave">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 弹窗：代理编辑 -->
+  <div class="modal-mask" id="proxyModal" hidden>
+    <div class="modal">
+      <div class="modal-head">
+        <h2 id="proxyModalTitle">添加代理</h2>
+        <button class="modal-close" id="proxyModalClose">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="form">
+          <label>快捷粘贴链接（可选，自动解析+识别归属地）
+            <input id="p-url" placeholder="socks5://user:pass@ip:port" />
+            <small class="hint">粘贴后会自动填充下方字段并识别归属地</small>
+          </label>
+          <div class="geo-preview" id="p-geo"></div>
+          <div class="row2">
+            <label>IP / 域名<input id="p-ip" placeholder="1.2.3.4" /></label>
+            <label>端口<input id="p-port" type="number" placeholder="1080" /></label>
+          </div>
+          <div class="row2">
+            <label>用户名（可选）<input id="p-user" autocomplete="off" /></label>
+            <label>密码（可选）<input id="p-pwd" type="password" autocomplete="off" /></label>
+          </div>
+          <label>名称（可选）<input id="p-label" placeholder="例如：香港节点" /></label>
+          <div class="form-actions">
+            <button class="btn btn-ghost" id="btn-p-detect" type="button">🌍 识别归属地</button>
+            <span class="geo-status" id="p-geo-status"></span>
+          </div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-ghost" id="proxyModalCancel">取消</button>
+        <button class="btn btn-primary" id="proxyModalSave">保存</button>
       </div>
     </div>
   </div>

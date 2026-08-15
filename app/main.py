@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from . import auth, database, scheduler
 from .api import accounts as accounts_api
 from .api import auth as auth_api
+from .api import proxies as proxies_api
 from .api import tasks as tasks_api
 
 logging.basicConfig(
@@ -42,6 +43,12 @@ async def lifespan(app: FastAPI):
     log.info("微博签到管理面板已就绪（数据库：%s）", database.DB_PATH)
     yield
     scheduler.stop_scheduler()
+    # 释放扫码浏览器内存
+    try:
+        from . import weibo_login
+        weibo_login.close_browser()
+    except Exception:
+        pass
 
 
 app = FastAPI(
@@ -62,6 +69,7 @@ app.add_middleware(
 app.include_router(accounts_api.router)
 app.include_router(tasks_api.router)
 app.include_router(auth_api.router)
+app.include_router(proxies_api.router)
 
 
 @app.get("/api/health")

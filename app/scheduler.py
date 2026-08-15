@@ -258,8 +258,23 @@ def start_scheduler() -> None:
     """启动调度器（幂等）。"""
     if not scheduler.running:
         scheduler.start()
+    # 定期清理空闲扫码浏览器，释放内存（资源占用优化）
+    if not scheduler.get_job("browser_sweep"):
+        scheduler.add_job(
+            _sweep_browser_idle, trigger="interval", minutes=3,
+            id="browser_sweep", max_instances=1, coalesce=True,
+        )
     reload_schedule()
     log.info("调度器已启动")
+
+
+def _sweep_browser_idle():
+    """清理空闲 Playwright 浏览器（释放内存）。"""
+    try:
+        from .weibo_login import _sweep_idle_browser
+        _sweep_idle_browser()
+    except Exception:
+        pass
 
 
 def stop_scheduler() -> None:

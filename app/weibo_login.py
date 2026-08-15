@@ -31,6 +31,50 @@ _browser = None
 _ctx = None
 _page = None
 _browser_lock = threading.Lock()
+_pw_obj = None           # 保存 sync_playwright 实例以便 close
+_last_use = 0.0          # 最后使用时间戳
+BROWSER_IDLE_TIMEOUT = 300  # 5 分钟空闲自动关闭释放内存
+
+
+def _sweep_idle_browser():
+    """若浏览器空闲超时则关闭并释放内存（资源占用优化）。"""
+    global _browser, _ctx, _page, _pw_obj
+    with _browser_lock:
+        if _page is None:
+            return
+        if _page.is_closed():
+            _browser = _ctx = _page = _pw_obj = None
+            return
+        if time.time() - _last_use < BROWSER_IDLE_TIMEOUT:
+            return
+        try:
+            _browser.close()
+        except Exception:
+            pass
+        try:
+            if _pw_obj:
+                _pw_obj.stop()
+        except Exception:
+            pass
+        _browser = _ctx = _page = _pw_obj = None
+        log.info("浏览器空闲超时，已关闭释放内存")
+
+
+def close_browser():
+    """主动关闭浏览器（可被 shutdown 钩子调用）。"""
+    global _browser, _ctx, _page, _pw_obj
+    with _browser_lock:
+        try:
+            if _page is not None and not _page.is_closed():
+                _browser.close()
+        except Exception:
+            pass
+        try:
+            if _pw_obj:
+                _pw_obj.stop()
+        except Exception:
+            pass
+        _browser = _ctx = _page = _pw_obj = None
 
 
 class QrLoginError(RuntimeError):
@@ -38,29 +82,30 @@ class QrLoginError(RuntimeError):
 
 
 def _ensure_browser():
-    """懒启动常驻 Playwright 浏览器（同步 API，线程锁保护）。"""
-    global _browser, _ctx, _page
+    """懒启动 Playwright 浏览器（同步 API，线程锁保护）。空闲会自动关闭。"""
+    global _browser, _ctx, _page, _pw_obj, _last_use
     with _browser_lock:
+        _last_use = time.time()
         if _page is not None and not _page.is_closed():
             return _page
         from playwright.sync_api import sync_playwright
 
         pw = sync_playwright().start()
+        _pw_obj = pw
         try:
             browser = pw.chromium.launch(
                 headless=True, args=["--no-sandbox", "--disable-gpu"],
             )
         except Exception:
-            # 兜底：用环境变量指定或默认可执行路径
+            # 兜底：用环境变量指定可执行路径
             import os
             exe = os.environ.get("CHROMIUM_PATH", "")
-            if exe:
-                browser = pw.chromium.launch(
-                    headless=True, executable_path=exe,
-                    args=["--no-sandbox", "--disable-gpu"],
-                )
-            else:
+            if not exe:
                 raise
+            browser = pw.chromium.launch(
+                headless=True, executable_path=exe,
+                args=["--no-sandbox", "--disable-gpu"],
+            )
         ctx = browser.new_context(
             user_agent=(
                 "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "

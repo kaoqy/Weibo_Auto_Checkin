@@ -1,0 +1,152 @@
+"""代理节点管理 API。"""
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+
+from .. import auth, database, proxy_geo
+
+router = APIRouter(prefix="/api/proxies", tags=["proxies"])
+
+
+class ProxyIn(BaseModel):
+    label: str = ""
+    ip: str = ""
+    port: int = 0
+    username: str = ""
+    password: str = ""
+    url: str = ""        # 可选，完整 socks5:// 链接
+    enabled: bool = True
+    remark: str = ""
+
+
+class ProxyUpdate(BaseModel):
+    label: str | None = None
+    ip: str | None = None
+    port: int | None = None
+    username: str | None = None
+    password: str | None = None
+    url: str | None = None
+    enabled: bool | None = None
+    remark: str | None = None
+
+
+def _parse_link(url: str) -> dict:
+    """解析 socks5:// 链接为字段。返回 {ip,port,username,password}。"""
+    from urllib.parse import urlparse
+    if not url:
+        return {"ip": "", "port": 0, "username": "", "password": ""}
+    try:
+        p = urlparse(url)
+        host = p.hostname or ""
+        port = p.port or 0
+        user, pwd = "", ""
+        if p.username:
+            user = p.username
+        if p.password:
+            pwd = p.password
+        return {"ip": host, "port": port, "username": user, "password": pwd}
+    except Exception:
+        return {"ip": "", "port": 0, "username": "", "password": ""}
+
+
+def _public(p: dict) -> dict:
+    p = dict(p)
+    p["url"] = p.get("url", "") or ""
+    p["password"] = "***" if p.get("password") else ""
+    if not p.get("url") and p.get("ip"):
+        p["url"] = database.build_proxy_url(p)
+    return p
+
+
+@router.get("")
+def list_proxies(user: dict = Depends(auth.require_admin)):
+    return [_public(p) for p in database.get_proxies(include_disabled=True)]
+
+
+@router.post("")
+def create_proxy(data: ProxyIn, user: dict = Depends(auth.require_admin)):
+    payload = data.model_dump()
+    # 若有链接则从链接解析字段，并识别归属地
+    if payload.get("url"):
+        parsed = _parse_link(payload["url"])
+        for k, v in parsed.items():
+            if not payload.get(k):
+                payload[k] = v
+    if payload.get("ip"):
+        url = database.build_proxy_url(payload) if not payload.get("url") else payload["url"]
+        payload["url"] = url
+        geo = proxy_geo.detect(url)
+        if geo.get("ok"):
+            payload["geo_country"] = geo.get("country", "")
+            payload["geo_region"] = geo.get("region", "")
+            payload["geo_country_code"] = geo.get("country_code", "")
+            payload["geo_ip"] = geo.get("ip", "")
+    else:
+        raise HTTPException(status_code=400, detail="缺少代理 IP/链接")
+    pid = database.add_proxy(payload)
+    return _public(database.get_proxy(pid))
+
+
+@router.put("/{proxy_id}")
+def update_one(proxy_id: int, data: ProxyUpdate, user: dict = Depends(auth.require_admin)):
+    if not database.get_proxy(proxy_id):
+        raise HTTPException(404, "代理不存在")
+    payload = {k: v for k, v in data.model_dump().items() if v is not None}
+    # 若更新了 url，重新解析/识别
+    if "url" in payload and payload["url"]:
+        parsed = _parse_link(payload["url"])
+        for k, v in parsed.items():
+            payload.setdefault(k, v)
+    if payload.get("ip"):
+        existing = database.get_proxy(proxy_id)
+        merged = dict(existing)
+        merged.update(payload)
+        url = database.build_proxy_url(merged) or payload.get("url", existing.get("url", ""))
+        payload["url"] = url
+        geo = proxy_geo.detect(url)
+        if geo.get("ok"):
+            payload["geo_country"] = geo.get("country", "")
+            payload["geo_region"] = geo.get("region", "")
+            payload["geo_country_code"] = geo.get("country_code", "")
+            payload["geo_ip"] = geo.get("ip", "")
+    database.update_proxy(proxy_id, payload)
+    return _public(database.get_proxy(proxy_id))
+
+
+@router.delete("/{proxy_id}")
+def delete_one(proxy_id: int, user: dict = Depends(auth.require_admin)):
+    if not database.delete_proxy(proxy_id):
+        raise HTTPException(404, "代理不存在")
+    return {"ok": True}
+
+
+@router.post("/{proxy_id}/test")
+def test_proxy(proxy_id: int, user: dict = Depends(auth.require_admin)):
+    p = database.get_proxy(proxy_id)
+    if not p:
+        raise HTTPException(404, "代理不存在")
+    url = p.get("url") or database.build_proxy_url(p)
+    # 通过代理测试访问 ip-api，若成功返回归属地
+    info = proxy_geo.detect(url, use_cache=False) if url else {"ok": False, "message": "无代理链接"}
+    ok = info.get("ok", False)
+    database.update_proxy(proxy_id, {"last_test": "ok" if ok else "fail"})
+    return {
+        "ok": ok,
+        "message": f"✅ {info.get('country','')} {info.get('region','')} · {info.get('ip','')}"
+        if ok else f"❌ {info.get('message','')}",
+        "geo": info,
+    }
+
+
+@router.post("/detect")
+def detect_url(data: dict, user: dict = Depends(auth.require_admin)):
+    """根据链接或字段识别归属地（不保存）。data: {url} 或 {ip,port,username,password}"""
+    url = data.get("url", "")
+    if not url and data.get("ip"):
+        url = database.build_proxy_url({**data, "username": data.get("user") or data.get("username",""),
+                                        "password": data.get("pwd") or data.get("password","")})
+    if not url:
+        raise HTTPException(400, "缺少链接或 IP")
+    info = proxy_geo.detect(url)
+    return info

@@ -33,6 +33,9 @@ const mockAccounts = [
 const mockTasks = [
   { task_id: 'abc123', trigger_type: 'schedule', status: 'success', started_at: '2026-08-14 07:00:00', finished_at: '2026-08-14 07:00:05' },
 ];
+const mockProxies = [
+  { id: 1, label: '香港节点', ip: '1.2.3.4', port: 1080, geo_country: '中国', geo_region: '香港', geo_country_code: 'CN', enabled: 1 },
+];
 const mockSettings = {
   tg_enabled: '1', tg_bot_token: 'tok', tg_user_id: '123', schedule_enabled: '1',
   schedule_cron: '0 7 * * *', anti_ban_enabled: '1', anti_ban_wait_min: '120',
@@ -49,6 +52,7 @@ function mockFetch(url) {
     '/api/accounts': { ok: true, json: () => Promise.resolve(mockAccounts) },
     '/api/tasks': { ok: true, json: () => Promise.resolve(mockTasks) },
     '/api/settings': { ok: true, json: () => Promise.resolve(mockSettings) },
+    '/api/proxies': { ok: true, json: () => Promise.resolve(mockProxies) },
     '/api/logs': { ok: true, json: () => Promise.resolve([]) },
     '/api/checkin/status': { ok: true, json: () => Promise.resolve({ running: false }) },
     '/api/checkin/last': { ok: true, json: () => Promise.resolve({ summary: { status:'success', accounts:2, success:38, fail:2 } }) },
@@ -91,7 +95,7 @@ function check(name, cond) {
   check('累计签到卡=42', window.document.querySelectorAll('#statGrid .stat .num')[3].textContent.includes('42'));
 
   console.log('— 导航 —');
-  check('4 个导航项', window.document.querySelectorAll('.nav-item').length === 4);
+  check('5 个导航项', window.document.querySelectorAll('.nav-item').length === 5);
 
   console.log('— 账号管理 —');
   const navAccounts = window.document.querySelector('.nav-item[data-view="accounts"]');
@@ -101,6 +105,13 @@ function check(name, cond) {
   check('账号名正确', window.document.querySelector('#accTable tbody tr').textContent.includes('小号A'));
 
   if (errs.length) { console.log('⚠️ window 错误:', errs); }
+  console.log('— 代理页 —');
+  window.document.querySelector('.nav-item[data-view="proxies"]').click();
+  await new Promise(r => setTimeout(r, 200));
+  check('代理列表渲染 1 张卡', window.document.querySelectorAll('#proxyList .proxy-card').length === 1);
+  check('代理显示归属地', window.document.querySelector('#proxyList').textContent.includes('香港'));
+  check('代理显示名称', window.document.querySelector('#proxyList').textContent.includes('香港节点'));
+
   console.log('— 设置页 —');
   window.document.querySelector('.nav-item[data-view="settings"]').click();
   await new Promise(r => setTimeout(r, 500));
