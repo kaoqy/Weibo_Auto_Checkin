@@ -106,6 +106,14 @@ def test_detect_uses_cache(monkeypatch):
 
 # ---------------- weibo_login 扫码 finalize ----------------
 
+import asyncio
+
+
+def run_async(coro):
+    """在独立事件循环里跑 async coroutine（测试用）。"""
+    return asyncio.run(coro)
+
+
 @pytest.fixture()
 def qr_session():
     wl.QR_SESSIONS.clear()
@@ -115,7 +123,7 @@ def qr_session():
 def test_finalize_requires_scan(qr_session):
     qrid = "q1"
     qr_session[qrid] = {"status": "pending", "created_at": __import__("time").time(), "cookies": {}, "uid": "", "username": ""}
-    r = wl.finalize_login(qrid)
+    r = run_async(wl.finalize_login(qrid))
     assert r["ok"] is False
     assert "扫码" in r["message"]
 
@@ -126,7 +134,7 @@ def test_finalize_completes_when_sub_present(qr_session):
         "status": "success", "created_at": __import__("time").time(),
         "cookies": {"SUB": "abc", "SUBP": "x"}, "uid": "123", "username": "昵称",
     }
-    r = wl.finalize_login(qrid)
+    r = run_async(wl.finalize_login(qrid))
     assert r["ok"] is True
     assert r["cookies"]["SUB"] == "abc"
     assert r["uid"] == "123"
@@ -139,24 +147,75 @@ def test_finalize_tries_crossdomain_when_missing_sub(qr_session, monkeypatch):
         "cookies": {}, "uid": "", "username": "",
     }
 
-    class _Page:
-        def goto(self, *a, **k): pass
-        def wait_for_timeout(self, *a, **k): pass
-    class _Ctx:
-        def cookies(self):
-            return [{"name": "SUB", "value": "from-crossdomain"}, {"name": "SUBP", "value": "y"}]
     class _PageFull:
-        context = _Ctx()
-        def goto(self, *a, **k): pass
-        def wait_for_timeout(self, *a, **k): pass
-    monkeypatch.setattr(wl, "_ensure_browser", lambda: _PageFull())
-    monkeypatch.setattr(wl, "_collect_cookies", lambda page: {c["name"]: c["value"] for c in page.context.cookies()})
+        def __init__(self):
+            self._cookies = [
+                {"name": "SUB", "value": "from-crossdomain"},
+                {"name": "SUBP", "value": "y"},
+            ]
+        async def goto(self, *a, **k):
+            pass
+        async def wait_for_timeout(self, *a, **k):
+            pass
+        async def cookies(self):
+            return self._cookies
 
-    r = wl.finalize_login(qrid)
+    page = _PageFull()
+
+    async def fake_ensure():
+        return page
+
+    async def fake_collect(p):
+        all_c = await p.cookies()
+        return {c["name"]: c["value"] for c in all_c}
+
+    monkeypatch.setattr(wl, "_ensure_browser", fake_ensure)
+    monkeypatch.setattr(wl, "_collect_cookies", fake_collect)
+
+    r = run_async(wl.finalize_login(qrid))
     assert r["ok"] is True
     assert r["cookies"].get("SUB") == "from-crossdomain"
     # 状态被修正为 success
     assert qr_session[qrid]["status"] == "success"
+
+
+def test_check_qrcode_success_finalizes(monkeypatch):
+    """check_qrcode 在扫码成功后应能补全 cookie 并返回 success。"""
+    import time as _t
+    qrid = "q5"
+    wl.QR_SESSIONS.clear()
+    wl.QR_SESSIONS[qrid] = {
+        "status": "scanned", "created_at": _t.time(),
+        "cookies": {}, "uid": "", "username": "", "rid": "RID",
+    }
+
+    class _PageEval:
+        _cookies = [{"name": "SUB", "value": "sub-after-check"},
+                    {"name": "SUBP", "value": "sp"}]
+        async def evaluate(self, *a, **k):
+            return {"code": 20000000, "msg": "ok", "data": {"uid": "888"}}
+        async def goto(self, *a, **k):
+            pass
+        async def wait_for_timeout(self, *a, **k):
+            pass
+        async def cookies(self):
+            return self._cookies
+
+    page = _PageEval()
+
+    async def fake_ensure():
+        return page
+
+    async def fake_collect(p):
+        all_c = await p.cookies()
+        return {c["name"]: c["value"] for c in all_c}
+
+    monkeypatch.setattr(wl, "_ensure_browser", fake_ensure)
+    monkeypatch.setattr(wl, "_collect_cookies", fake_collect)
+
+    st = run_async(wl.check_qrcode(qrid))
+    assert st["status"] == "success"
+    assert st["uid"] == "888"
 
 
 def test_expired_qr_finalize_rejected(qr_session):
@@ -166,6 +225,6 @@ def test_expired_qr_finalize_rejected(qr_session):
         "status": "pending", "created_at": time.time() - 9999,
         "cookies": {}, "uid": "", "username": "",
     }
-    r = wl.finalize_login(qrid)
+    r = run_async(wl.finalize_login(qrid))
     assert r["ok"] is False
     assert "过期" in r["message"]

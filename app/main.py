@@ -46,7 +46,7 @@ async def lifespan(app: FastAPI):
     # 释放扫码浏览器内存
     try:
         from . import weibo_login
-        weibo_login.close_browser()
+        await weibo_login.close_browser()
     except Exception:
         pass
 

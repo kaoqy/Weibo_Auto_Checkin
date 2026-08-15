@@ -1,10 +1,14 @@
 """认证 API：登录、登出、当前用户、修改密码。"""
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from .. import auth, database
+
+log = logging.getLogger("weibo.authapi")
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -115,27 +119,28 @@ def needs_init():
 
 # ========================= 扫码登录添加账号 =========================
 @router.get("/qrcode")
-def qr_generate(user: dict = Depends(auth.require_admin)):
+async def qr_generate(user: dict = Depends(auth.require_admin)):
     """获取微博登录二维码（供添加新账号用）。"""
     from .. import weibo_login
     try:
-        return weibo_login.generate_qrcode()
+        return await weibo_login.generate_qrcode()
     except Exception as exc:
+        log.exception("获取二维码失败")
         raise HTTPException(status_code=502, detail=f"获取二维码失败：{exc}")
 
 
 @router.get("/qrcode/check")
-def qr_check(qrid: str, user: dict = Depends(auth.require_admin)):
+async def qr_check(qrid: str, user: dict = Depends(auth.require_admin)):
     """轮询二维码扫码状态。"""
     from .. import weibo_login
-    return weibo_login.check_qrcode(qrid)
+    return await weibo_login.check_qrcode(qrid)
 
 
 @router.post("/qrcode/import")
-def qr_import_account(data: QrImportAccount, user: dict = Depends(auth.require_admin)):
+async def qr_import_account(data: QrImportAccount, user: dict = Depends(auth.require_admin)):
     """扫码确认后，将得到的 Cookie 存为新账号。"""
     from .. import weibo_login
-    result = weibo_login.finalize_login(data.qrid)
+    result = await weibo_login.finalize_login(data.qrid)
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("message", "获取 Cookie 失败"))
     cookies = result.get("cookies", {})

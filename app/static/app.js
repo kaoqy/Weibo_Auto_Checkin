@@ -327,7 +327,7 @@ $('#btn-proxy-test-all').onclick = async () => {
 };
 
 /* ===== 扫码登录添加账号 ===== */
-let qrId = null, qrTimer = null;
+let qrId = null, qrTimer = null, qrImporting = false;
 const qrModal = $('#qrModal');
 
 function qrOpen() {
@@ -339,12 +339,15 @@ function qrClose() {
   qrModal.hidden = true;
   qrTimer && clearInterval(qrTimer);
   qrId = null;
+  qrImporting = false;
 }
 async function loadQr() {
   $('#qrStatus').textContent = '正在获取二维码…';
   $('#qrStatus').className = 'qr-status';
   $('#qrImportBtn').disabled = true;
+  $('#qrName').value = '';
   $('#qrImage').src = '';
+  qrImporting = false;
   try {
     const d = await api.get('/api/auth/qrcode');
     if (!d.qrid) throw new Error('no qrid');
@@ -361,7 +364,7 @@ async function loadQr() {
 function startQrPoll() {
   qrTimer && clearInterval(qrTimer);
   qrTimer = setInterval(async () => {
-    if (!qrId) return;
+    if (!qrId || qrImporting) return;
     try {
       const st = await api.get('/api/auth/qrcode/check?qrid=' + encodeURIComponent(qrId));
       if (st.status === 'pending') {
@@ -372,13 +375,16 @@ function startQrPoll() {
         // 已扫码即允许手动导入（后端会补全 Cookie），避免回调卡住时无法继续
         $('#qrImportBtn').disabled = false;
       } else if (st.status === 'success') {
-        $('#qrStatus').textContent = '✅ 扫码登录成功！';
+        // 成功：停止轮询并自动导入账号（无需用户手动点按钮）
+        qrTimer && clearInterval(qrTimer);
+        $('#qrStatus').textContent = '✅ 扫码成功，正在自动导入…';
         $('#qrStatus').className = 'qr-status success';
         $('#qrImportBtn').disabled = false;
-        qrTimer && clearInterval(qrTimer);
+        await doQrImport();
       } else if (st.status === 'expired') {
         $('#qrStatus').textContent = '二维码已过期，请刷新';
         $('#qrStatus').className = 'qr-status bad';
+        $('#qrImportBtn').disabled = true;
         qrTimer && clearInterval(qrTimer);
       } else if (st.status === 'error') {
         $('#qrStatus').textContent = '查询失败：' + st.message;
@@ -391,23 +397,29 @@ function startQrPoll() {
     } catch(e) { /* 轮询错误忽略，继续 */ }
   }, 2000);
 }
-$('#btn-qr-add').onclick = qrOpen;
-$('#qrModalClose').onclick = qrClose;
-$('#qrRefresh').onclick = () => { qrTimer && clearInterval(qrTimer); loadQr(); };
-$('#qrImportBtn').onclick = async () => {
-  if (!qrId) return;
+async function doQrImport() {
+  if (!qrId || qrImporting) return;
+  qrImporting = true;
   const btn = $('#qrImportBtn');
   btn.disabled = true; const old = btn.textContent; btn.textContent = '导入中…';
   try {
     const r = await api.post('/api/auth/qrcode/import', { qrid: qrId, name: $('#qrName').value.trim() });
-    toast('✅ 账号导入成功：' + r.name, 'good');
+    toast('✅ 账号已自动导入：' + r.name, 'good');
     qrClose();
     loadAccounts(); loadDashboard();
   } catch(e) {
-    toast('导入失败：' + e.message, 'err');
+    toast('自动导入失败：' + e.message, 'err');
+    $('#qrStatus').textContent = '导入失败:' + e.message;
+    $('#qrStatus').className = 'qr-status bad';
     btn.disabled = false; btn.textContent = old;
+  } finally {
+    qrImporting = false;
   }
-};
+}
+$('#btn-qr-add').onclick = qrOpen;
+$('#qrModalClose').onclick = qrClose;
+$('#qrRefresh').onclick = () => { qrTimer && clearInterval(qrTimer); loadQr(); };
+$('#qrImportBtn').onclick = doQrImport;
 
 /* ===== 日志 ===== */
 async function loadLogs() {

@@ -269,12 +269,14 @@ def start_scheduler() -> None:
 
 
 def _sweep_browser_idle():
-    """清理空闲 Playwright 浏览器（释放内存）。"""
-    try:
-        from .weibo_login import _sweep_idle_browser
-        _sweep_idle_browser()
-    except Exception:
-        pass
+    """清理空闲 Playwright 浏览器（释放内存）。
+
+    说明：_sweep_idle_browser 现在是 async 且绑定主事件循环；APScheduler 在
+    独立线程执行，跨线程直接 await playwright 会报 “cannot switch to a different
+    thread”。因此空闲清理改由扫码请求自身在 check_qrcode/finalize_login 开头统一
+    await _sweep_idle_browser() 完成，这里保留空占位（定时任务本身无害）。
+    """
+    pass
 
 
 def stop_scheduler() -> None:
