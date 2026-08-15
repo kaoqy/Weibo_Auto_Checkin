@@ -194,6 +194,8 @@ def test_check_qrcode_success_finalizes(monkeypatch):
 
     class _PageEval:
         _cookies = [{"name": "SUB", "value": "sub-after-check"},
+                    {"name": "SCF", "value": "scf-val"},
+                    {"name": "SSOLoginState", "value": "sso"},
                     {"name": "SUBP", "value": "sp"}]
         async def evaluate(self, expr, *a, **k):
             # uid 提取脚本 → 返回 uid 字符串；/api/config 验证 → 返回已登录；状态查询 → 返回状态 dict

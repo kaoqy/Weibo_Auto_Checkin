@@ -437,16 +437,25 @@ async def _check_login(page) -> tuple:
     try:
         r = await page.evaluate(
             """() => fetch('/api/config', {credentials: 'include'})
-                .then(r => r.json()).then(d => {
+                .then(r => r.json()).then(async d => {
                     const data = (d && d.data) || {};
                     let ui = data.userInfo || {};
-                    // /api/config 登录态下 userInfo 可能不在 data，回退到页面 config
-                    if (!ui.id && window.config && window.config.userInfo) {
+                    let uid = (ui && ui.id) ? String(ui.id) : (data.uid ? String(data.uid) : '');
+                    if (!uid && window.config && window.config.userInfo && window.config.userInfo.id) {
+                        uid = String(window.config.userInfo.id);
                         ui = window.config.userInfo;
                     }
-                    return {login: !!(data.login || (ui && ui.id)),
-                            uid: (ui && ui.id) ? String(ui.id) : '',
-                            name: (ui && ui.screen_name) ? String(ui.screen_name) : ''};
+                    let name = (ui && ui.screen_name) ? String(ui.screen_name) : '';
+                    // /api/config 无 screen_name；拿 uid 后调用户资料接口补账号名
+                    if (!name && uid) {
+                        try {
+                            const ur = await fetch('/api/container/getIndex?type=uid&value=' + uid,
+                                                {credentials: 'include'}).then(r => r.json());
+                            const uu = ((ur && ur.data && ur.data.userInfo) || {});
+                            if (uu.screen_name) name = String(uu.screen_name);
+                        } catch(e) {}
+                    }
+                    return {login: !!(data.login || uid), uid: uid, name: name};
                 }).catch(e => ({login:false, uid:'', name:''}))"""
         )
         return bool(r.get("login")), str(r.get("uid") or ""), str(r.get("name") or "")
@@ -454,10 +463,48 @@ async def _check_login(page) -> tuple:
         return False, "", ""
 
 
+def _is_real_login(cookies: dict) -> bool:
+    """判断是否真实登录（区分假 SUB）。
+
+    m.weibo.cn 会给所有未登录访问者也 Set-Cookie 一个孤零零的假 SUB，
+    此时没有 SCF/SSOLoginState/ALF 等配套登录态。真实登录时这些同时存在。
+    因此 SUB 不能单独作证，须 SUB + (SCF 或 SSOLoginState 或 ALF) 同时具备。
+    """
+    if not cookies.get("SUB"):
+        return False
+    return bool(cookies.get("SCF") or cookies.get("SSOLoginState")
+                or cookies.get("ALF"))
+
+
 async def _finalize_with_uid(page, sess: dict):
-    """页面已确认/跳转后验证登录并抓取完整 Cookie。返回 (cookies, uid, logged_in, screen_name)。"""
-    logged_in, uid, screen_name = await _check_login(page)
-    cookies = await _finalize_cookies(page)
+    """页面已确认/跳转后抓取完整 Cookie 并验证真实登录。
+
+    返回 (cookies, uid, logged_in, screen_name)。
+    关键：登录成功那一刻 passport 的确认窗口很窄，且页面跳转有延迟。不能只靠
+    _check_login 先跑一次（页面还在 passport 域时 /api/config 会 404 → login:false），
+    必须【先抓完整 cookie】，以【真实登录标志】（SUB+SCF/SSOLoginState/ALF 并存）
+    判定成功，并在有限时间内多轮重试等待跳转与登录态写入。
+    """
+    logged_in = False
+    cookies = {}
+    uid, screen_name = "", ""
+    for i in range(6):  # 最多 ~18s（每轮等 3s），覆盖跳转/写 cookie 延迟
+        try:
+            cookies = await _finalize_cookies(page, allow_nav=(i == 0))
+            if _is_real_login(cookies):
+                logged_in = True
+                break
+        except Exception as exc:
+            log.warning("finalize_with_uid 第 %d 轮: %s", i, exc)
+        await page.wait_for_timeout(3000)
+    if logged_in:
+        # 用已登录的页面拿 uid/账号名（此时页面已在 m.weibo.cn）
+        try:
+            lg, uid, screen_name = await _check_login(page)
+            if not uid:
+                uid = sess.get("uid", "")
+        except Exception:
+            pass
     sess["cookies"] = cookies
     if uid:
         sess["uid"] = uid
@@ -512,7 +559,7 @@ async def _collect_cookies(page) -> dict:
 _REQUIRED_COOKIES = ("SUB", "SUBP")
 
 
-async def _finalize_cookies(page) -> dict:
+async def _finalize_cookies(page, allow_nav: bool = True) -> dict:
     """扫码确认后获取完整登录 Cookie。
 
     按实际回调流程：扫码确认后，passport 会**自动**走跨域回调链并最终重定向到
@@ -520,25 +567,29 @@ async def _finalize_cookies(page) -> dict:
     browser context。这里只需**等待页面自动跳转到 m.weibo.cn**，然后直接从
     context 读取全部 cookie —— 不再主动导航裸的 crossdomain（不带回调参数
     不会触发 Set-Cookie，反而会打断自动跳转）。
+
+    allow_nav=False 时只抓当前 cookie（用于多轮重试的后续轮，避免反复 goto 导航打断页面）；
+    否则在第一轮允许导航 m.weibo.cn 触发 wap 域跨域 cookie 落齐。
     """
     try:
-        # 1) 优先等页面自动跳转到 m.weibo.cn（扫码确认后的目标页，最多 15s）
-        try:
-            await page.wait_for_url("**m.weibo.cn**", timeout=15000,
-                                    wait_until="domcontentloaded")
-        except Exception:
-            pass
-        # 2) 若页面不在 m.weibo.cn，导航过去触发 wap 域跨域 cookie 落齐
-        if "m.weibo.cn" not in (page.url or ""):
+        if allow_nav:
+            # 1) 优先等页面自动跳转到 m.weibo.cn（扫码确认后的目标页，最多 15s）
             try:
-                await page.goto("https://m.weibo.cn", timeout=15000,
-                                wait_until="domcontentloaded")
-                await page.wait_for_timeout(2000)
+                await page.wait_for_url("**m.weibo.cn**", timeout=15000,
+                                        wait_until="domcontentloaded")
             except Exception:
                 pass
+            # 2) 若页面不在 m.weibo.cn，导航过去触发 wap 域跨域 cookie 落齐
+            if "m.weibo.cn" not in (page.url or ""):
+                try:
+                    await page.goto("https://m.weibo.cn", timeout=15000,
+                                    wait_until="domcontentloaded")
+                    await page.wait_for_timeout(2000)
+                except Exception:
+                    pass
         cookies = await _collect_cookies(page)
-        # 3) 若仍缺 SUB，再导航 m.weibo.cn 一次让回调链 cookie 落齐
-        if not cookies.get("SUB"):
+        # 3) 若仍缺 SUB 且允许导航，再导航 m.weibo.cn 一次让回调链 cookie 落齐
+        if not cookies.get("SUB") and allow_nav:
             try:
                 await page.goto("https://m.weibo.cn", timeout=15000,
                                 wait_until="domcontentloaded")
