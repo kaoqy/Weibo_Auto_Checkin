@@ -29,15 +29,18 @@ ENV PYTHONUNBUFFERED=1 \
     APP_HOST=0.0.0.0 \
     APP_PORT=8000
 
-# 时区 + Playwright Chromium 系统依赖
+# ---------------------------------------------------------------------------
+# 时区 + Chromium headless-shell 所需最小系统依赖
+# 说明：headless-shell 不需要完整 chromium 的整套 GUI/辅助库，这里只装必需项，
+#       显著缩小镜像体积（相比完整 chromium 依赖可省 100MB+）。
+# ---------------------------------------------------------------------------
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         tzdata ca-certificates \
         libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 \
         libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 \
-        libxfixes3 libxrandr2 libgbm1 libasound2 libpango-1.0-0 \
-        libcairo2 libatspi2.0-0 libx11-xcb1 libxshmfence1 \
-        fonts-liberation \
+        libxfixes3 libxrandr2 libgbm1 libasound2 libxshmfence1 \
+        libpango-1.0-0 libcairo2 libx11-xcb1 \
     && ln -fs /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
     && dpkg-reconfigure -f noninteractive tzdata \
     && rm -rf /var/lib/apt/lists/*
@@ -46,9 +49,10 @@ RUN apt-get update \
 COPY --from=build --link /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# 安装 Playwright 的 Chromium（无系统依赖，已在上方装好）
+# 安装 Playwright 的 headless Chromium（不装 ffmpeg，扫码用不到；清理下载缓存减体积）
 RUN /opt/venv/bin/playwright install chromium-headless-shell \
-    && /opt/venv/bin/playwright install-deps chromium-headless-shell 2>/dev/null || true
+    && (rm -rf /root/.cache/ms-playwright/ffmpeg-* 2>/dev/null || true) \
+    && (find /root/.cache/ms-playwright -name "*.zip" -o -name "*.tar*" 2>/dev/null | xargs rm -f 2>/dev/null || true)
 
 WORKDIR /app
 
