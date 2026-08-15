@@ -196,7 +196,9 @@ def test_check_qrcode_success_finalizes(monkeypatch):
         _cookies = [{"name": "SUB", "value": "sub-after-check"},
                     {"name": "SUBP", "value": "sp"}]
         async def evaluate(self, expr, *a, **k):
-            # uid 提取脚本 → 返回 uid 字符串；状态查询脚本 → 返回状态 dict
+            # uid 提取脚本 → 返回 uid 字符串；/api/config 验证 → 返回已登录；状态查询 → 返回状态 dict
+            if "/api/config" in expr:
+                return {"login": True, "uid": "888", "name": "昵称测试"}
             if "window.config" in expr:
                 return "888"
             return {"code": 20000000, "msg": "ok"}

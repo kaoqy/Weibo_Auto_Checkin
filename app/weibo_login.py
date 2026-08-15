@@ -316,12 +316,21 @@ async def generate_qrcode() -> dict:
 
 
 async def check_qrcode(qrid: str) -> dict:
-    """检测扫码状态（以页面自动跳转 m.weibo.cn 为准，接口仅作辅助提示）。
+    """检测扫码状态（接口轮询为主，login 验证兜底）。
 
-    核心逻辑（按用户反馈）：扫码确认成功后，后端浏览器里的登录页会自动重定向到
-    m.weibo.cn，无需依赖 qrcode/check 接口的 retcode 判断成败。只要检测到页面
-    已跳转，就从浏览器上下文抓取完整 Cookie（SUB/SUBP 等）。接口查询失败（400、
-    rid 失效等）不再误判为「过期」——过期仅由二维码生命周期 TTL 兜底判定。
+    状态机：
+      1. 会话已成功 → 直接返回已抓 Cookie。
+      2. 接口 qrcode/check 轮询（准确知道 pending/已扫码/已确认）：
+         - 20000000 已确认 → 等页面跳转 m.weibo.cn → 抓 Cookie → 验证 /api/config
+           login:true 才算 success，否则 scanned 继续轮询。
+         - 50114002 已扫码待确认 → scanned。
+         - 50114001 未扫码 → pending。
+         - 其他/出错(400/rid失效) → 不做死判定，交给 ③ 的 login 兜底。
+      3. 兜底：无论接口结果，只要页面 /api/config 验证 login:true（真实登录上了
+         m.weibo.cn），就直接 success —— 防止接口失效时丢掉真实扫码结果。
+
+    关键：不因页面 url 是 m.weibo.cn 就中断（那是未登录也存在的假路径），
+    必须走接口轮询才能检测到用户扫码确认。
     """
     await _sweep_idle_browser()
     sess = QR_SESSIONS.get(qrid)
@@ -337,42 +346,26 @@ async def check_qrcode(qrid: str) -> dict:
     if sess.get("status") == "success":
         ck = sess.get("cookies") or {}
         return {"status": "success", "message": "扫码登录成功", "cookies": ck,
-                "has_cookie": bool(ck.get("SUB")), "uid": sess.get("uid", "")}
+                "has_cookie": bool(ck.get("SUB")), "uid": sess.get("uid", ""),
+                "username": sess.get("username", "")}
 
-    # ② 关键：页面是否已自动重定向到 m.weibo.cn（扫码确认成功的标志）
-    try:
-        cur_url = (page.url or "").lower()
-    except Exception:
-        cur_url = ""
-    if "m.weibo.cn" in cur_url:
-        cookies, uid = await _finalize_with_uid(page, sess)
-        # 必须拿到真实登录态 SUB 才算成功（X-CSRF-TOKEN 等临时 cookie 不算）
-        if cookies.get("SUB"):
-            sess["status"] = "success"
-            return {"status": "success", "message": "扫码登录成功", "cookies": cookies,
-                    "has_cookie": True, "uid": uid}
-        sess["status"] = "pending"
-        return {"status": "pending", "message": "等待扫码或在手机上确认…"}
-
-    # ③ 接口仅作状态提示（pending/scanned）；出错/400 不判过期
+    # ② 接口轮询（主判断）
     retcode, msg = await _query_status(page, sess, qrid)
 
     if retcode == 20000000:
-        # 接口确认成功：passport 回调链需要一点时间把页面自动跳转到 m.weibo.cn
-        # 并把登录态 cookie 写入 context。等跳转（最多 ~12s），再读 cookie。
-        jumped = False
+        # 接口确认成功：passport 回调链需一点时间把页面自动跳转到 m.weibo.cn
+        # 并把登录态 cookie 写入 context。等跳转（最多 ~12s），再读 Cookie 并验证。
         try:
             await page.wait_for_url(
                 "**m.weibo.cn**", timeout=12000, wait_until="domcontentloaded")
-            jumped = True
         except Exception:
-            jumped = False
-        cookies, uid = await _finalize_with_uid(page, sess)
-        if cookies.get("SUB"):
+            pass
+        cookies, uid, logged_in, screen_name = await _finalize_with_uid(page, sess)
+        if logged_in:
             sess["status"] = "success"
             return {"status": "success", "message": msg or "扫码登录成功",
-                    "cookies": cookies, "has_cookie": True, "uid": uid}
-        # 页面还没拿到登录态 → 让前端继续轮询
+                    "cookies": cookies, "has_cookie": True, "uid": uid, "username": screen_name}
+        # 门户还没拿到真实登录态 → 让前端继续轮询
         sess["status"] = "scanned"
         return {"status": "scanned", "message": "已确认，正在获取登录态…"}
 
@@ -381,16 +374,26 @@ async def check_qrcode(qrid: str) -> dict:
         return {"status": "scanned", "message": msg or "已扫码，请在手机上确认"}
 
     if retcode == 50114001:
+        # passport 明确“未使用”（未扫码），无需 login 验证，直接 pending。
         sess["status"] = "pending"
         return {"status": "pending", "message": msg or "等待扫码"}
 
     if retcode in (50114003, 50114004):
-        # 接口认为过期：但可能是 rid 失效误报，用户可能其实已扫。不判死，
-        # 交由页面跳转检测与 TTL 兜底；这里保持 pending 提示。
+        # 接口认为过期：可能是 rid 失效误报，用户可能其实已扫。用 login 兜底判断。
+        cookies, uid, logged_in, screen_name = await _finalize_with_uid(page, sess)
+        if logged_in:
+            sess["status"] = "success"
+            return {"status": "success", "message": "扫码登录成功", "cookies": cookies,
+                    "has_cookie": True, "uid": uid, "username": screen_name}
         sess["status"] = "pending"
         return {"status": "pending", "message": "等待扫码（二维码待刷新）…"}
 
-    # retcode in (None, -1, 其他未知) → 接口查询失败（400/rid失效/风控），不判过期
+    # retcode in (None, -1, 其他未知) → 接口查询失败（400/rid失效/风控）。用 login 兜底判断。
+    cookies, uid, logged_in, screen_name = await _finalize_with_uid(page, sess)
+    if logged_in:
+        sess["status"] = "success"
+        return {"status": "success", "message": "扫码登录成功", "cookies": cookies,
+                "has_cookie": True, "uid": uid, "username": screen_name}
     sess["status"] = "pending"
     return {"status": "pending", "message": msg or "正在确认扫码状态…"}
 
@@ -424,16 +427,43 @@ async def _query_status(page, sess: dict, qrid: str) -> tuple:
         return None, "正在确认扫码状态…"
 
 
+async def _check_login(page) -> tuple:
+    """在 m.weibo.cn 页面调 /api/config 验证是否真实登录。
+
+    关键：m.weibo.cn 会给所有未登录访问者也 Set-Cookie 一个假 SUB，不能只看
+    cookie 里有没有 SUB。必须调 /api/config，仅当 data.login=true 才算真正登录。
+    返回 (logged_in, uid, screen_name)。
+    """
+    try:
+        r = await page.evaluate(
+            """() => fetch('/api/config', {credentials: 'include'})
+                .then(r => r.json()).then(d => {
+                    const data = (d && d.data) || {};
+                    let ui = data.userInfo || {};
+                    // /api/config 登录态下 userInfo 可能不在 data，回退到页面 config
+                    if (!ui.id && window.config && window.config.userInfo) {
+                        ui = window.config.userInfo;
+                    }
+                    return {login: !!(data.login || (ui && ui.id)),
+                            uid: (ui && ui.id) ? String(ui.id) : '',
+                            name: (ui && ui.screen_name) ? String(ui.screen_name) : ''};
+                }).catch(e => ({login:false, uid:'', name:''}))"""
+        )
+        return bool(r.get("login")), str(r.get("uid") or ""), str(r.get("name") or "")
+    except Exception:
+        return False, "", ""
+
+
 async def _finalize_with_uid(page, sess: dict):
-    """页面已跳转/确认后抓取完整 Cookie，并尽力提取 uid。"""
+    """页面已确认/跳转后验证登录并抓取完整 Cookie。返回 (cookies, uid, logged_in, screen_name)。"""
+    logged_in, uid, screen_name = await _check_login(page)
     cookies = await _finalize_cookies(page)
     sess["cookies"] = cookies
-    uid = sess.get("uid", "")
-    if not uid:
-        uid = await _extract_uid(page)
-        if uid:
-            sess["uid"] = uid
-    return cookies, uid
+    if uid:
+        sess["uid"] = uid
+    if screen_name:
+        sess["username"] = screen_name
+    return cookies, uid, logged_in, screen_name
 
 
 async def _extract_uid(page) -> str:
