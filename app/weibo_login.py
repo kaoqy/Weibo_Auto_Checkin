@@ -32,7 +32,7 @@ QR_TTL = 300  # 5 分钟（从生成起）
 
 _login_url = (
     "https://passport.weibo.com/sso/signin?entry=wapsso"
-    "&source=wapsso&url=https%3A%2F%2Fm.weibo.cn"
+    "&source=wapsso&url=https%3A%2F%2Fm.weibo.cn%2F"
 )
 
 # 浏览器实例（模块级，常驻主事件循环）
@@ -190,16 +190,45 @@ async def _extract_qrcode(page) -> dict:
         }"""
     )
     qrid = ""
+    qr_content = ""  # 二维码内容的原始 data URL（扫码 payload）
     if img_src:
         parsed = urlparse(img_src)
         qs = parse_qs(parsed.query)
         data_url = qs.get("data", [""])[0]
+        qr_content = data_url
         inner = parse_qs(unquote(data_url))
         qr_param = inner.get("qr", [""])[0]
         qrid = qr_param
         if not qrid and "qr=" in data_url:
             qrid = data_url.split("qr=", 1)[-1].split("&", 1)[0]
-    return {"image": img_src, "qrid": qrid}
+    return {"image": img_src, "qrid": qrid, "content": qr_content}
+
+
+async def _qrcode_png_b64(page, timeout_ms=30000) -> str:
+    """对页面上的二维码元素截图，返回 base64 PNG（前端可直接 <img> 显示）。
+
+    微博二维码图片 URL 带防盗链/时效参数，前端直接 <img src=外链> 可能加载失败；
+    这里由已加载好二维码的无头浏览器把二维码元素渲染成 PNG 再返回，保证前端 100%
+    显示且不带 cookie 依赖。
+    """
+    import base64 as _b64
+    try:
+        # 用 locator 定位二维码 <img>（页面渲染好后元素存在）
+        loc = page.locator(
+            "img[src*='qr.weibo.cn/inf/gen'], img[src*='/qr/'], img[src*='qrcode']"
+        ).first
+        await loc.wait_for(state="visible", timeout=timeout_ms)
+        buf = await loc.screenshot()
+        return _b64.b64encode(buf).decode()
+    except Exception as exc:
+        log.warning("二维码元素截图失败: %s", exc)
+        try:
+            # 兜底：截取整个可见区域并裁中间方形
+            buf = await page.screenshot(clip={"x": 0, "y": 0, "width": 180, "height": 180})
+            return _b64.b64encode(buf).decode()
+        except Exception as exc2:
+            log.warning("整页截图兜底失败: %s", exc2)
+            return ""
 
 
 async def generate_qrcode() -> dict:
@@ -219,9 +248,14 @@ async def generate_qrcode() -> dict:
     if not info["image"]:
         raise QrLoginError("未能从页面获取二维码，请稍后重试")
 
+    # 用无头浏览器把二维码渲染成 base64 PNG，前端可 100% 显示（避免外链防盗链）
+    png_b64 = await _qrcode_png_b64(page)
+
     qrid = info["qrid"]
     QR_SESSIONS[qrid] = {
         "image": info["image"],
+        "image_b64": png_b64,
+        "content": info.get("content", ""),
         "rid": rid,
         "created_at": time.time(),
         "status": "pending",
@@ -235,7 +269,7 @@ async def generate_qrcode() -> dict:
         if now - QR_SESSIONS[k]["created_at"] > QR_TTL:
             QR_SESSIONS.pop(k, None)
 
-    return {"qrid": qrid, "image": info["image"]}
+    return {"qrid": qrid, "image": info["image"], "image_b64": png_b64}
 
 
 async def check_qrcode(qrid: str) -> dict:

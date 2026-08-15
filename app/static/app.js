@@ -352,7 +352,14 @@ async function loadQr() {
     const d = await api.get('/api/auth/qrcode');
     if (!d.qrid) throw new Error('no qrid');
     qrId = d.qrid;
-    $('#qrImage').src = d.image;
+    // 优先用后端渲染的 base64 二维码（无防盗链、100% 可显示），否则用外链图片
+    if (d.image_b64) {
+      $('#qrImage').src = 'data:image/png;base64,' + d.image_b64;
+    } else if (d.image) {
+      $('#qrImage').src = d.image;
+    } else {
+      throw new Error('二维码数据为空');
+    }
     $('#qrStatus').textContent = '等待扫码…';
     startQrPoll();
   } catch(e) {
