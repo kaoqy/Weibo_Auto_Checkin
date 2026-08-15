@@ -1,95 +1,177 @@
 """
-微博 m.weibo.cn 扫码登录模块。
-通过 passport.weibo.com 的 SSO 二维码接口实现：
-    1. 获取二维码（qrid + 图片 URL）
-    2. 轮询扫码状态
-    3. 确认成功后返回登录 Cookie
+微博 m.weibo.cn 扫码登录模块（Playwright 版）。
+
+纯 requests 调用 passport 的 qrcode/check 会因缺失微博的人机验证 SDK
+(wbBotDetector) 生成的 rid 而报 -479 system error 风控。
+本模块用 Playwright 无头浏览器加载真实登录页，从而：
+    - 获得有效的 rid（wbBotDetector.get()）
+    - 获得二维码图片 URL
+    - 在真实浏览器上下文里轮询扫描状态，避免风控
 """
 from __future__ import annotations
 
-import io
-import json
 import logging
+import threading
 import time
 import uuid
-from datetime import datetime
-from urllib.parse import quote
-
-import requests
+from urllib.parse import unquote, urlparse, parse_qs
 
 log = logging.getLogger("weibo.qrlogin")
 
-# 微博 passport 接口
-PASSPORT = "https://passport.weibo.com"
-QR_IMAGE_URL = PASSPORT + "/sso/v2/qrcode/image"
-QR_CHECK_URL = PASSPORT + "/sso/v2/qrcode/check"
-LOGIN_URL = "https://m.weibo.cn"
+# 内存中的扫码会话：qrid -> {...}
+QR_SESSIONS: dict[str, dict] = {}
+QR_TTL = 300  # 5 分钟
 
-UA = (
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+_login_url = (
+    "https://passport.weibo.com/sso/signin?entry=wapsso"
+    "&source=wapsso&url=https%3A%2F%2Fm.weibo.cn"
 )
 
-# 返回码含义
-RET = {
-    20000000: ("success", "扫码确认成功"),
-    50114001: ("pending", "未使用（等待扫码）"),
-    50114002: ("scanned", "已扫码，等待确认"),
-    50114003: ("expired", "二维码已过期"),
-    50114004: ("cancelled", "用户取消授权"),
-}
-
-# 内存中的二维码会话（生产可换 Redis，此处够用）
-# qrid -> {qr_image, created_at, status, cookies, uid, username}
-QR_SESSIONS: dict[str, dict] = {}
-QR_TTL = 300  # 5 分钟过期
+_browser = None
+_ctx = None
+_page = None
+_browser_lock = threading.Lock()
 
 
-def _new_session() -> requests.Session:
-    s = requests.Session()
-    s.headers.update({
-        "User-Agent": UA,
-        "Accept": "application/json, text/plain, */*",
-        "Referer": PASSPORT + "/sso/signin?entry=wapsso",
-    })
-    return s
+class QrLoginError(RuntimeError):
+    pass
 
 
-def _urlencode(s: str) -> str:
-    return quote(s, safe="")
+def _ensure_browser():
+    """懒启动常驻 Playwright 浏览器（同步 API，线程锁保护）。"""
+    global _browser, _ctx, _page
+    with _browser_lock:
+        if _page is not None and not _page.is_closed():
+            return _page
+        from playwright.sync_api import sync_playwright
+
+        pw = sync_playwright().start()
+        try:
+            browser = pw.chromium.launch(
+                headless=True, args=["--no-sandbox", "--disable-gpu"],
+            )
+        except Exception:
+            # 兜底：用环境变量指定或默认可执行路径
+            import os
+            exe = os.environ.get("CHROMIUM_PATH", "")
+            if exe:
+                browser = pw.chromium.launch(
+                    headless=True, executable_path=exe,
+                    args=["--no-sandbox", "--disable-gpu"],
+                )
+            else:
+                raise
+        ctx = browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            ),
+            viewport={"width": 1280, "height": 800},
+        )
+        page = ctx.new_page()
+        _browser, _ctx, _page = browser, ctx, page
+        return page
+
+
+def _load_login_page(page, timeout_ms=30000):
+    """导航到登录页，等待二维码与 wbBotDetector 就绪。"""
+    try:
+        page.goto(_login_url, timeout=timeout_ms, wait_until="domcontentloaded")
+    except Exception as exc:
+        log.warning("导航登录页: %s", exc)
+    # 等待 wbBotDetector 与二维码渲染
+    try:
+        page.wait_for_function(
+            "window.wbBotDetector && window.wbBotDetector.get",
+            timeout=timeout_ms,
+        )
+    except Exception:
+        pass
+    page.wait_for_timeout(1500)
+
+
+def _get_rid(page) -> str:
+    """从 wbBotDetector 获取真实 rid（过风控的关键）。"""
+    try:
+        return page.evaluate(
+            """() => new Promise(res => {
+                if (window.wbBotDetector && window.wbBotDetector.get) {
+                    window.wbBotDetector.get({useCache:false})
+                        .then(y => res((y && y.rid) ? y.rid : 'getriderror'))
+                        .catch(e => res('getriderror:' + e));
+                } else res('nodetector');
+            })"""
+        )
+    except Exception as exc:
+        log.warning("获取 rid 失败: %s", exc)
+        return ""
+
+
+def _extract_qrcode(page) -> dict:
+    """从页面提取二维码信息：图片 URL 与 qrid。"""
+    # 找二维码图片
+    img_src = page.evaluate(
+        """() => {
+            const imgs = Array.from(document.images).map(i => i.src);
+            const qr = imgs.find(s => s.includes('qr.weibo.cn/inf/gen') || s.includes('/qr/') || s.includes('qrcode'));
+            return qr || '';
+        }"""
+    )
+    # 从图片 URL 解析 data 里的 qr 参数（含 qrid）
+    qrid = ""
+    if img_src:
+        parsed = urlparse(img_src)
+        qs = parse_qs(parsed.query)
+        data_url = qs.get("data", [""])[0]
+        # data 里含 https://passport.weibo.cn/signin/qrcode/scan?qr=xxx..
+        inner = parse_qs(unquote(data_url))
+        qr_param = inner.get("qr", [""])[0]
+        qrid = qr_param
+        if not qrid and "qr=" in data_url:
+            qrid = data_url.split("qr=", 1)[-1].split("&", 1)[0]
+    return {"image": img_src, "qrid": qrid}
 
 
 def generate_qrcode() -> dict:
-    """请求微博生成二维码，返回 qrid + 图片 URL。"""
-    s = _new_session()
-    resp = s.get(QR_IMAGE_URL, params={"entry": "wapsso", "size": "180"},
-                 timeout=15)
-    resp.raise_for_status()
-    data = resp.json()
-    if data.get("retcode") != 20000000:
-        raise RuntimeError(f"获取二维码失败：{data.get('msg')}")
-    d = data["data"]
-    qrid = d["qrid"]
-    image_url = d["image"]
+    """加载登录页并返回 {qrid, image}。会话缓存在内存。"""
+    page = _ensure_browser()
+    with _browser_lock:
+        _load_login_page(page)
+        rid = _get_rid(page)
+        info = _extract_qrcode(page)
+
+    if not info["image"] or not info["qrid"]:
+        # 重试一次（页面可能未加载完）
+        page.reload()
+        page.wait_for_timeout(2500)
+        with _browser_lock:
+            rid = _get_rid(page)
+            info = _extract_qrcode(page)
+
+    if not info["image"]:
+        raise QrLoginError("未能从页面获取二维码，请稍后重试")
+
+    qrid = info["qrid"]
     QR_SESSIONS[qrid] = {
-        "qr_image": image_url,
+        "image": info["image"],
+        "rid": rid,
         "created_at": time.time(),
         "status": "pending",
         "cookies": {},
         "uid": "",
         "username": "",
-        "session": s,   # 保留会话以接收 Set-Cookie
     }
-    # 清理过期会话
+    # 清理过期
     now = time.time()
     for k in list(QR_SESSIONS.keys()):
         if now - QR_SESSIONS[k]["created_at"] > QR_TTL:
             QR_SESSIONS.pop(k, None)
-    return {"qrid": qrid, "image": image_url}
+
+    return {"qrid": qrid, "image": info["image"]}
 
 
 def check_qrcode(qrid: str) -> dict:
-    """轮询二维码状态。确认成功后解析登录 Cookie 存入会话。"""
+    """在真实浏览器上下文里轮询扫码状态，返回可序列化结果。"""
     sess = QR_SESSIONS.get(qrid)
     if not sess:
         return {"status": "expired", "message": "二维码不存在或已过期"}
@@ -97,84 +179,99 @@ def check_qrcode(qrid: str) -> dict:
         sess["status"] = "expired"
         return {"status": "expired", "message": "二维码已过期"}
 
-    s = sess["session"]
-    params = {
-        "entry": "wapsso",
-        "source": "wapsso",
-        "url": f"https:%2F%2Fm.weibo.cn",
-        "qrid": qrid,
-        "rid": "",
-        "ver": "20250520",
-    }
-    try:
-        resp = s.get(QR_CHECK_URL, params=params, timeout=15)
-        data = resp.json()
-    except Exception as exc:
-        return {"status": "error", "message": f"轮询失败：{exc}"}
+    page = _ensure_browser()
+    rid = sess.get("rid") or _get_rid(page)
+    with _browser_lock:
+        result = page.evaluate(
+            """([qrid, rid]) => fetch(
+                '/sso/v2/qrcode/check?entry=wapsso&source=wapsso'
+                + '&url=' + encodeURIComponent('https://m.weibo.cn')
+                + '&qrid=' + encodeURIComponent(qrid)
+                + '&rid=' + encodeURIComponent(rid)
+                + '&ver=20250520',
+                {credentials: 'include', headers: {'Accept': 'application/json'}}
+            ).then(r => r.json()).then(d => ({code: d.retcode, msg: d.msg, data: d.data}))
+             .catch(e => ({code: -1, msg: String(e)}))""",
+            [qrid, rid],
+        )
 
-    retcode = data.get("retcode")
-    ret, msg = RET.get(retcode, ("unknown", data.get("msg", "")))
-
-    if ret == "success":
-        # 扫码确认成功：从会话 cookie 中提取登录态
-        cookies = dict(s.cookies)
-        # 从跨域 Set-Cookie 拿登录凭证（SUB 等）。若无则尝试 follow crossid
-        # 保存会话 cookie
-        sess["cookies"] = cookies
+    retcode = result.get("code")
+    msg = result.get("msg", "")
+    # 状态映射
+    if retcode == 20000000:
+        # 确认成功
         sess["status"] = "success"
-        sess["crossid"] = (data.get("data") or {}).get("crossid", "")
-        # 尝试解析 uid / 昵称
-        sess["uid"] = (data.get("data") or {}).get("uid", "")
-        sess["username"] = (data.get("data") or {}).get("screen_name", "")
+        cookies = _collect_cookies(page)
+        uid = (result.get("data") or {}).get("uid", "")
+        sess["uid"] = uid
+        sess["cookies"] = cookies
         return {
-            "status": "success",
-            "message": msg,
+            "status": "success", "message": msg,
             "cookies": cookies,
             "has_cookie": bool(cookies.get("SUB")),
-            "crossid": sess["crossid"],
+            "uid": uid,
         }
+    elif retcode == 50114001:
+        sess["status"] = "pending"
+        return {"status": "pending", "message": msg or "等待扫码"}
+    elif retcode == 50114002:
+        sess["status"] = "scanned"
+        return {"status": "scanned", "message": msg or "已扫码，等待确认"}
+    elif retcode in (50114003, 50114004):
+        sess["status"] = "expired"
+        return {"status": "expired", "message": msg or "二维码失效"}
+    else:
+        sess["status"] = "unknown"
+        return {"status": "unknown", "message": msg or f"未知状态({retcode})"}
 
-    sess["status"] = ret
-    return {"status": ret, "message": msg}
+
+def _collect_cookies(page) -> dict:
+    """收集当前上下文里 passport/weibo 域的 cookie。"""
+    cookies = {}
+    try:
+        all_c = page.context.cookies()
+        for c in all_c:
+            if c["value"]:
+                cookies[c["name"]] = c["value"]
+    except Exception as exc:
+        log.warning("收集 cookie: %s", exc)
+    return cookies
 
 
 def finalize_login(qrid: str) -> dict:
-    """确认成功后，获取完整登录凭证。
-    若 check 已带回 cookie 直接用；否则通过 crossid 完成登录换取 cookie。
-    """
+    """扫码确认后获取完整登录 Cookie。"""
     sess = QR_SESSIONS.get(qrid)
     if not sess or sess.get("status") != "success":
         return {"ok": False, "message": "尚未确认登录"}
 
-    # 情况1：已有 SUB cookie
-    if sess["cookies"].get("SUB"):
+    cookies = sess.get("cookies") or {}
+    # 若缺 SUB，尝试触发跨域登录后再收集
+    if not cookies.get("SUB"):
+        page = _ensure_browser()
+        try:
+            with _browser_lock:
+                page.goto(
+                    "https://passport.weibo.com/sso/crossdomain",
+                    timeout=15000, wait_until="domcontentloaded",
+                )
+                page.wait_for_timeout(2000)
+            cookies = _collect_cookies(page)
+            sess["cookies"] = cookies
+        except Exception as exc:
+            log.warning("crossdomain 获取 cookie: %s", exc)
+
+    if cookies.get("SUB"):
         return {
             "ok": True,
-            "cookies": sess["cookies"],
+            "cookies": cookies,
             "uid": sess.get("uid", ""),
             "username": sess.get("username", ""),
         }
-
-    # 情况2：需要 follow crossid/location 完成登录
-    crossid = sess.get("crossid", "")
-    if crossid:
-        s = sess["session"]
-        try:
-            # 访问跨域登录链接拿 Set-Cookie
-            resp = s.get(
-                f"https://passport.weibo.com/sso/crossdomain?crossid={crossid}",
-                timeout=15, allow_redirects=True,
-            )
-            cookies = dict(s.cookies)
-            sess["cookies"] = cookies
-            if cookies.get("SUB"):
-                return {
-                    "ok": True,
-                    "cookies": cookies,
-                    "uid": sess.get("uid", ""),
-                    "username": sess.get("username", ""),
-                }
-        except Exception as exc:
-            log.warning("crossdomain 获取 cookie 失败: %s", exc)
-
-    return {"ok": False, "message": "未能获取完整 Cookie，请重试"}
+    # 从 cookie 尝试推断 uid/昵称
+    return {
+        "ok": bool(cookies),
+        "cookies": cookies,
+        "uid": sess.get("uid", ""),
+        "username": "",
+        "message": "" if cookies else "未获取到完整 Cookie",
+    }

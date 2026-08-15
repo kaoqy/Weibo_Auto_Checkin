@@ -111,6 +111,7 @@ nav{display:flex;flex-direction:column;gap:4px;flex:1}
 .btn-danger{background:var(--danger-soft);color:var(--danger);border-color:transparent}
 .toplink{color:var(--muted);text-decoration:none;font-size:13px;font-weight:600;margin-right:6px;padding:8px 10px;border-radius:8px;transition:.2s}
 .toplink:hover{color:var(--accent);background:var(--accent-soft)}
+.toplink-icon{display:none}
 
 /* ===== 统计卡 ===== */
 .stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-bottom:22px}
@@ -202,15 +203,69 @@ tbody tr:hover{background:var(--surface-2)}
 .toast.err{background:var(--danger)}
 
 /* ===== 响应式 ===== */
-@media(max-width:800px){
-  .sidebar{width:64px;padding:14px 8px}
+
+/* 平板：左侧栏收窄为图标栏 */
+@media(max-width:900px){
+  .sidebar{width:68px;padding:14px 8px}
   .brand-text,.nav-item span:not(.nav-ico){display:none}
-  .nav-item{justify-content:center;padding:12px}
+  .brand{padding:4px 6px 14px}
+  .brand-mark{width:36px;height:36px;font-size:15px}
+  .nav-item{justify-content:center;padding:12px 6px}
+  .nav-ico{font-size:18px}
   .side-foot .ver{display:none}
-  .main{padding:16px 14px 50px}
+  .side-foot{padding:8px 2px 0}
+  .theme-control{justify-content:center}
+  .theme-control select{display:none}
+  .main{padding:16px 18px 60px}
+  .topbar h1{font-size:19px}
   .stat-grid{grid-template-columns:repeat(2,1fr)}
   .form .row2{grid-template-columns:1fr}
 }
+
+/* 手机：左侧栏改为底部导航条 */
+@media(max-width:640px){
+  .app{flex-direction:column}
+  .sidebar{
+    position:fixed;left:0;right:0;bottom:0;top:auto;width:100%;
+    height:auto;min-height:0;
+    flex-direction:row;align-items:center;
+    padding:6px 4px calc(6px + env(safe-area-inset-bottom));
+    border-right:none;border-top:1px solid var(--line);
+    background:var(--surface);z-index:120;
+    box-shadow:0 -4px 16px rgba(0,0,0,.08);
+  }
+  .brand{display:none}
+  nav{flex-direction:row;justify-content:space-around;width:100%;gap:0}
+  .nav-item{flex:1;flex-direction:column;gap:3px;padding:6px 2px;border-radius:9px;font-size:10px}
+  .nav-ico{font-size:19px}
+  .nav-item.active{background:var(--accent-soft)}
+  .side-foot{display:none}
+  .main{padding:12px 12px 84px}
+  .topbar{flex-wrap:wrap;gap:8px;margin-bottom:14px}
+  .topbar h1{font-size:18px}
+  .topbar-actions{flex-wrap:wrap;gap:7px}
+  .toplink{display:none}   /* Cookie生成器文字链接收起 */
+  .toplink-icon{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;font-size:17px;text-decoration:none;color:var(--muted);border:1px solid var(--line);border-radius:9px;background:var(--surface-2)}
+  .btn{padding:8px 12px;font-size:13px}
+  .stat-grid{grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:16px}
+  .stat{padding:14px}
+  .stat .num{font-size:22px}
+  .card{padding:14px;margin-bottom:12px}
+  .card-head h2{font-size:15px}
+  th,td{padding:9px 8px;font-size:12px}
+  .table-wrap{max-width:100%;-webkit-overflow-scrolling:touch}
+  .modal{width:94vw}
+  .form .row2{grid-template-columns:1fr}
+  .cookies{grid-template-columns:1fr}
+  /* 登录/初始化页 */
+  .login-card{padding:26px 20px}
+  /* 日志 */
+  .log-date{margin:16px 0 8px}
+  .log-item .lt .meta{display:none}
+  /* 二维码 */
+  .qr-box img{width:170px;height:170px}
+}
+
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}}
 
 /* ===== 扫码登录 ===== */

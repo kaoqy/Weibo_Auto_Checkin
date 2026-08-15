@@ -29,16 +29,26 @@ ENV PYTHONUNBUFFERED=1 \
     APP_HOST=0.0.0.0 \
     APP_PORT=8000
 
-# 时区数据（Asia/Shanghai）
+# 时区 + Playwright Chromium 系统依赖
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends tzdata ca-certificates \
+    && apt-get install -y --no-install-recommends \
+        tzdata ca-certificates \
+        libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 \
+        libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 \
+        libxfixes3 libxrandr2 libgbm1 libasound2 libpango-1.0-0 \
+        libcairo2 libatspi2.0-0 libx11-xcb1 libxshmfence1 \
+        fonts-liberation \
     && ln -fs /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
     && dpkg-reconfigure -f noninteractive tzdata \
     && rm -rf /var/lib/apt/lists/*
 
-# 复制虚拟环境（带 --link 加速缓存）
+# 复制虚拟环境（含 playwright）
 COPY --from=build --link /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
+
+# 安装 Playwright 的 Chromium（无系统依赖，已在上方装好）
+RUN /opt/venv/bin/playwright install chromium-headless-shell \
+    && /opt/venv/bin/playwright install-deps chromium-headless-shell 2>/dev/null || true
 
 WORKDIR /app
 
