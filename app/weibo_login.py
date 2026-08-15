@@ -346,10 +346,13 @@ async def check_qrcode(qrid: str) -> dict:
         cur_url = ""
     if "m.weibo.cn" in cur_url:
         cookies, uid = await _finalize_with_uid(page, sess)
-        if cookies.get("SUB") or cookies:
+        # 必须拿到真实登录态 SUB 才算成功（X-CSRF-TOKEN 等临时 cookie 不算）
+        if cookies.get("SUB"):
             sess["status"] = "success"
             return {"status": "success", "message": "扫码登录成功", "cookies": cookies,
-                    "has_cookie": bool(cookies.get("SUB")), "uid": uid}
+                    "has_cookie": True, "uid": uid}
+        sess["status"] = "pending"
+        return {"status": "pending", "message": "等待扫码或在手机上确认…"}
 
     # ③ 接口仅作状态提示（pending/scanned）；出错/400 不判过期
     retcode, msg = await _query_status(page, sess, qrid)
@@ -364,11 +367,11 @@ async def check_qrcode(qrid: str) -> dict:
         except Exception:
             jumped = False
         cookies, uid = await _finalize_with_uid(page, sess)
-        if jumped or cookies.get("SUB"):
+        if cookies.get("SUB"):
             sess["status"] = "success"
             return {"status": "success", "message": msg or "扫码登录成功",
-                    "cookies": cookies, "has_cookie": bool(cookies.get("SUB")), "uid": uid}
-        # 页面还没跳 → 让前端继续轮询
+                    "cookies": cookies, "has_cookie": True, "uid": uid}
+        # 页面还没拿到登录态 → 让前端继续轮询
         sess["status"] = "scanned"
         return {"status": "scanned", "message": "已确认，正在获取登录态…"}
 
