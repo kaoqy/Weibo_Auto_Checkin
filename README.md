@@ -31,6 +31,28 @@ docker run -d --name weibo-checkin --restart unless-stopped \
 
 完成后访问 `http://<服务器IP>:8000` → **首次进入初始化页设置管理员账号**。
 
+## 🔄 如何更新
+
+拉最新镜像并重建容器即可（数据在 `data/` 卷里，不会丢）：
+
+```bash
+# 1. 拉最新镜像
+docker pull kaoqy666/weibo-checkin:latest
+
+# 2. 停旧容器并删除
+docker rm -f weibo-checkin
+
+# 3. 用新镜像重新启动（注意 -v 挂载目录要和之前一致）
+docker run -d --name weibo-checkin --restart unless-stopped \
+  -p 8000:8000 -v /opt/weibo-checkin/data:/app/data \
+  kaoqy666/weibo-checkin:latest
+
+# 4. 确认健康
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/api/health   # 期望 200
+```
+
+> 也可以拉取后直接看变更：发布到 Docker Hub 的 tag 形如 `kaoqy666/weibo-checkin:<日期>-<迭代>`，`latest` 永远是最新。
+
 **方式二：本地运行**
 
 ```bash
