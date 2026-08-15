@@ -103,8 +103,47 @@ class QrLoginError(RuntimeError):
     pass
 
 
+# 最近一次使用的扫码 SOCKS 代理（用于日志/调试）
+_LAST_PROXY_URL = ""
+
+
+def _get_scan_proxy() -> dict | None:
+    """取面板第一个启用中的 socks 代理，作为扫码浏览器的代理。
+
+    返回 playwright 的 proxy 配置（server 为 socks5://…，远端 DNS 解析，等价
+    socks5h 行为）；无启用代理则返回 None（直连）。先查环境变量 WCM_QR_PROXY
+    覆盖，否则读数据库 proxies 表第一个 enabled。
+    """
+    global _LAST_PROXY_URL
+    import os
+    url = os.environ.get("WCM_QR_PROXY", "").strip()
+    if not url:
+        try:
+            from . import database
+            rows = database.get_proxies(include_disabled=False)
+            if rows:
+                url = rows[0].get("url") or database.build_proxy_url(rows[0])
+        except Exception as exc:
+            log.warning("读取扫码代理失败: %s", exc)
+    if not url:
+        _LAST_PROXY_URL = ""
+        return None
+    # playwright 只认 socks5://（socks5h 语义即远端解析，等价）；转成它能吃的形式
+    if url.startswith("socks5h://"):
+        url = "socks5://" + url[len("socks5h://"):]
+    proxy_cfg = {"server": url}
+    _LAST_PROXY_URL = url
+    log.info("扫码浏览器走 socks5 代理: %s", _LAST_PROXY_URL.split("@")[-1])
+    return proxy_cfg
+
+
 async def _ensure_browser():
-    """懒启动 Playwright 浏览器（async 版，锁保护，绑定当前事件循环）。"""
+    """懒启动 Playwright 浏览器（async 版，锁保护，绑定当前事件循环）。
+
+    若面板配置了启用中的 socks 代理（proxies 表第一个 enabled），会通过该
+    socks5 代理访问微博（远端 DNS 解析，等价 socks5h），更稳地规避风控；
+    无可用代理则直连。
+    """
     global _playwright, _browser, _ctx, _page, _last_use
     async with _get_lock():
         _last_use = time.time()
@@ -134,13 +173,17 @@ async def _ensure_browser():
                 headless=True, executable_path=exe,
                 args=["--no-sandbox", "--disable-gpu"],
             )
-        ctx = await browser.new_context(
+        proxy_cfg = _get_scan_proxy()
+        ctx_kwargs = dict(
             user_agent=(
                 "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
                 "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             ),
             viewport={"width": 1280, "height": 800},
         )
+        if proxy_cfg:
+            ctx_kwargs["proxy"] = proxy_cfg
+        ctx = await browser.new_context(**ctx_kwargs)
         page = await ctx.new_page()
         _browser, _ctx, _page = browser, ctx, page
         return page
