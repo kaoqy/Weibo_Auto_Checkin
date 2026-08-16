@@ -460,7 +460,11 @@ async def _check_login(page) -> tuple:
     try:
         r = await page.evaluate(
             """() => fetch('/api/config', {credentials: 'include'})
-                .then(r => r.json()).then(async d => {
+                .then(r => r.text())
+                .then(t => {
+                    // 非 JSON（HTML/404/风控页）时安全降级，不抛 SyntaxError
+                    if (!t || !t.trim().startsWith('{')) return {login:false, uid:'', name:''};
+                    let d = JSON.parse(t);
                     const data = (d && d.data) || {};
                     let ui = data.userInfo || {};
                     let uid = (ui && ui.id) ? String(ui.id) : (data.uid ? String(data.uid) : '');
@@ -472,11 +476,19 @@ async def _check_login(page) -> tuple:
                     // /api/config 无 screen_name；拿 uid 后调用户资料接口补账号名
                     if (!name && uid) {
                         try {
-                            const ur = await fetch('/api/container/getIndex?type=uid&value=' + uid,
-                                                {credentials: 'include'}).then(r => r.json());
-                            const uu = ((ur && ur.data && ur.data.userInfo) || {});
-                            if (uu.screen_name) name = String(uu.screen_name);
-                        } catch(e) {}
+                            return fetch('/api/container/getIndex?type=uid&value=' + uid,
+                                        {credentials: 'include'}).then(r => r.text()).then(ut => {
+                                let nm = '';
+                                if (ut && ut.trim().startsWith('{')) {
+                                    const uj = JSON.parse(ut);
+                                    const uu = ((uj && uj.data && uj.data.userInfo) || {});
+                                    if (uu.screen_name) nm = String(uu.screen_name);
+                                }
+                                return {login: !!(data.login || uid), uid: uid, name: nm};
+                            });
+                        } catch(e) {
+                            return {login: !!(data.login || uid), uid: uid, name: name};
+                        }
                     }
                     return {login: !!(data.login || uid), uid: uid, name: name};
                 }).catch(e => ({login:false, uid:'', name:''}))"""
@@ -511,9 +523,11 @@ async def _finalize_with_uid(page, sess: dict):
     logged_in = False
     cookies = {}
     uid, screen_name = "", ""
-    for i in range(6):  # 最多 ~18s（每轮等 3s），覆盖跳转/写 cookie 延迟
+    # 确认后 passport 回调在部分服务器/网络下不自动落地到 m.weibo.cn（cookie 不写入），
+    # 必须【每轮都主动导航 m.weibo.cn】触发 wap 域跨域 cookie 落地，而不是只第一轮。
+    for i in range(8):  # 最多 ~24s，覆盖跳转/写 cookie 延迟与被动回调失败场景
         try:
-            cookies = await _finalize_cookies(page, allow_nav=(i == 0))
+            cookies = await _finalize_cookies(page, allow_nav=True)
             if _is_real_login(cookies):
                 logged_in = True
                 break
