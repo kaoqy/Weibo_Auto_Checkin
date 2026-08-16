@@ -370,39 +370,44 @@ async function loadQr() {
 }
 function startQrPoll() {
   qrTimer && clearInterval(qrTimer);
-  qrTimer = setInterval(async () => {
-    if (!qrId || qrImporting) return;
+  let status_speed = 2000;   // pending 轮询间隔
+  const tick = async () => {
+    if (!qrId || qrImporting) { return; }
     try {
       const st = await api.get('/api/auth/qrcode/check?qrid=' + encodeURIComponent(qrId));
       if (st.status === 'pending') {
         $('#qrStatus').textContent = '等待扫码…';
+        status_speed = 2000;
       } else if (st.status === 'scanned') {
         $('#qrStatus').textContent = '✅ 已扫码，请在手机上确认';
         $('#qrStatus').className = 'qr-status success';
-        // 已扫码即允许手动导入（后端会补全 Cookie），避免回调卡住时无法继续
+        // 已扫码→加速轮询，捕捉确认瞬间（20000000），降低错过概率
+        status_speed = 400;
         $('#qrImportBtn').disabled = false;
       } else if (st.status === 'success') {
-        // 成功：停止轮询并自动导入账号（无需用户手动点按钮）
         qrTimer && clearInterval(qrTimer);
         $('#qrStatus').textContent = '✅ 扫码成功，正在自动导入…';
         $('#qrStatus').className = 'qr-status success';
         $('#qrImportBtn').disabled = false;
         await doQrImport();
+        return;
       } else if (st.status === 'expired') {
         $('#qrStatus').textContent = '二维码已过期，请刷新';
         $('#qrStatus').className = 'qr-status bad';
         $('#qrImportBtn').disabled = true;
         qrTimer && clearInterval(qrTimer);
+        return;
       } else if (st.status === 'error') {
         $('#qrStatus').textContent = '查询失败：' + st.message;
         $('#qrStatus').className = 'qr-status bad';
       } else if (st.status === 'unknown') {
-        // 未知状态（风控/网络抖动）：循环轮询即可，几分钟后 Qr 会过期
         $('#qrStatus').textContent = '正在确认扫码状态…';
         $('#qrStatus').className = 'qr-status';
       }
     } catch(e) { /* 轮询错误忽略，继续 */ }
-  }, 2000);
+    if (qrTimer) qrTimer = setTimeout(tick, status_speed);
+  };
+  tick();
 }
 async function doQrImport() {
   if (!qrId || qrImporting) return;

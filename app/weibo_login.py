@@ -432,7 +432,14 @@ async def check_qrcode(qrid: str) -> dict:
         return {"status": "pending", "message": msg or "等待扫码"}
 
     if retcode in (50114003, 50114004):
-        # 接口认为过期：可能是 rid 失效误报，用户可能其实已扫。用 login 兜底判断。
+        # 50114003(过期) / 50114004(该二维码已登录)。
+        # 50114004 是【登录已成功但 cookie 未落地】的竞态结果：轮询错过了
+        # 20000000（确认成功）瞬间，直接落到这里。此时 retdata 可能已无
+        # redirect_url，必须主动尝试触发 passport 跨域回调落地 cookie。
+        log.info("状态5011400x(%s) qrid=%s url=%s retdata=%s cks=%s",
+                 retcode, qrid[:22], page.url[:80],
+                 json.dumps(retdata, ensure_ascii=False)[:200] if retdata else "-",
+                 [c["name"] for c in (await page.context.cookies())[:12]])
         cookies, uid, logged_in, screen_name = await _finalize_with_uid(page, sess)
         if logged_in:
             sess["status"] = "success"
