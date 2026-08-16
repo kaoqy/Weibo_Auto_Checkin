@@ -507,14 +507,21 @@ async def check_qrcode(qrid: str) -> dict:
 def _get_redirect_url(retdata: dict) -> str:
     """从 qrcode/check 确认后的 retdata 提取 passport 跨域回调地址。
 
-    扫码确认成功(retcode=20000000)后，retdata 通常带一个带 ticket 的
-    redirect_url / url / new_url，浏览器靠自动导航它触发跨域 Set-Cookie
-    链，把真实登录 cookie(SUB+SCF+SSOLoginState+ALF)写入 .weibo.cn。
-    headless/风控下自动跳转可能不执行，这里取出来供主动导航。
+    passport 返回 {retcode,msg,data:{...}}，确认(20000000)后跳转 url 在
+    data.data.url（passport 前端 JS 用 window.location.replace 它完成跨域
+    登录 cookie 落地）。兼容退化结构：也查 retdata.url / redirect_url 顶层。
     """
     if not isinstance(retdata, dict):
         return ""
-    for key in ("redirect_url", "url", "new_url", "return_url"):
+    # 嵌套: retdata.data.url (passport 标准)
+    inner = retdata.get("data")
+    if isinstance(inner, dict):
+        for key in ("url", "redirect_url", "location"):
+            v = inner.get(key)
+            if isinstance(v, str) and v.startswith("http"):
+                return v
+    # 顶层退化
+    for key in ("redirect_url", "url", "new_url", "return_url", "location"):
         v = retdata.get(key)
         if isinstance(v, str) and v.startswith("http"):
             return v
@@ -543,7 +550,9 @@ async def _query_status(page, sess: dict, qrid: str) -> tuple:
             ).then(r => r.text()).then(t => {
                 try {
                     const d = JSON.parse(t);
-                    return {code: d.retcode, msg: d.msg, retdata: d.retdata || null};
+                    // passport 返回 {retcode, msg, data:{...}}，确认后跳转 url 在 data.data.url
+                    const rd = d.data || null;
+                    return {code: d.retcode, msg: d.msg, retdata: rd};
                 } catch(e) { return {code: -1, msg: String(e), retdata: null}; }
             }).catch(e => ({code: -1, msg: String(e), retdata: null}))""",
             [qrid, rid],
