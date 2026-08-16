@@ -393,10 +393,28 @@ async def check_qrcode(qrid: str) -> dict:
              sess.get("status"))
 
     if retcode == 20000000:
-        # 接口确认成功：passport 回调链需一点时间把页面自动跳转到 m.weibo.cn
-        # 并把登录态 cookie 写入 context。优先用 retdata 里的 redirect_url 主动
-        # 导航触发跨域 cookie 落地（headless/风控下自动跳转可能不执行）；
-        # 没有则等自动跳转。
+        # 接口确认成功
+        # 诊断：抓 passport 页面确认后的跳转线索（ticket/跨域回调 URL）
+        try:
+            hints = await page.evaluate("""() => {
+                const out = {};
+                const mr = document.querySelector('meta[http-equiv="refresh"]');
+                out.metaRefresh = mr ? mr.getAttribute('content') : null;
+                out.url = location.href;
+                out.links = Array.from(document.querySelectorAll('a[href],script[src],iframe[src]'))
+                    .map(e => e.getAttribute('href')||e.getAttribute('src')||'')
+                    .filter(h => h && /passport|sso|crossdomain|ticket|login/i.test(h))
+                    .slice(0, 15);
+                out.bodySnippet = (document.body&&document.body.innerText||'').slice(0,300);
+                out.docCookie = document.cookie.slice(0,200);
+                // window 上的可能登录字段
+                out.winKeys = Object.keys(window).filter(k => /ticket|sso|login|user|uid/i.test(k)).slice(0,20);
+                return out;
+            }""")
+            log.info("确认后页面线索: %s", json.dumps(hints, ensure_ascii=False)[:500])
+        except Exception as exc:
+            log.warning("确认后页面提取: %s", exc)
+        # 优先用 retdata 里的 redirect_url 主动导航触发跨域 cookie 落地
         redir = _get_redirect_url(retdata)
         if redir:
             try:
