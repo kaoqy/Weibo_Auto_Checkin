@@ -132,7 +132,7 @@ def test_finalize_completes_when_sub_present(qr_session):
     qrid = "q2"
     qr_session[qrid] = {
         "status": "success", "created_at": __import__("time").time(),
-        "cookies": {"SUB": "abc", "SUBP": "x"}, "uid": "123", "username": "昵称",
+        "cookies": {"SUB": "abc", "SUBP": "x", "SCF": "s", "ALF": "a"}, "uid": "123", "username": "昵称",
     }
     r = run_async(wl.finalize_login(qrid))
     assert r["ok"] is True
@@ -151,6 +151,7 @@ def test_finalize_tries_crossdomain_when_missing_sub(qr_session, monkeypatch):
         def __init__(self):
             self._cookies = [
                 {"name": "SUB", "value": "from-crossdomain"},
+                {"name": "SCF", "value": "scf"},
                 {"name": "SUBP", "value": "y"},
             ]
         async def goto(self, *a, **k):

@@ -535,13 +535,37 @@ async def _finalize_with_uid(page, sess: dict):
             log.warning("finalize_with_uid 第 %d 轮: %s", i, exc)
         await page.wait_for_timeout(3000)
     if logged_in:
-        # 用已登录的页面拿 uid/账号名（此时页面已在 m.weibo.cn）
+        # 1) 先尝试用页面拿 uid/账号名（此时页面已在 m.weibo.cn）
         try:
             lg, uid, screen_name = await _check_login(page)
-            if not uid:
-                uid = sess.get("uid", "")
         except Exception:
             pass
+        # 2) 页面拿不到时，用已抓 cookie + requests 调微博接口补 uid/账号名（不依赖页面态）
+        if (not uid or not screen_name) and cookies.get("SUB"):
+            try:
+                import requests as _requests
+                S = _requests.Session()
+                S.headers.update({"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X)",
+                                  "Referer": "https://m.weibo.cn/"})
+                for k, v in cookies.items():
+                    if v and k in ("SUB", "SUBP", "SCF", "ALF", "SSOLoginState",
+                                   "X-CSRF-TOKEN", "MLOGIN"):
+                        S.cookies.set(k, v, domain=".weibo.cn")
+                cfg = S.get("https://m.weibo.cn/api/config", timeout=15).json()
+                data = cfg.get("data") or {}
+                if not uid and data.get("uid"):
+                    uid = str(data.get("uid"))
+                if (not screen_name) and uid:
+                    try:
+                        ui = S.get("https://m.weibo.cn/api/container/getIndex?type=uid&value="
+                                   + str(uid), timeout=15).json().get("data") or {}
+                        sn = (ui.get("userInfo") or {}).get("screen_name") or ""
+                        if sn:
+                            screen_name = str(sn)
+                    except Exception:
+                        pass
+            except Exception as exc:
+                log.warning("requests 补账号名失败: %s", exc)
     sess["cookies"] = cookies
     if uid:
         sess["uid"] = uid
@@ -655,17 +679,17 @@ async def finalize_login(qrid: str) -> dict:
         return {"ok": False, "message": "尚未扫码确认，请先扫码并在手机上确认"}
 
     cookies = sess.get("cookies") or {}
-    if not cookies.get("SUB"):
+    if not _is_real_login(cookies):
         page = await _ensure_browser()
         try:
             cookies = await _finalize_cookies(page)
             sess["cookies"] = cookies
-            if cookies.get("SUB"):
+            if _is_real_login(cookies):
                 sess["status"] = "success"
         except Exception as exc:
             log.warning("crossdomain 获取 cookie: %s", exc)
 
-    if cookies.get("SUB"):
+    if _is_real_login(cookies):
         return {
             "ok": True,
             "cookies": cookies,

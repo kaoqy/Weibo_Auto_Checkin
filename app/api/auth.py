@@ -145,9 +145,10 @@ async def qr_import_account(data: QrImportAccount, user: dict = Depends(auth.req
         raise HTTPException(status_code=400, detail=result.get("message", "获取 Cookie 失败"))
     cookies = result.get("cookies", {})
     cookie_str = "; ".join(f"{k}={v}" for k, v in cookies.items() if v)
-    # 缺少 SUB 视为登录不完整，避免导入后签到必然失败
-    if not cookies.get("SUB"):
-        raise HTTPException(status_code=400, detail="未获取到完整登录态（缺少 SUB），请重新扫码")
+    # 必须真实登录态（SUB+SCF/SSOLoginState/ALF 并存），区分 m.weibo.cn 发的假 SUB，
+    # 避免导入后签到必然失败。
+    if not weibo_login._is_real_login(cookies):
+        raise HTTPException(status_code=400, detail="未获取到完整登录态，请重新扫码")
     uid = result.get("uid", "")
     name = (data.name or "").strip() or result.get("username") or (
         f"微博用户{uid}" if uid else "扫码账号"
