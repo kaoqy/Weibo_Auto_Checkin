@@ -76,8 +76,7 @@ def send_checkin_report(task_summary: dict) -> bool:
                    if r.get("success") and r.get("message") == "今日已签到"]
         fails = [r for r in acc.get("results", []) if not r.get("success")]
         lines.append("")
-        lines.append(f"{icon} {idx}. {acc.get('name', '未知')}"
-                     f"（{acc.get('channel', 'direct')}）")
+        lines.append(f"{icon} {idx}. {acc.get('name', '未知')}")
         if signed:
             lines.append("   🎉 本次签到：" + "、".join(signed))
         if already:
