@@ -300,12 +300,19 @@ async def _qrcode_png_b64(page, timeout_ms=30000) -> str:
 async def generate_qrcode() -> dict:
     """加载登录页并返回 {qrid, image}。会话缓存在内存。"""
     page = await _ensure_browser()
-    # 关键：必须清空 context 残留 cookie（上一个账号的登录态），否则复用浏览器时
-    # 会抓错账号 —— 扫第二个账号拿到第一个的 cookie（context 仍带旧登录态）。
+    # 仅清除上次扫码遗留的登录态 cookie（避免跨账号抓到旧账号），但保留 passport
+    # 登录页/回调链所需的初始 cookie（XSRF-TOKEN 等）—— 整体 clear_cookies 会清掉
+    # 它们，导致扫码确认后的跨域回调无法把登录态写回 .weibo.cn（38 上确认后抓不到
+    # 登录态的根因）。
     try:
-        await page.context.clear_cookies()
+        for _cn in ("SUB", "SUBP", "SCF", "ALF", "SSOLoginState",
+                    "MLOGIN", "ALC", "mweibo_short_token"):
+            try:
+                await page.context.clear_cookies(name=_cn)
+            except Exception:
+                pass
     except Exception as exc:
-        log.warning("清空 context cookie: %s", exc)
+        log.warning("清登录态 cookie: %s", exc)
     await _load_login_page(page)
     rid = await _get_rid(page)
     info = await _extract_qrcode(page)
@@ -380,6 +387,7 @@ async def check_qrcode(qrid: str) -> dict:
 
     # ② 接口轮询（主判断）
     retcode, msg = await _query_status(page, sess, qrid)
+    log.info("扫码check qrid=%s retcode=%s msg=%r sess_status=%s", qrid[:22], retcode, msg, sess.get("status"))
 
     if retcode == 20000000:
         # 接口确认成功：passport 回调链需一点时间把页面自动跳转到 m.weibo.cn
@@ -390,6 +398,8 @@ async def check_qrcode(qrid: str) -> dict:
         except Exception:
             pass
         cookies, uid, logged_in, screen_name = await _finalize_with_uid(page, sess)
+        log.info("确认finalize(20000000): logged_in=%s uid=%s cks=%s",
+                 logged_in, uid, sorted(cookies.keys()) if cookies else "{}")
         if logged_in:
             sess["status"] = "success"
             return {"status": "success", "message": msg or "扫码登录成功",
