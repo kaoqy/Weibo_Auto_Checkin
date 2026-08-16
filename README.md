@@ -15,48 +15,74 @@
 - 📲 **Telegram 推送**：签到完成自动推送汇总
 - 📜 **分组日志**：按日期分区，单次执行的所有账号归并一组
 - 🗄️ **SQLite**：账号 / 日志 / 任务 / 用户 / 通知全部持久化
-- 🐳 **Docker 一键部署**，镜像自动加版本 tag、保留最近 5 个
+- 🐳 **Docker 一键部署**
 
 ## 🚀 快速部署
 
-**方式一：Docker 一键（推荐）**
+方式一：**App 镜像一键部署（推荐，无需源码）**
 
 ```bash
-bash install.sh 8000
-# 或仅用镜像：
+# 下载脚本后运行（root）
+bash install.sh            # 默认端口 8000
+bash install.sh 8080       # 指定端口
+```
+
+脚本会自动：安装 Docker → 拉取镜像 → 启动容器 → 等待健康。完成后访问 `http://<服务器IP>:<端口>`，**首次进入初始化页设置管理员账号密码**。
+
+## 🔄 更新到最新版
+
+数据持久化在 `data/` 卷里，更新不会丢账号/日志/配置：
+
+```bash
+bash install.sh update
+```
+
+## 🧰 日常管理
+
+```bash
+bash install.sh status     # 查看容器状态与版本（无需 root）
+bash install.sh logs       # 跟随查看日志
+bash install.sh start      # 启动
+bash install.sh stop       # 停止
+bash install.sh restart    # 重启
+```
+
+## 🐳 手动 Docker（不用脚本）
+
+```bash
+# 安装
 docker run -d --name weibo-checkin --restart unless-stopped \
   -p 8000:8000 -v /opt/weibo-checkin/data:/app/data \
   kaoqy666/weibo-checkin:latest
-```
 
-完成后访问 `http://<服务器IP>:8000` → **首次进入初始化页设置管理员账号**。
-
-## 🔄 如何更新
-
-拉最新镜像并重建容器即可（数据在 `data/` 卷里，不会丢）：
-
-```bash
-# 1. 拉最新镜像
+# 更新
 docker pull kaoqy666/weibo-checkin:latest
-
-# 2. 停旧容器并删除
 docker rm -f weibo-checkin
-
-# 3. 用新镜像重新启动（注意 -v 挂载目录要和之前一致）
 docker run -d --name weibo-checkin --restart unless-stopped \
   -p 8000:8000 -v /opt/weibo-checkin/data:/app/data \
   kaoqy666/weibo-checkin:latest
 
-# 4. 确认健康
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/api/health   # 期望 200
+# 确认
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/api/health  # 期望 200
 ```
 
-> 也可以拉取后直接看变更：发布到 Docker Hub 的 tag 形如 `kaoqy666/weibo-checkin:<日期>-<迭代>`，`latest` 永远是最新。
+> Docker Hub 会同时发布带日期-迭代的版本 tag（如 `kaoqy666/weibo-checkin:20260816-01`），`latest` 永远指向最新。
 
-**方式二：本地运行**
+## 🛠️ 开发者：本地构建 / 发布（deploy.sh）
+
+`deploy.sh` 面向**维护者**：构建镜像 → 推送 Docker Hub →（可选）SSH 远程部署。
 
 ```bash
-cd weibo-checkin-manager
+# 环境变量（或 .env 文件，含 REGISTRY_USER / REGISTRY_TOKEN）
+bash deploy.sh push          # 登录 → 构建 → 推送（latest + 日期tag，保留最近5个）
+bash deploy.sh build         # 仅本地构建
+bash deploy.sh remote        # 仅远程部署（需已推送 + WCM_DEPLOY_HOST）
+bash deploy.sh deploy        # 构建+推送+远程部署
+```
+
+本地源码运行（开发调试）：
+
+```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python run.py          # http://localhost:8000
 .venv/bin/python run.py checkin  # 命令行跑一次签到
@@ -81,7 +107,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ## 🧪 测试
 
 ```bash
-.venv/bin/python -m pytest tests/ -v   # 42 个测试
+.venv/bin/python -m pytest tests/ -v   # 57 个测试
 node tests/frontend-render.test.js      # 前端渲染测试（自动装 jsdom）
 ```
 
@@ -89,9 +115,11 @@ node tests/frontend-render.test.js      # 前端渲染测试（自动装 jsdom�
 
 ```
 weibo-checkin-manager/
-├── run.py            # 启动
-├── install.sh        # 一键部署
+├── run.py            # 本地启动
+├── install.sh        # 用户一键安装/更新/管理（推荐）
+├── deploy.sh         # 维护者：构建/推送/远程部署
 ├── release.sh        # 创建 GitHub Release
+├── compose.prod.yml  # 生产 compose（仅拉镜像运行）
 ├── Dockerfile
 ├── app/              # 后端 + 前端
 │   ├── main.py       # FastAPI 入口 + 认证中间件

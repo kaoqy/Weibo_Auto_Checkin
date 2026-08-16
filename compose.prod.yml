@@ -10,7 +10,7 @@ name: weibo-checkin
 
 services:
   weibo-checkin:
-    image: ${WCM_IMAGE:-weibo-checkin:latest}
+    image: ${WCM_IMAGE:-kaoqy666/weibo-checkin:latest}
     container_name: weibo-checkin
     restart: unless-stopped
     ports:

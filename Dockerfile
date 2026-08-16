@@ -49,6 +49,10 @@ RUN apt-get update \
 COPY --from=build --link /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
+# 移除运行时用不到的 pip/setuptools + 清 pyc 缓存，进一步瘦身（省 ~37MB）
+RUN /opt/venv/bin/pip uninstall -y pip setuptools 2>/dev/null || true \
+    && find /opt/venv -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+
 # 安装 Playwright 的 headless Chromium（不装 ffmpeg，扫码用不到；清理下载缓存减体积）
 RUN /opt/venv/bin/playwright install chromium-headless-shell \
     && (rm -rf /root/.cache/ms-playwright/ffmpeg-* 2>/dev/null || true) \
