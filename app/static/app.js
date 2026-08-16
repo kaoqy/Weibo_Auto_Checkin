@@ -405,7 +405,8 @@ function startQrPoll() {
         $('#qrStatus').className = 'qr-status';
       }
     } catch(e) { /* 轮询错误忽略，继续 */ }
-    if (qrTimer) qrTimer = setTimeout(tick, status_speed);
+    // 无条件递归调度下一次（不能依赖 if(qrTimer)，首次时 qrTimer 尚为 null）
+    qrTimer = setTimeout(tick, status_speed);
   };
   tick();
 }
