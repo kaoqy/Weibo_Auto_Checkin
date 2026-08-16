@@ -436,6 +436,19 @@ async def check_qrcode(qrid: str) -> dict:
                     "**m.weibo.cn**", timeout=12000, wait_until="domcontentloaded")
             except Exception:
                 pass
+        # ★ 关键：拿到 passport 域 cookie(SUB/SCF)后，必须再落到 m.weibo.cn
+        #   触发 wap 域跨域 cookie(SSOLoginState/WEIBOCN_FROM/MLOGIN/_T_WM 等)落地，
+        #   否则 m.weibo.cn api/config 仍 login=false（账号7只拿了passport域cookie）。
+        try:
+            if "m.weibo.cn" not in (page.url or ""):
+                log.info("导航 m.weibo.cn 补全 m 域登录cookie")
+                await page.goto("https://m.weibo.cn", timeout=20000,
+                                wait_until="domcontentloaded")
+                await page.wait_for_timeout(3500)
+            else:
+                await page.wait_for_timeout(2000)
+        except Exception as exc:
+            log.warning("导航 m.weibo.cn 补全失败: %s", exc)
         cookies, uid, logged_in, screen_name = await _finalize_with_uid(page, sess)
         log.info("确认finalize(20000000): logged_in=%s uid=%s cks=%s",
                  logged_in, uid, sorted(cookies.keys()) if cookies else "{}")
