@@ -116,7 +116,12 @@ def _get_scan_proxy() -> dict | None:
     """
     global _LAST_PROXY_URL
     import os
-    url = os.environ.get("WCM_QR_PROXY", "").strip()
+    url = (os.environ.get("WCM_QR_PROXY") or "").strip()
+    # 兼容旧配置把 WCM_QR_PROXY 设成空壳值（如 "[]"/"None"/"null"）：
+    # 视为显式“不启用扫码代理”并直接直连。
+    if url.lower() in ("[]", "none", "null", "-", "off"):
+        _LAST_PROXY_URL = ""
+        return None
     if not url:
         try:
             from . import database
@@ -128,6 +133,24 @@ def _get_scan_proxy() -> dict | None:
     if not url:
         _LAST_PROXY_URL = ""
         return None
+    # 校验代理协议：只接受 socks5/socks5h/http 前缀，非法地址（含任意垃圾值）
+    # 一律退回直连，避免 Playwright ERR_SOCKS_CONNECTION_FAILED。
+    low = url.lower()
+    if not (low.startswith("socks5://") or low.startswith("socks5h://")
+            or low.startswith("http://") or low.startswith("https://")):
+        log.warning("扫码代理地址非法，退回直连: %s", url.split("@")[-1])
+        _LAST_PROXY_URL = ""
+        return None
+    # Playwright/Chromium 不支持带认证的 socks5（必然 ERR_SOCKS_CONNECTION_FAILED），
+    # 检测到 socks5 地址含 user:pass 凭据时退回直连（微博直连通常可用）。
+    if low.startswith("socks5://") or low.startswith("socks5h://"):
+        after = url.split("://", 1)[-1]
+        if "@" in after:
+            credentials = after.split("@", 1)[0]
+            if ":" in credentials:
+                log.warning("socks5 代理含认证凭据，Playwright 不支持，退回直连")
+                _LAST_PROXY_URL = ""
+                return None
     # playwright 只认 socks5://（socks5h 语义即远端解析，等价）；转成它能吃的形式
     if url.startswith("socks5h://"):
         url = "socks5://" + url[len("socks5h://"):]

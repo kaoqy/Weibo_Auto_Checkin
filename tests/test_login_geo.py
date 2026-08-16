@@ -241,3 +241,25 @@ def test_expired_qr_finalize_rejected(qr_session):
     r = run_async(wl.finalize_login(qrid))
     assert r["ok"] is False
     assert "过期" in r["message"]
+
+
+# ---------------- _get_scan_proxy 扫码代理容错 ----------------
+
+def test_scan_proxy_none_for_empty_brackets(monkeypatch):
+    """WCM_QR_PROXY 被设成空壳 '[]' 时应视为未设置（直连），不产生非法代理。"""
+    import os
+    monkeypatch.setenv("WCM_QR_PROXY", "[]")
+    assert wl._get_scan_proxy() is None
+
+
+def test_scan_proxy_none_for_auth_socks5(monkeypatch):
+    """带认证凭据的 socks5 代理 Playwright 不支持，应退回直连(None)。"""
+    monkeypatch.setenv("WCM_QR_PROXY", "socks5://user:pass@1.2.3.4:1080")
+    assert wl._get_scan_proxy() is None
+
+
+def test_scan_proxy_ok_for_plain_socks5(monkeypatch):
+    """无凭据 socks5 代理应正常返回 playwright proxy 配置。"""
+    monkeypatch.setenv("WCM_QR_PROXY", "socks5://1.2.3.4:1080")
+    cfg = wl._get_scan_proxy()
+    assert cfg and cfg["server"] == "socks5://1.2.3.4:1080"
