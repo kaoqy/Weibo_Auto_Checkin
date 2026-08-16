@@ -582,6 +582,15 @@ function addRunLine(txt){
   box.scrollTop = box.scrollHeight;
 }
 
+/* ===== 版本 ===== */
+async function loadVersion() {
+  try {
+    const h = await api.get('/api/health');
+    const el = document.getElementById('app-version');
+    if (el && h && h.version) el.textContent = 'v' + h.version;
+  } catch(e) { /* 忽略，保留占位 */ }
+}
+
 /* ===== 健康检查 ===== */
 $('#btn-health').onclick = async () => {
   try {
@@ -621,6 +630,7 @@ $('#btn-change-pwd').onclick = async () => {
 };
 
 /* ===== 初始化 ===== */
+loadVersion();
 loadMe();
 loadDashboard();
 setInterval(()=>{ if (!$('#view-dashboard').hidden) loadDashboard(); }, 30000);

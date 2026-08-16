@@ -19,6 +19,7 @@ event loop；请求结束线程退出后再被其他线程复用会报
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 import uuid
@@ -386,17 +387,30 @@ async def check_qrcode(qrid: str) -> dict:
                 "username": sess.get("username", "")}
 
     # ② 接口轮询（主判断）
-    retcode, msg = await _query_status(page, sess, qrid)
-    log.info("扫码check qrid=%s retcode=%s msg=%r sess_status=%s", qrid[:22], retcode, msg, sess.get("status"))
+    retcode, msg, retdata = await _query_status(page, sess, qrid)
+    log.info("扫码check qrid=%s retcode=%s msg=%r retdata=%s sess_status=%s",
+             qrid[:22], retcode, msg, json.dumps(retdata, ensure_ascii=False)[:200] if retdata else "-",
+             sess.get("status"))
 
     if retcode == 20000000:
         # 接口确认成功：passport 回调链需一点时间把页面自动跳转到 m.weibo.cn
-        # 并把登录态 cookie 写入 context。等跳转（最多 ~12s），再读 Cookie 并验证。
-        try:
-            await page.wait_for_url(
-                "**m.weibo.cn**", timeout=12000, wait_until="domcontentloaded")
-        except Exception:
-            pass
+        # 并把登录态 cookie 写入 context。优先用 retdata 里的 redirect_url 主动
+        # 导航触发跨域 cookie 落地（headless/风控下自动跳转可能不执行）；
+        # 没有则等自动跳转。
+        redir = _get_redirect_url(retdata)
+        if redir:
+            try:
+                log.info("确认后主动导航回调: %s", redir[:120])
+                await page.goto(redir, timeout=20000, wait_until="domcontentloaded")
+                await page.wait_for_timeout(2500)
+            except Exception as exc:
+                log.warning("主动导航回调失败: %s", exc)
+        else:
+            try:
+                await page.wait_for_url(
+                    "**m.weibo.cn**", timeout=12000, wait_until="domcontentloaded")
+            except Exception:
+                pass
         cookies, uid, logged_in, screen_name = await _finalize_with_uid(page, sess)
         log.info("确认finalize(20000000): logged_in=%s uid=%s cks=%s",
                  logged_in, uid, sorted(cookies.keys()) if cookies else "{}")
@@ -437,8 +451,25 @@ async def check_qrcode(qrid: str) -> dict:
     return {"status": "pending", "message": msg or "正在确认扫码状态…"}
 
 
+def _get_redirect_url(retdata: dict) -> str:
+    """从 qrcode/check 确认后的 retdata 提取 passport 跨域回调地址。
+
+    扫码确认成功(retcode=20000000)后，retdata 通常带一个带 ticket 的
+    redirect_url / url / new_url，浏览器靠自动导航它触发跨域 Set-Cookie
+    链，把真实登录 cookie(SUB+SCF+SSOLoginState+ALF)写入 .weibo.cn。
+    headless/风控下自动跳转可能不执行，这里取出来供主动导航。
+    """
+    if not isinstance(retdata, dict):
+        return ""
+    for key in ("redirect_url", "url", "new_url", "return_url"):
+        v = retdata.get(key)
+        if isinstance(v, str) and v.startswith("http"):
+            return v
+    return ""
+
+
 async def _query_status(page, sess: dict, qrid: str) -> tuple:
-    """调用 qrcode/check 接口查询状态；失败返回 (None, 提示)，不抛异常。"""
+    """调用 qrcode/check 接口查询状态；返回 (retcode, msg, retdata)。"""
     rid = sess.get("rid") or ""
     if not rid:
         try:
@@ -446,7 +477,7 @@ async def _query_status(page, sess: dict, qrid: str) -> tuple:
         except Exception:
             rid = ""
     if not rid or rid in ("getriderror", "nodetector"):
-        return None, "正在确认扫码状态…"
+        return None, "正在确认扫码状态…", {}
     try:
         result = await page.evaluate(
             """([qrid, rid]) => fetch(
@@ -456,14 +487,18 @@ async def _query_status(page, sess: dict, qrid: str) -> tuple:
                 + '&rid=' + encodeURIComponent(rid)
                 + '&ver=20250520',
                 {credentials: 'include', headers: {'Accept': 'application/json'}}
-            ).then(r => r.json()).then(d => ({code: d.retcode, msg: d.msg}))
-             .catch(e => ({code: -1, msg: String(e)}))""",
+            ).then(r => r.text()).then(t => {
+                try {
+                    const d = JSON.parse(t);
+                    return {code: d.retcode, msg: d.msg, retdata: d.retdata || null};
+                } catch(e) { return {code: -1, msg: String(e), retdata: null}; }
+            }).catch(e => ({code: -1, msg: String(e), retdata: null}))""",
             [qrid, rid],
         )
-        return result.get("code"), result.get("msg") or ""
+        return result.get("code"), result.get("msg") or "", result.get("retdata") or {}
     except Exception as exc:
         log.warning("扫码状态查询异常: %s", exc)
-        return None, "正在确认扫码状态…"
+        return None, "正在确认扫码状态…", {}
 
 
 async def _check_login(page) -> tuple:
