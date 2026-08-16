@@ -440,6 +440,27 @@ async def check_qrcode(qrid: str) -> dict:
                  retcode, qrid[:22], page.url[:80],
                  json.dumps(retdata, ensure_ascii=False)[:200] if retdata else "-",
                  [c["name"] for c in (await page.context.cookies())[:12]])
+        # 诊断：抓取 passport 页面里可能的跳转线索（meta refresh / 链接 / script 里的 ticket）
+        try:
+            hints = await page.evaluate("""() => {
+                const out = {};
+                // meta refresh
+                const mr = document.querySelector('meta[http-equiv="refresh"]');
+                out.metaRefresh = mr ? mr.getAttribute('content') : null;
+                // 所有 http(s) 链接
+                out.links = Array.from(document.querySelectorAll('a[href],script[src],iframe[src]'))
+                    .map(e => e.getAttribute('href')||e.getAttribute('src')||'')
+                    .filter(h => h && (h.includes('passport')||h.includes('sso')||h.includes('crossdomain')||h.includes('ticket')))
+                    .slice(0, 10);
+                // body 文本里找 ticket= / redirect / crossdomain
+                const txt = (document.body&&document.body.innerText||'').slice(0,500);
+                out.bodySnippet = txt;
+                out.docCookie = document.cookie.slice(0,200);
+                return out;
+            }""")
+            log.info("50114004 页面线索: %s", json.dumps(hints, ensure_ascii=False)[:400])
+        except Exception as exc:
+            log.warning("50114004 页面提取: %s", exc)
         cookies, uid, logged_in, screen_name = await _finalize_with_uid(page, sess)
         if logged_in:
             sess["status"] = "success"
