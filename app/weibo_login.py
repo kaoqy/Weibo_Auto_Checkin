@@ -300,6 +300,12 @@ async def _qrcode_png_b64(page, timeout_ms=30000) -> str:
 async def generate_qrcode() -> dict:
     """加载登录页并返回 {qrid, image}。会话缓存在内存。"""
     page = await _ensure_browser()
+    # 关键：必须清空 context 残留 cookie（上一个账号的登录态），否则复用浏览器时
+    # 会抓错账号 —— 扫第二个账号拿到第一个的 cookie（context 仍带旧登录态）。
+    try:
+        await page.context.clear_cookies()
+    except Exception as exc:
+        log.warning("清空 context cookie: %s", exc)
     await _load_login_page(page)
     rid = await _get_rid(page)
     info = await _extract_qrcode(page)
