@@ -414,6 +414,13 @@ async def check_qrcode(qrid: str) -> dict:
             log.info("确认后页面线索: %s", json.dumps(hints, ensure_ascii=False)[:500])
         except Exception as exc:
             log.warning("确认后页面提取: %s", exc)
+        # 诊断2：打印所有域 cookie（含域名），看登录态在哪
+        try:
+            allck = await page.context.cookies()
+            summ = [{"n": c["name"], "d": c["domain"], "len": len(c["value"])} for c in allck]
+            log.info("确认后全域cookie: %s", json.dumps(summ)[:500])
+        except Exception as exc:
+            log.warning("确认后cookie dump: %s", exc)
         # 优先用 retdata 里的 redirect_url 主动导航触发跨域 cookie 落地
         redir = _get_redirect_url(retdata)
         if redir:
@@ -620,14 +627,25 @@ async def _finalize_with_uid(page, sess: dict):
     logged_in = False
     cookies = {}
     uid, screen_name = "", ""
-    # 确认后 passport 回调在部分服务器/网络下不自动落地到 m.weibo.cn（cookie 不写入），
-    # 必须【每轮都主动导航 m.weibo.cn】触发 wap 域跨域 cookie 落地，而不是只第一轮。
+    # 成功判定：cookie 有有效 SUB 且 /api/config 实测 login=true（权威），
+    # 不强制要求 SCF/SSOLoginState（wapsso headless 下这些跨域 cookie 可能
+    # 不落地，但 SUB 已足以签到）。
     for i in range(8):  # 最多 ~24s，覆盖跳转/写 cookie 延迟与被动回调失败场景
         try:
             cookies = await _finalize_cookies(page, allow_nav=True)
             if _is_real_login(cookies):
                 logged_in = True
                 break
+            # 兜底：哪怕没有 SCF，只要有 SUB/SUBP，实测 /api/config 是否已登录
+            if cookies.get("SUB"):
+                try:
+                    lg, u2, n2 = await _check_login(page)
+                    if lg:
+                        logged_in = True
+                        uid, screen_name = u2, n2
+                        break
+                except Exception:
+                    pass
         except Exception as exc:
             log.warning("finalize_with_uid 第 %d 轮: %s", i, exc)
         await page.wait_for_timeout(3000)
