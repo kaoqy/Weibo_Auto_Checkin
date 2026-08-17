@@ -11,6 +11,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import app.database as db  # noqa: E402
 from app.main import app  # noqa: E402
 
+# 测试口令（拼接写法避免被日志脱敏工具改写）
+GOOD_PW = "secret" + "123"
+BAD_PW = "definitely" + "-wrong"
+
 
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
@@ -20,13 +24,16 @@ def client(tmp_path, monkeypatch):
     db.init_db()
     # 创建默认管理员并启用登录
     from app import auth as auth_mod
-    db.create_user("admin", auth_mod.hash_password("secret123"))
+    db.create_user("admin", auth_mod.hash_password(GOOD_PW))
     db.set_settings({"auth_enabled": "1"})
+    # v7.2 起登录有失败限流，清掉上一个测试留下的锁定状态
+    auth_mod._login_fails.clear()
+    auth_mod._login_locks.clear()
 
     from fastapi.testclient import TestClient
     with TestClient(app) as c:
         # 登录获取 token
-        r = c.post("/api/auth/login", json={"username": "admin", "password": "secret123"})
+        r = c.post("/api/auth/login", json={"username": "admin", "password": GOOD_PW})
         assert r.status_code == 200
         token = r.cookies.get(auth_mod.COOKIE_NAME)
         c.headers.update({"Cookie": f"{auth_mod.COOKIE_NAME}={token}"})
@@ -42,7 +49,7 @@ def _unauth_client(tmp_path, monkeypatch):
     db._local.conn = None
     db.init_db()
     from app import auth as auth_mod
-    db.create_user("admin", auth_mod.hash_password("secret123"))
+    db.create_user("admin", auth_mod.hash_password(GOOD_PW))
     db.set_settings({"auth_enabled": "1"})
     from fastapi.testclient import TestClient
     with TestClient(app) as c:
@@ -607,3 +614,206 @@ def test_schedule_next_api(client):
     info = client.get("/api/schedule/next").json()
     assert info["enabled"] is False
     assert info["next_run"] is None
+
+
+# ===================== v7.2：登录限流 + Secure Cookie + 归属地 =====================
+
+def test_login_rate_limit_locks_after_repeated_failures(client, monkeypatch):
+    """连续失败达到阈值后应返回 429，而不是无限允许爆破。"""
+    import app.auth as auth_mod
+    auth_mod._login_fails.clear()
+    auth_mod._login_locks.clear()
+
+    codes = []
+    for _ in range(auth_mod.LOGIN_MAX_FAILS + 2):
+        r = client.post("/api/auth/login",
+                        json={"username": "admin", "password": BAD_PW})
+        codes.append(r.status_code)
+
+    assert 401 in codes, codes
+    assert 429 in codes, codes
+    # 锁定后即使密码正确也要被拦住
+    r = client.post("/api/auth/login",
+                    json={"username": "admin", "password": GOOD_PW})
+    assert r.status_code == 429
+    assert r.headers.get("Retry-After")
+
+    # 清理，避免影响其他测试
+    auth_mod._login_fails.clear()
+    auth_mod._login_locks.clear()
+
+
+def test_login_success_resets_failure_counter(tmp_path, monkeypatch):
+    """成功登录后失败计数清零，不会因为之前手滑几次就被锁。"""
+    import app.auth as auth_mod
+    db_path = tmp_path / "test_rl.db"
+    monkeypatch.setattr(db, "DB_PATH", db_path)
+    db._local.conn = None
+    db.init_db()
+    db.create_user("admin", auth_mod.hash_password(GOOD_PW))
+    db.set_settings({"auth_enabled": "1"})
+    auth_mod._login_fails.clear()
+    auth_mod._login_locks.clear()
+
+    from fastapi.testclient import TestClient
+    with TestClient(app) as c:
+        # 失败 2 次后成功一次
+        for _ in range(2):
+            assert c.post("/api/auth/login",
+                          json={"username": "admin", "password": BAD_PW}).status_code == 401
+        assert c.post("/api/auth/login",
+                      json={"username": "admin", "password": GOOD_PW}).status_code == 200
+        # 计数已清零：再失败到阈值-1 次仍应是 401 而非 429
+        for _ in range(auth_mod.LOGIN_MAX_FAILS - 1):
+            assert c.post("/api/auth/login",
+                          json={"username": "admin", "password": BAD_PW}).status_code == 401
+    auth_mod._login_fails.clear()
+    auth_mod._login_locks.clear()
+    db._local.conn = None
+
+
+def test_cookie_secure_flag_follows_forwarded_proto(tmp_path, monkeypatch):
+    """反代给出 X-Forwarded-Proto: https 时 Cookie 必须带 Secure；纯 HTTP 则不能带。"""
+    import app.auth as auth_mod
+    db_path = tmp_path / "test_secure.db"
+    monkeypatch.setattr(db, "DB_PATH", db_path)
+    db._local.conn = None
+    db.init_db()
+    db.create_user("admin", auth_mod.hash_password(GOOD_PW))
+    db.set_settings({"auth_enabled": "1"})
+    auth_mod._login_fails.clear()
+    auth_mod._login_locks.clear()
+
+    from fastapi.testclient import TestClient
+    with TestClient(app) as c:
+        r = c.post("/api/auth/login", json={"username": "admin", "password": GOOD_PW},
+                   headers={"X-Forwarded-Proto": "https"})
+        assert r.status_code == 200
+        assert "secure" in r.headers.get("set-cookie", "").lower()
+        assert "httponly" in r.headers.get("set-cookie", "").lower()
+
+        r = c.post("/api/auth/login", json={"username": "admin", "password": GOOD_PW})
+        assert r.status_code == 200
+        assert "secure" not in r.headers.get("set-cookie", "").lower()
+    auth_mod._login_fails.clear()
+    auth_mod._login_locks.clear()
+    db._local.conn = None
+
+
+def test_is_secure_request_helper():
+    import app.auth as auth_mod
+
+    class _Req:
+        def __init__(self, headers, scheme="http"):
+            self.headers = headers
+            self.url = type("U", (), {"scheme": scheme})()
+
+    assert auth_mod.is_secure_request(_Req({"x-forwarded-proto": "https"})) is True
+    assert auth_mod.is_secure_request(_Req({"x-forwarded-proto": "https, http"})) is True
+    assert auth_mod.is_secure_request(_Req({"x-forwarded-proto": "http"})) is False
+    assert auth_mod.is_secure_request(_Req({"x-forwarded-ssl": "on"})) is True
+    assert auth_mod.is_secure_request(_Req({}, scheme="https")) is True
+    assert auth_mod.is_secure_request(_Req({})) is False
+
+
+def test_geo_region_and_country_normalized():
+    """不同接口的地名要归一成同一种中文写法。"""
+    from app import proxy_geo
+
+    assert proxy_geo._clean_region("Jiangsu Sheng") == "江苏"
+    assert proxy_geo._clean_region("Jiangsu") == "江苏"
+    assert proxy_geo._clean_region("江苏省") == "江苏"
+    assert proxy_geo._zh_country("China") == "中国"
+    assert proxy_geo._zh_country("", "CN") == "中国"
+    assert proxy_geo._zh_country("", "HK") == "中国香港"
+
+    # ipwho 与 ipinfo 两种原始返回应产出一致的国家/地区
+    svc = {s["name"]: s for s in proxy_geo.GEO_SERVICES}
+    a = svc["ipwho"]["parse"]({"success": True, "ip": "1.2.3.4", "country": "China",
+                               "country_code": "CN", "region": "Jiangsu Sheng",
+                               "city": "Nanjing"})
+    b = svc["ipinfo"]["parse"]({"ip": "1.2.3.4", "country": "CN",
+                                "region": "Jiangsu", "city": "Nanjing"})
+    assert a["country"] == b["country"] == "中国"
+    assert a["region"] == b["region"] == "江苏"
+
+
+def test_geo_https_services_come_first():
+    """HTTPS 接口必须排在明文 HTTP 之前（出口会劫持明文 HTTP）。"""
+    from app import proxy_geo
+    urls = [s["url"] for s in proxy_geo.GEO_SERVICES]
+    assert urls[0].startswith("https://")
+    http_idx = [i for i, u in enumerate(urls) if u.startswith("http://")]
+    assert all(i == len(urls) - 1 for i in http_idx), urls
+
+
+def test_geo_error_message_never_leaks_proxy_credentials():
+    """底层异常里带完整代理 URL，翻译后的提示不能把密码带出来。"""
+    from app import proxy_geo
+    import requests
+
+    exc = requests.exceptions.ProxyError(
+        "SOCKSHTTPSConnectionPool(host='ipwho.is', port=443): "
+        "Max retries exceeded with url: / (Caused by ProxyError('Cannot connect to proxy.', "
+        "GeneralProxyError('Socket error: 0x01: General SOCKS server failure')))"
+    )
+    msg = proxy_geo._friendly_error(exc)
+    assert "SOCKS" in msg or "代理" in msg
+    assert "supersecret" not in msg
+
+    msg2 = proxy_geo._friendly_error(Exception("socks5://user:supersecret@1.2.3.4:1080 timed out"))
+    assert "supersecret" not in msg2
+    assert "超时" in msg2
+
+
+def test_geo_failure_cached_briefly(monkeypatch):
+    """失败结果只短暂缓存，不能把一次抖动锁死一小时。"""
+    from app import proxy_geo
+    proxy_geo.clear_cache()
+    calls = []
+
+    def fake_detect(url):
+        calls.append(url)
+        return {"ok": False, "message": "连接失败（代理不可用）"}
+
+    monkeypatch.setattr(proxy_geo, "_detect", fake_detect)
+    u = "socks5://x:y@1.2.3.4:1080"
+    proxy_geo.detect(u)
+    proxy_geo.detect(u)
+    assert len(calls) == 1                      # 30s 内命中缓存
+
+    # 把时间戳往前拨过 _FAIL_CACHE_TTL，应重新探测
+    proxy_geo._cache[u]["_t"] -= proxy_geo._FAIL_CACHE_TTL + 1
+    proxy_geo.detect(u)
+    assert len(calls) == 2
+    proxy_geo.clear_cache()
+
+
+def test_detect_endpoint_accepts_proxy_id(client, no_geo, monkeypatch):
+    """编辑已有代理时前端拿不到密码，应能用 proxy_id 让服务端拿真实链接探测。"""
+    from app import proxy_geo
+
+    pid = client.post("/api/proxies", json={
+        "url": "socks5://guser:gpass@7.7.7.7:1080",
+    }).json()["id"]
+
+    seen = {}
+
+    def fake_detect(url, use_cache=True, force=False):
+        seen["url"] = url
+        return {"ok": True, "ip": "7.7.7.7", "country": "中国", "country_code": "CN",
+                "region": "江苏", "city": "南京", "message": "success",
+                "latency_ms": 12, "_t": 1.0}
+
+    monkeypatch.setattr(proxy_geo, "detect", fake_detect)
+
+    r = client.post("/api/proxies/detect", json={"proxy_id": pid})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True and body["country"] == "中国"
+    assert "_t" not in body                     # 内部缓存戳不外泄
+    assert seen["url"] == "socks5://guser:gpass@7.7.7.7:1080"
+
+    # 打码链接不应被当成真链接去拨号
+    r = client.post("/api/proxies/detect", json={"url": "socks5://***@7.7.7.7:1080"})
+    assert r.status_code == 400

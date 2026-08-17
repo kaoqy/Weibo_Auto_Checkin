@@ -34,19 +34,34 @@ class InitIn(BaseModel):
 
 
 @router.post("/login")
-def login(data: LoginIn, response: Response):
+def login(data: LoginIn, request: Request, response: Response):
     if not auth.auth_enabled():
         return {"ok": True, "message": "登录未启用"}
+    ip = auth.client_ip(request)
+    # v7.2：域名公开在外，登录必需限流，否则可以无成本爆破
+    locked = auth.login_lock_remaining(ip)
+    if locked:
+        log.warning("登录已锁定 ip=%s 剩余 %ss", ip, locked)
+        raise HTTPException(
+            status_code=429,
+            detail=f"尝试次数过多，请 {locked} 秒后再试",
+            headers={"Retry-After": str(locked)},
+        )
     user = database.get_user_by_name(data.username.strip())
     if not user or not auth.verify_password(data.password, user["password_hash"]):
+        lock = auth.record_login_failure(ip)
+        if lock:
+            log.warning("登录失败过多，已锁定 ip=%s %ss", ip, lock)
+            raise HTTPException(
+                status_code=429,
+                detail=f"失败次数过多，已锁定 {lock} 秒",
+                headers={"Retry-After": str(lock)},
+            )
         raise HTTPException(status_code=401, detail="用户名或密码错误")
+    auth.reset_login_failures(ip)
     token = auth.generate_token()
     database.create_session(token, user["id"], auth.SESSION_TTL_HOURS)
-    response.set_cookie(
-        auth.COOKIE_NAME, token,
-        max_age=auth.SESSION_TTL_HOURS * 3600,
-        httponly=True, samesite="lax", path="/",
-    )
+    auth.set_session_cookie(response, token, request)
     return {"ok": True, "username": user["username"]}
 
 
@@ -88,7 +103,7 @@ def change_password(
 # ========================= 初始化（首次部署） =========================
 
 @router.post("/init")
-def init_first_user(data: InitIn):
+def init_first_user(data: InitIn, request: Request):
     """首次部署：设置管理员账号密码（仅当系统无任何用户时可用）。"""
     if database.count_users() > 0:
         raise HTTPException(status_code=400, detail="系统已初始化，不能重复设置")
@@ -106,8 +121,7 @@ def init_first_user(data: InitIn):
 
     from fastapi.responses import RedirectResponse
     resp = RedirectResponse("/", status_code=302)
-    resp.set_cookie(auth.COOKIE_NAME, token, max_age=auth.SESSION_TTL_HOURS * 3600,
-                    httponly=True, samesite="lax", path="/")
+    auth.set_session_cookie(resp, token, request)
     return resp
 
 

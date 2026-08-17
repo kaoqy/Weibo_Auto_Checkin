@@ -414,6 +414,8 @@ function openProxyModal(id=null) {
   $('#proxyModalTitle').textContent = id ? '编辑代理' : '添加代理';
   ['p-url','p-ip','p-port','p-user','p-pwd','p-label'].forEach(i=> $('#'+i).value='');
   $('#p-geo').innerHTML=''; $('#p-geo-status').textContent='';
+  const pwd = $('#p-pwd');
+  pwd.placeholder = id ? '留空表示不修改' : '';
   if (id) {
     api.get('/api/proxies').then(list=>{
       const p = list.find(x=>x.id===id);
@@ -442,14 +444,24 @@ $('#p-url').oninput = () => {
   }
 };
 $('#btn-p-detect').onclick = async () => {
-  const url = buildProxyUrlFromForm();
-  if (!url) { toast('请填写 IP 或链接', 'err'); return; }
-  const st = $('#p-geo-status'); st.textContent = '识别中…';
+  const st = $('#p-geo-status');
+  // v7.2：编辑已有代理且没重新填密码时，用 proxy_id 让服务端拿真实链接去探测。
+  // 否则表单拼出的链接缺认证信息，代理会直接拒绝，表现为“识别异常”。
+  const body = {};
+  const pw = $('#p-pwd').value.trim();
+  if (editingProxyId && !pw) {
+    body.proxy_id = editingProxyId;
+  } else {
+    const url = buildProxyUrlFromForm() || $('#p-url').value.trim();
+    if (!url) { toast('请填写 IP 或链接', 'err'); return; }
+    body.url = url;
+  }
+  st.textContent = '识别中…';
   try {
-    const r = await api.post('/api/proxies/detect', { url });
+    const r = await api.post('/api/proxies/detect', body);
     if (r.ok) {
       $('#p-geo').innerHTML = `<div class="geo-preview-item">${flagEmoji(r.country_code)} ${esc(r.country)} ${esc(r.region||'')}（${esc(r.ip)}）</div>`;
-      st.textContent = '✅ 识别成功';
+      st.textContent = '✅ 识别成功' + (r.latency_ms ? `（${r.latency_ms} ms）` : '');
     } else { $('#p-geo').innerHTML=''; st.textContent = '❌ ' + (r.message||'识别失败'); }
   } catch(e){ st.textContent = '❌ '+e.message; }
 };
@@ -460,11 +472,25 @@ function buildProxyUrlFromForm() {
   return 'socks5://'+(u?encodeURIComponent(u)+(pw?':'+encodeURIComponent(pw):'')+'@':'')+ip+':'+port;
 }
 $('#proxyModalSave').onclick = async () => {
-  const url = buildProxyUrlFromForm() || $('#p-url').value.trim();
-  if (!url) { toast('请填写 IP/端口 或 完整链接', 'err'); return; }
+  const ip = $('#p-ip').value.trim(), port = $('#p-port').value.trim();
+  const pw = $('#p-pwd').value.trim();
+  const pasted = $('#p-url').value.trim();
+  const body = { label: $('#p-label').value.trim() };
+  if (editingProxyId && !pw && !pasted) {
+    // 只改名称/IP/端口/用户名：不传 url，服务端保留原有密码
+    if (ip) body.ip = ip;
+    if (port) body.port = +port;
+    const u = $('#p-user').value.trim();
+    if (u) body.username = u;
+    if (!ip && !port) { /* 仅改名，什么都不用带 */ }
+  } else {
+    const url = buildProxyUrlFromForm() || pasted;
+    if (!url) { toast('请填写 IP/端口 或 完整链接', 'err'); return; }
+    body.url = url;
+  }
   try {
-    if (editingProxyId) await api.put('/api/proxies/'+editingProxyId, { url, label: $('#p-label').value.trim() });
-    else await api.post('/api/proxies', { url, label: $('#p-label').value.trim() });
+    if (editingProxyId) await api.put('/api/proxies/'+editingProxyId, body);
+    else await api.post('/api/proxies', body);
     $('#proxyModal').hidden = true;
     toast('保存成功', 'good');
     loadProxies();

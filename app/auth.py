@@ -8,6 +8,8 @@ import hashlib
 import hmac
 import os
 import secrets
+import threading
+import time
 from datetime import datetime
 
 from fastapi import Depends, HTTPException, Request
@@ -67,6 +69,92 @@ def generate_token() -> str:
 
 def auth_enabled() -> bool:
     return database.get_setting("auth_enabled", "1") == "1"
+
+
+# ========================= Cookie 安全（v7.2） =========================
+
+def is_secure_request(request: Request) -> bool:
+    """判断当前请求是否走 HTTPS（含反向代理场景）。
+
+    面板通常部署在 nginx/openresty 反代后面，应用自己看到的是明文 HTTP，
+    必须靠 `X-Forwarded-Proto` 判断真实协议，否则永远加不上 Secure 标记。
+    """
+    proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
+    if proto:
+        return proto == "https"
+    if (request.headers.get("x-forwarded-ssl") or "").lower() == "on":
+        return True
+    return request.url.scheme == "https"
+
+
+def set_session_cookie(response, token: str, request: Request | None = None) -> None:
+    """统一设置会话 Cookie：HttpOnly + SameSite=Lax，HTTPS 下追加 Secure。
+
+    Secure 只在确认是 HTTPS 时加 —— 若在纯 HTTP 部署下无条件加上，
+    浏览器会直接丢弃 Cookie，导致谁都登不进去。
+    """
+    secure = is_secure_request(request) if request is not None else False
+    response.set_cookie(
+        COOKIE_NAME, token,
+        max_age=SESSION_TTL_HOURS * 3600,
+        httponly=True, samesite="lax", path="/",
+        secure=secure,
+    )
+
+
+# ========================= 登录失败限流（v7.2） =========================
+
+LOGIN_MAX_FAILS = 5           # 窗口内允许的失败次数
+LOGIN_WINDOW_SECONDS = 300    # 统计窗口
+LOGIN_LOCK_SECONDS = 300      # 触发后锁定时长
+
+_login_fails: dict[str, list[float]] = {}
+_login_locks: dict[str, float] = {}
+_login_lock_guard = threading.Lock()
+
+
+def client_ip(request: Request) -> str:
+    """取真实客户端 IP（反代场景下用 X-Forwarded-For 第一段）。"""
+    xff = request.headers.get("x-forwarded-for") or ""
+    if xff:
+        return xff.split(",")[0].strip()
+    real = request.headers.get("x-real-ip")
+    if real:
+        return real.strip()
+    return request.client.host if request.client else "unknown"
+
+
+def login_lock_remaining(ip: str) -> int:
+    """该 IP 剩余锁定秒数；0 表示未锁定。"""
+    now = time.time()
+    with _login_lock_guard:
+        until = _login_locks.get(ip, 0)
+        if until > now:
+            return int(until - now) + 1
+        if until:
+            _login_locks.pop(ip, None)
+    return 0
+
+
+def record_login_failure(ip: str) -> int:
+    """记录一次登录失败；触发锁定则返回锁定秒数，否则 0。"""
+    now = time.time()
+    with _login_lock_guard:
+        hits = [t for t in _login_fails.get(ip, []) if now - t < LOGIN_WINDOW_SECONDS]
+        hits.append(now)
+        _login_fails[ip] = hits
+        if len(hits) >= LOGIN_MAX_FAILS:
+            _login_locks[ip] = now + LOGIN_LOCK_SECONDS
+            _login_fails[ip] = []
+            return LOGIN_LOCK_SECONDS
+    return 0
+
+
+def reset_login_failures(ip: str) -> None:
+    """登录成功后清掉该 IP 的失败计数。"""
+    with _login_lock_guard:
+        _login_fails.pop(ip, None)
+        _login_locks.pop(ip, None)
 
 
 # ========================= FastAPI 依赖 =========================

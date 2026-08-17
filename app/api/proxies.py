@@ -162,12 +162,32 @@ def test_proxy(proxy_id: int, user: dict = Depends(auth.require_admin)):
 
 @router.post("/detect")
 def detect_url(data: dict, user: dict = Depends(auth.require_admin)):
-    """根据链接或字段识别归属地（不保存）。data: {url} 或 {ip,port,username,password}"""
-    url = data.get("url", "")
+    """识别归属地（不保存）。data: {proxy_id} 或 {url} 或 {ip,port,username,password}
+
+    v7.2：优先支持 `proxy_id` —— 编辑已有代理时前端拿不到密码（已打码），
+    拼出来的链接缺认证信息，会被代理直接拒给导致“识别失败”。
+    传 proxy_id 则用服务端存的真实链接去探测。
+    """
+    pid = data.get("proxy_id")
+    url = ""
+    if pid:
+        p = database.get_proxy(int(pid))
+        if not p:
+            raise HTTPException(404, "代理不存在")
+        url = p.get("url") or database.build_proxy_url(p)
+    if not url:
+        url = data.get("url", "") or ""
+        # 前端回传的打码链接不能拿去拨号
+        if "***" in url:
+            url = ""
     if not url and data.get("ip"):
-        url = database.build_proxy_url({**data, "username": data.get("user") or data.get("username",""),
-                                        "password": data.get("pwd") or data.get("password","")})
+        url = database.build_proxy_url({
+            **data,
+            "username": data.get("user") or data.get("username", ""),
+            "password": data.get("pwd") or data.get("password", ""),
+        })
     if not url:
         raise HTTPException(400, "缺少链接或 IP")
-    info = proxy_geo.detect(url)
-    return info
+    info = proxy_geo.detect(url, force=bool(data.get("refresh")))
+    # 不把内部缓存时间戳露给前端
+    return {k: v for k, v in info.items() if k != "_t"}
