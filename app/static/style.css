@@ -86,6 +86,9 @@ body {
 .brand-text strong{font-size:15px}
 .brand-text span{font-size:12px;color:var(--muted)}
 
+/* 主内容必须占满侧边栏以外的可用空间；缺少 flex:1 会导致内容按自身宽度收缩并偏左 */
+.main { flex:1; padding:20px 26px 60px; min-width:0; }
+
 /* ===== 导航 ===== */
 nav{display:flex;flex-direction:column;gap:4px;flex:1}
 .nav-item{
