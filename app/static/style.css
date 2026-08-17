@@ -89,6 +89,10 @@ body {
 /* 主内容必须占满侧边栏以外的可用空间；缺少 flex:1 会导致内容按自身宽度收缩并偏左 */
 .main { flex:1; padding:20px 26px 60px; min-width:0; }
 
+@keyframes viewEnter{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+@keyframes rowEnter{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+@keyframes softPop{0%{opacity:.4;transform:scale(.98)}100%{opacity:1;transform:scale(1)}}
+
 /* ===== 导航 ===== */
 nav{display:flex;flex-direction:column;gap:4px;flex:1}
 .nav-item{
@@ -164,7 +168,11 @@ table{width:100%;border-collapse:collapse;font-size:13px}
 th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
 th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.3px}
 tr:last-child td{border-bottom:none}
+tbody tr{animation:rowEnter .24s ease both}
+tbody tr:nth-child(2){animation-delay:.025s}tbody tr:nth-child(3){animation-delay:.05s}tbody tr:nth-child(4){animation-delay:.075s}tbody tr:nth-child(5){animation-delay:.1s}tbody tr:nth-child(6){animation-delay:.125s}
 tbody tr:hover{background:var(--surface-2);transition:background .15s}
+input[type="checkbox"]{accent-color:var(--accent);width:15px;height:15px;cursor:pointer;vertical-align:middle}
+.btn:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:3px solid color-mix(in srgb,var(--accent) 30%,transparent);outline-offset:2px}
 
 /* ===== 徽章 ===== */
 .badge{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600}
@@ -201,6 +209,10 @@ tbody tr:hover{background:var(--surface-2);transition:background .15s}
 .log-simple-time{font-variant-numeric:tabular-nums;color:var(--muted);white-space:nowrap;font-family:ui-monospace,Consolas,monospace;font-size:12px}
 .log-simple-name{font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .log-msg{color:var(--muted);margin-left:2px}.batch-bar{display:flex;align-items:center;gap:10px;margin:0 0 12px;padding:9px 12px;border:1px dashed var(--line);border-radius:10px;background:var(--surface-2)}
+.view:not([hidden]){animation:viewEnter .24s ease both}
+.batch-bar:not([hidden]){animation:softPop .2s ease both}
+.log-simple{animation:rowEnter .22s ease both}.log-simple:nth-child(2){animation-delay:.025s}.log-simple:nth-child(3){animation-delay:.05s}.log-simple:nth-child(4){animation-delay:.075s}.log-simple:nth-child(5){animation-delay:.1s}
+.proxy-card{animation:softPop .25s ease both}.proxy-card:hover{transform:translateY(-2px);transition:transform .2s,box-shadow .2s;box-shadow:0 10px 26px rgba(0,0,0,.09)}
 .log-task{border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--surface);box-shadow:var(--shadow)}
 .task-head{padding:13px 15px 10px;display:flex;align-items:center;justify-content:space-between;gap:12px}
 .task-title,.task-summary,.log-account-line{display:flex;align-items:center;gap:8px;min-width:0}.task-title strong{font-size:15px;letter-spacing:.2px}.task-label{font-size:12px;color:var(--muted)}

@@ -122,7 +122,7 @@ async function loadAccounts() {
     const tb = $('#accTable tbody');
     tb.innerHTML = accounts.length ? accounts.map(a=>`
       <tr data-id="${a.id}">
-        <td><input type="checkbox" class="acc-check" data-id="${a.id}" ${a.enabled?'':'disabled'} /></td>
+        <td><input type="checkbox" class="acc-check" data-id="${a.id}" /></td>
         <td><strong>${esc(a.name)}</strong></td>
         <td>${a.enabled?statusBadge('success')+' 启用':'<span class="badge gray">已停用</span>'} <span style="color:var(--muted)">·</span> ${statusBadge(a.last_status)}</td>
         <td style="color:var(--muted)">${a.cookie_length} 字符</td>
@@ -178,8 +178,17 @@ const btnSelDisable = $('#btn-sel-disable'); if (btnSelDisable) btnSelDisable.on
 if (btnCheckinSel) btnCheckinSel.onclick = ()=>{
   const ids = getSelectedAccountIds();
   if (!ids.length) { toast('请先勾选账号','err'); return; }
-  api.post('/api/checkin/run-accounts', {account_ids: ids}).then(r=>{
-    toast(r.message || '已启动手动签到', 'good');
+  const enabledIds = ids.filter(id => {
+    const a = (window.__accounts || []).find(x => x.id === id);
+    return a && !!a.enabled;
+  });
+  const skipped = ids.length - enabledIds.length;
+  if (!enabledIds.length) {
+    toast('选中的账号都已停用，请先点击「启用选中」', 'err');
+    return;
+  }
+  api.post('/api/checkin/run-accounts', {account_ids: enabledIds}).then(r=>{
+    toast((r.message || '已启动手动签到') + (skipped ? `，已跳过 ${skipped} 个停用账号` : ''), 'good');
   }).catch(()=>toast('启动失败','err'));
 };
 async function toggleAccEnabled(id) {
