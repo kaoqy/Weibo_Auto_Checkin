@@ -90,7 +90,15 @@ def run_checkin(trigger_type: str = "manual", account_ids: list[int] | None = No
         parallel = n_groups > 1  # 多个不同 socks 才并行
         log.info("按代理分组：%d 组%s（%s）", n_groups,
                  "，并行签到" if parallel else "，依次签到",
-                 "、".join(groups[k][0].get("name", "?") if groups[k] else k for k in group_order))
+                 "、".join(groups[k][0].get("name", "?") if groups[k] else k.split("@")[-1] for k in group_order))
+
+        def _safe_group_label(group_label: str) -> str:
+            """控制台日志里脱敏代理：去掉 协议://user:pass@，只留 host:port。"""
+            s = group_label or ""
+            if "@" in s:
+                # socks5://user:pass@host:port -> host:port
+                return s.split("@", 1)[-1]
+            return s
 
         def _safe_channel_label(channel: str, group_label: str) -> str:
             """日志只记录安全的通道摘要，绝不把代理认证信息写入数据库。"""
@@ -100,17 +108,18 @@ def run_checkin(trigger_type: str = "manual", account_ids: list[int] | None = No
 
         def _process_one(acc: dict, idx_in_group: int, group_size: int, group_label: str):
             """处理单个账号签到。返回结果 dict 或 None（并发下由主线程记账）。"""
+            log_label = _safe_group_label(group_label)
             # 防封等待（组内账号间）
             if idx_in_group > 0 or policy.should_wait():
                 wait = policy.wait_between_accounts(idx_in_group + 1, group_size)
                 if wait and group_label:
-                    log.info("  [%s] 防封等待 %.0fs 后处理 %s", group_label, wait, acc.get("name"))
+                    log.info("  [%s] 防封等待 %.0fs 后处理 %s", log_label, wait, acc.get("name"))
 
             raw_cookie = acc.get("cookie") or acc.get("cookie_raw") or ""
             cookie_dict = normalize_cookie(raw_cookie)
             proxy_url = acc.get("proxy") or None
 
-            log.info("👤 [%s] 账号：%s", group_label, acc.get("name"))
+            log.info("👤 [%s] 账号：%s", log_label, acc.get("name"))
             result = run_account_checkin(cookie_dict, opts, proxy_url=proxy_url)
 
             # 回写刷新后的 Cookie

@@ -54,7 +54,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="微博超话签到管理面板",
     description="微博超话批量签到 · 自动调度 · TG 通知 · 防封策略",
-    version="6.2",
+    version="6.3",
     lifespan=lifespan,
 )
 
@@ -126,6 +126,17 @@ async def auth_guard(request: Request, call_next):
 # 前端静态资源（构建好的单页）
 if STATIC_DIR.exists():
     app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
+
+
+@app.middleware("http")
+async def _no_cache_static(request: Request, call_next):
+    """静态资源不缓存，避免前端更新后旧 HTML/JS 残留导致功能异常。
+    HTML 每次重新验证；JS/CSS 带版本号查询串，配合 no-cache 确保取到最新。"""
+    resp = await call_next(request)
+    req_path = request.url.path
+    if req_path.endswith((".html", ".js", ".css")) or req_path in ("/", "/index.html", "/login.html"):
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return resp
 
 # 为任务运行提供便捷的独立接口（供 run.py 调用）
 from .scheduler import run_checkin  # noqa: E402
