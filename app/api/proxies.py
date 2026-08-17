@@ -1,6 +1,8 @@
 """代理节点管理 API。"""
 from __future__ import annotations
 
+import time
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
@@ -127,16 +129,22 @@ def test_proxy(proxy_id: int, user: dict = Depends(auth.require_admin)):
     if not p:
         raise HTTPException(404, "代理不存在")
     url = p.get("url") or database.build_proxy_url(p)
-    # 通过代理测试访问 ip-api，若成功返回归属地
+    # 通过代理测试访问归属地服务，记录端到端延迟并持久化，供面板刷新后继续展示。
+    started = time.perf_counter()
     info = proxy_geo.detect(url, use_cache=False) if url else {"ok": False, "message": "无代理链接"}
+    elapsed_ms = int(info.get("latency_ms") or round((time.perf_counter() - started) * 1000))
     ok = info.get("ok", False)
-    database.update_proxy(proxy_id, {"last_test": "ok" if ok else "fail"})
-    return {
-        "ok": ok,
-        "message": f"✅ {info.get('country','')} {info.get('region','')} · {info.get('ip','')}"
-        if ok else f"❌ {info.get('message','')}",
-        "geo": info,
-    }
+    message = (
+        f"✅ {info.get('country','')} {info.get('region','')} · {info.get('ip','')} · {elapsed_ms} ms"
+        if ok else f"❌ {info.get('message','测试失败')} · {elapsed_ms} ms"
+    )
+    database.update_proxy(proxy_id, {
+        "last_test": "ok" if ok else "fail",
+        "last_latency_ms": elapsed_ms,
+        "last_test_at": database._now(),
+        "last_test_message": message,
+    })
+    return {"ok": ok, "message": message, "latency_ms": elapsed_ms, "geo": info}
 
 
 @router.post("/detect")

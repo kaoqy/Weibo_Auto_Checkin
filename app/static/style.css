@@ -195,17 +195,21 @@ tbody tr:hover{background:var(--surface-2);transition:background .15s}
 .save-status{color:var(--muted);font-size:13px}
 .save-status.ok{color:var(--success)}
 
-/* ===== 日志 ===== */
-.log-list{display:flex;flex-direction:column;gap:10px}
-.log-item{background:var(--surface-2);border:1px solid var(--line);border-radius:11px;padding:13px 15px}
-.log-item .lt{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.log-item .lt .acc{font-weight:700}
-.log-item .lt .time{color:var(--muted);font-size:12px}
-.log-item .lt .meta{color:var(--muted);font-size:12px;margin-left:auto}
-.log-detail{margin:10px 0 0;padding-top:10px;border-top:1px dashed var(--line);display:flex;flex-wrap:wrap;gap:6px}
-.log-detail .tag{padding:2px 8px;border-radius:6px;background:var(--surface);border:1px solid var(--line);font-size:12px}
-.log-detail .tag.ok{color:var(--success);border-color:transparent;background:var(--success-soft)}
-.log-detail .tag.bad{color:var(--danger);border-color:transparent;background:var(--danger-soft)}
+/* ===== 日志：执行摘要 + 账号结果时间线 ===== */
+.log-list{display:flex;flex-direction:column;gap:12px}
+.log-task{border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--surface);box-shadow:var(--shadow)}
+.task-head{padding:13px 15px 10px;display:flex;align-items:center;justify-content:space-between;gap:12px}
+.task-title,.task-summary,.log-account-line{display:flex;align-items:center;gap:8px;min-width:0}
+.task-title strong{font-size:15px;letter-spacing:.2px}.task-id{font:11px ui-monospace,Consolas,monospace;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.task-summary{font-size:12px;color:var(--muted);white-space:nowrap}.task-ico{width:21px;height:21px;display:grid;place-items:center;border-radius:50%;font-size:12px;background:var(--surface-2);color:var(--muted)}
+.log-task.is-success .task-ico{background:var(--success-soft);color:var(--success)}.log-task.is-failed .task-ico{background:var(--danger-soft);color:var(--danger)}.log-task.is-partial .task-ico{background:var(--warn-soft);color:var(--warn)}
+.task-progress{height:3px;background:var(--surface-2)}.task-progress i{display:block;height:100%;border-radius:0 999px 999px 0;background:var(--accent)}.log-task.is-success .task-progress i{background:var(--success)}.log-task.is-failed .task-progress i{background:var(--danger)}.log-task.is-partial .task-progress i{background:var(--warn)}
+.task-meta{display:flex;gap:14px;padding:8px 15px;color:var(--muted);font-size:12px;border-bottom:1px solid var(--line)}.task-meta b{color:var(--ink)}
+.task-accounts{padding:4px 10px 10px}.log-item{padding:10px 6px;border-bottom:1px dashed var(--line)}.log-item:last-child{border-bottom:none}
+.log-account-line{min-height:24px}.log-account-name{font-weight:650;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.account-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;background:var(--muted)}.account-dot.ok{background:var(--success);box-shadow:0 0 0 3px var(--success-soft)}.account-dot.bad{background:var(--danger);box-shadow:0 0 0 3px var(--danger-soft)}
+.log-count{font:12px ui-monospace,Consolas,monospace;color:var(--muted);padding:2px 6px;background:var(--surface-2);border-radius:6px}.log-time{font-size:12px;color:var(--muted);min-width:34px;text-align:right}
+.log-detail{margin:8px 0 0 15px;padding:8px 0 0 11px;border-left:2px solid var(--line);display:flex;flex-wrap:wrap;gap:6px}.log-detail .tag{display:inline-flex;gap:4px;align-items:center;padding:3px 8px;border-radius:7px;background:var(--surface-2);font-size:12px}.log-detail .tag.ok{color:var(--success);background:var(--success-soft)}.log-detail .tag.bad{color:var(--danger);background:var(--danger-soft)}.log-detail .tag b{font-size:13px}.log-message{margin:7px 0 0 18px;display:block;color:var(--muted);font-size:12px}
+@media(max-width:640px){.task-head{padding:11px 12px 9px}.task-meta{padding:7px 12px;gap:10px}.task-id{display:none}.task-summary>span:not(.badge){display:none}.task-accounts{padding:3px 7px 8px}.log-account-line{gap:6px}.log-count{display:none}}
 
 /* ===== 弹窗 ===== */
 .modal-mask{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:100;backdrop-filter:blur(2px)}
@@ -310,16 +314,10 @@ tbody tr:hover{background:var(--surface-2);transition:background .15s}
 .qr-name label{display:block;font-size:12px;color:var(--muted);font-weight:600;margin-bottom:6px}
 .qr-name input{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:9px;background:var(--surface-2);color:var(--ink);font:inherit;outline:none}
 
-/* ===== 日志分组 ===== */
+/* ===== 日志日期分组 ===== */
 .log-date{display:flex;align-items:center;gap:10px;margin:22px 0 10px;font-size:14px;font-weight:700;color:var(--ink)}
 .log-date:first-child{margin-top:0}
 .day-count{font-size:12px;color:var(--muted);font-weight:400}
-.log-task{border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-bottom:12px;background:var(--surface);box-shadow:var(--shadow)}
-.log-task .task-head{padding:9px 14px;background:var(--surface-2);border-bottom:1px solid var(--line);font-weight:600}
-.log-task .log-item{border:none;border-radius:0;box-shadow:none;margin:0;padding:12px 14px;border-bottom:1px dashed var(--line)}
-.log-task .log-item:last-child{border-bottom:none}
-.task-ico{font-size:13px;color:var(--muted)}
-.log-item .meta{margin-left:auto;color:var(--muted);font-size:11px}
 
 /* ===== 代理归属地 ===== */
 .proxy-geo{display:flex;flex-direction:column;gap:8px;margin:2px 0 10px}
@@ -342,9 +340,7 @@ tbody tr:hover{background:var(--surface-2);transition:background .15s}
 .proxy-meta{font-size:12px;color:var(--muted);margin-top:2px;word-break:break-all}
 .proxy-actions{display:flex;gap:6px;flex-shrink:0}
 .proxy-geo-line{font-size:12px;color:var(--muted);margin-top:8px;padding-top:8px;border-top:1px dashed var(--line)}
-.proxy-test{font-size:12px;margin-top:6px}
-.proxy-test .t-ok{color:var(--success)}
-.proxy-test .t-bad{color:var(--danger)}
+.proxy-test{font-size:12px;margin-top:9px;min-height:20px;display:flex;align-items:center;gap:6px}.proxy-test .t-ok,.proxy-test .t-bad,.ptest-idle,.ptest-running{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border-radius:7px}.proxy-test .t-ok{color:var(--success);background:var(--success-soft)}.proxy-test .t-bad{color:var(--danger);background:var(--danger-soft)}.ptest-idle{color:var(--muted);background:var(--surface-2)}.ptest-running{color:var(--accent);background:var(--accent-soft)}.ptest-running i{width:10px;height:10px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:proxySpin .7s linear infinite}@keyframes proxySpin{to{transform:rotate(360deg)}}
 .geo-preview-item{display:inline-flex;align-items:center;gap:6px;margin-top:8px;padding:6px 10px;background:var(--success-soft);color:var(--success);border-radius:8px;font-size:12px;font-weight:600}
 .proxy-flag{line-height:1}
 @media(max-width:640px){

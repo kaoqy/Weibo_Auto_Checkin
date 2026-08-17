@@ -150,12 +150,24 @@ def init_db() -> None:
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
-    """旧库结构迁移：为 accounts 增加 proxy 列（旧版只有 proxy_index）。"""
-    cols = [r["name"] for r in conn.execute("PRAGMA table_info(accounts)").fetchall()]
-    if "proxy" not in cols:
+    """兼容旧数据库的增量迁移。"""
+    account_cols = [r["name"] for r in conn.execute("PRAGMA table_info(accounts)").fetchall()]
+    if "proxy" not in account_cols:
         conn.execute("ALTER TABLE accounts ADD COLUMN proxy TEXT NOT NULL DEFAULT ''")
-        conn.commit()
         log.info("accounts 表已迁移：新增 proxy 列")
+
+    # 代理测试结果需要持久显示，避免前端刷新后延迟/结果消失。
+    proxy_cols = [r["name"] for r in conn.execute("PRAGMA table_info(proxies)").fetchall()]
+    additions = {
+        "last_latency_ms": "INTEGER NOT NULL DEFAULT 0",
+        "last_test_at": "TEXT NOT NULL DEFAULT ''",
+        "last_test_message": "TEXT NOT NULL DEFAULT ''",
+    }
+    for name, definition in additions.items():
+        if name not in proxy_cols:
+            conn.execute(f"ALTER TABLE proxies ADD COLUMN {name} {definition}")
+            log.info("proxies 表已迁移：新增 %s", name)
+    conn.commit()
 
 
 def _seed_defaults(conn: sqlite3.Connection) -> None:
@@ -239,7 +251,8 @@ def update_proxy(proxy_id: int, data: dict) -> bool:
     conn = _get_conn()
     allowed = ("label", "ip", "port", "username", "password", "url",
                "geo_country", "geo_region", "geo_country_code", "geo_ip",
-               "enabled", "remark", "last_test")
+               "enabled", "remark", "last_test", "last_latency_ms",
+               "last_test_at", "last_test_message")
     fields = {k: v for k, v in data.items() if k in allowed}
     if "enabled" in fields:
         fields["enabled"] = 1 if fields["enabled"] else 0

@@ -213,6 +213,15 @@ function flagEmoji(cc) {
   const ccU = cc.toUpperCase();
   return String.fromCodePoint(0x1F1E6 + ccU.charCodeAt(0) - 65, 0x1F1E6 + ccU.charCodeAt(1) - 65);
 }
+function proxyTestHtml(p) {
+  if (!p.last_test) return '<span class="ptest-idle">尚未测速</span>';
+  const cls = p.last_test === 'ok' ? 't-ok' : 't-bad';
+  const icon = p.last_test === 'ok' ? '●' : '●';
+  const latency = Number(p.last_latency_ms || 0);
+  const detail = p.last_test_message || (p.last_test === 'ok' ? '测试成功' : '测试失败');
+  const tested = p.last_test_at ? ` · ${esc(p.last_test_at.slice(5,16))}` : '';
+  return `<span class="${cls}">${icon} ${esc(detail)}${latency && !detail.includes('ms') ? ` · ${latency} ms` : ''}${tested}</span>`;
+}
 
 async function loadProxies() {
   try {
@@ -242,7 +251,7 @@ async function loadProxies() {
           </div>
         </div>
         ${geoHtml}
-        <div class="proxy-test" id="ptest-${p.id}"></div>
+        <div class="proxy-test" id="ptest-${p.id}">${proxyTestHtml(p)}</div>
       </div>`;
     }).join('');
   } catch(e){ toast('加载代理失败','err'); }
@@ -315,15 +324,31 @@ async function delProxy(id) {
   catch(e){ toast('删除失败','err'); }
 }
 async function testProxy(id) {
-  const el = $('#ptest-'+id); if (el) el.innerHTML = '测试中…';
+  const el = $('#ptest-'+id);
+  const btn = document.querySelector(`button[onclick="testProxy(${id})"]`);
+  if (el) el.innerHTML = '<span class="ptest-running"><i></i> 正在测速…</span>';
+  if (btn) { btn.disabled = true; btn.textContent = '测速中'; }
   try {
     const r = await api.post('/api/proxies/'+id+'/test', {});
-    if (el) el.innerHTML = '<span class="'+(r.ok?'t-ok':'t-bad')+'">'+esc(r.message)+'</span>';
-    loadProxies();
-  } catch(e){ if(el) el.innerHTML = '<span class="t-bad">失败</span>'; }
+    if (el) el.innerHTML = `<span class="${r.ok?'t-ok':'t-bad'}">${r.ok?'●':'●'} ${esc(r.message)} · 已保存</span>`;
+  } catch(e) {
+    if(el) el.innerHTML = `<span class="t-bad">● 测试失败：${esc(e.message || '网络错误')}</span>`;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '测试'; }
+  }
 }
 $('#btn-proxy-test-all').onclick = async () => {
-  try { const list = await api.get('/api/proxies'); for (const p of list) await testProxy(p.id); } catch(e){}
+  const btn = $('#btn-proxy-test-all');
+  try {
+    const list = await api.get('/api/proxies');
+    btn.disabled = true; btn.textContent = `测速中 0/${list.length}`;
+    for (let i=0; i<list.length; i++) {
+      btn.textContent = `测速中 ${i+1}/${list.length}`;
+      await testProxy(list[i].id);
+    }
+    btn.textContent = '🧪 测试全部';
+    btn.disabled = false;
+  } catch(e) { btn.textContent = '🧪 测试全部'; btn.disabled = false; toast('批量测速失败','err'); }
 };
 
 /* ===== 扫码登录添加账号 ===== */
@@ -444,33 +469,34 @@ async function loadLogs() {
       return;
     }
     let html = '';
-    data.forEach((day, di) => {
+    data.forEach((day) => {
       html += `<div class="log-date"><span>📅 ${esc(day.date)}</span><span class="day-count">${day.groups.length} 次执行</span></div>`;
       day.groups.forEach((g) => {
-        // 聚合本次执行所有账号结果
+        const total = g.success + g.fail;
+        const pct = total ? Math.round(g.success / total * 100) : 0;
+        const stateClass = g.status === 'success' ? 'is-success' : (g.status === 'failed' ? 'is-failed' : 'is-partial');
         const rows = g.accounts.map(l => {
-          const det = (l.detail||[]).map(d=>`<span class="tag ${d.success?'ok':'bad'}">${esc(d.name)} ${d.success?'✓':'✗'}</span>`).join('');
+          const det = (l.detail||[]).map(d=>`<span class="tag ${d.success?'ok':'bad'}"><b>${d.success?'✓':'×'}</b>${esc(d.name)}</span>`).join('');
+          const message = l.message ? `<span class="log-message">${esc(l.message)}</span>` : '';
           return `<div class="log-item">
-            <div class="lt">
-              <span class="acc">${esc(l.account_name)}</span>
+            <div class="log-account-line">
+              <div class="log-account-name"><span class="account-dot ${l.status==='success'?'ok':'bad'}"></span>${esc(l.account_name)}</div>
               ${statusBadge(l.status)}
-              <span class="badge gray">${l.channel}</span>
-              <span class="badge gray">${l.success}/${l.total} 成功</span>
-              <span class="time">${esc(l.created_at||'')}</span>
+              <span class="log-count">${l.success}/${l.total}</span>
+              <span class="log-time">${esc((l.created_at||'').slice(11,16))}</span>
             </div>
-            ${det ? `<div class="log-detail">${det}</div>` : `<div class="log-detail"><span style="color:var(--muted);font-size:12px">${esc(l.message||'')}</span></div>`}
+            ${det ? `<div class="log-detail">${det}</div>` : message}
           </div>`;
         }).join('');
         const time = g.created_at ? g.created_at.slice(11,16) : '';
-        html += `<div class="log-task">
-          <div class="lt task-head">
-            <span class="task-ico">🕘 ${esc(time)}</span>
-            ${statusBadge(g.status)}
-            <span class="badge gray">${g.accounts.length} 个账号</span>
-            <span class="badge gray">成功 ${g.success} · 失败 ${g.fail}</span>
-            <span class="meta">#${esc(g.task_id||'')}</span>
+        html += `<div class="log-task ${stateClass}">
+          <div class="task-head">
+            <div class="task-title"><span class="task-ico">${g.status === 'success' ? '✓' : (g.status === 'failed' ? '!' : '•')}</span><strong>${esc(time)}</strong><span class="task-id">#${esc(g.task_id||'')}</span></div>
+            <div class="task-summary">${statusBadge(g.status)} <span>${g.accounts.length} 个账号</span></div>
           </div>
-          ${rows}
+          <div class="task-progress"><i style="width:${pct}%"></i></div>
+          <div class="task-meta"><span>成功 <b>${g.success}</b></span><span>失败 <b>${g.fail}</b></span><span>${pct}% 完成</span></div>
+          <div class="task-accounts">${rows}</div>
         </div>`;
       });
     });

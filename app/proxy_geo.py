@@ -79,7 +79,8 @@ def _safe_json(r: requests.Response) -> dict | None:
 
 
 def _query_service(svc: dict, proxies: dict) -> dict:
-    """对单个归属地服务发起请求并解析结果。"""
+    """对单个归属地服务发起请求并解析结果，并记录端到端延迟。"""
+    started = time.perf_counter()
     try:
         r = requests.get(
             svc["url"],
@@ -102,6 +103,7 @@ def _query_service(svc: dict, proxies: dict) -> dict:
         return {"ok": False, "message": "接口无有效数据"}
     parsed = svc["parse"](data)
     parsed.setdefault("service", svc["name"])
+    parsed["latency_ms"] = round((time.perf_counter() - started) * 1000)
     return parsed
 
 
