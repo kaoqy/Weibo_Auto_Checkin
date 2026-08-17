@@ -89,6 +89,12 @@ def run_checkin(trigger_type: str = "manual") -> dict:
                  "，并行签到" if parallel else "，依次签到",
                  "、".join(groups[k][0].get("name", "?") if groups[k] else k for k in group_order))
 
+        def _safe_channel_label(channel: str, group_label: str) -> str:
+            """日志只记录安全的通道摘要，绝不把代理认证信息写入数据库。"""
+            if channel == "socks":
+                return "SOCKS5 代理"
+            return "直连"
+
         def _process_one(acc: dict, idx_in_group: int, group_size: int, group_label: str):
             """处理单个账号签到。返回结果 dict 或 None（并发下由主线程记账）。"""
             # 防封等待（组内账号间）
@@ -121,7 +127,7 @@ def run_checkin(trigger_type: str = "manual") -> dict:
                 "name": acc.get("name", "未命名账号"),
                 "status": result["status"],
                 "message": result.get("message", ""),
-                "channel": result.get("channel", "direct") + (f"[{group_label}]" if group_label else ""),
+                "channel": _safe_channel_label(result.get("channel", "direct"), group_label),
                 "total": result.get("total", 0),
                 "success": result.get("success", 0),
                 "fail": result.get("fail", 0),
@@ -134,7 +140,7 @@ def run_checkin(trigger_type: str = "manual") -> dict:
                 "account_name": acc.get("name", "未命名账号"),
                 "task_id": task_id,
                 "status": result["status"],
-                "channel": result.get("channel", "direct") + (f"[{group_label}]" if group_label else ""),
+                "channel": _safe_channel_label(result.get("channel", "direct"), group_label),
                 "total": result.get("total", 0),
                 "success": result.get("success", 0),
                 "fail": result.get("fail", 0),

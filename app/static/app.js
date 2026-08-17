@@ -478,12 +478,11 @@ async function loadLogs() {
         const rows = g.accounts.map(l => {
           const det = (l.detail||[]).map(d=>`<span class="tag ${d.success?'ok':'bad'}"><b>${d.success?'✓':'×'}</b>${esc(d.name)}</span>`).join('');
           const message = l.message ? `<span class="log-message">${esc(l.message)}</span>` : '';
+          const clock = esc((l.created_at||'').slice(11,16));
           return `<div class="log-item">
             <div class="log-account-line">
               <div class="log-account-name"><span class="account-dot ${l.status==='success'?'ok':'bad'}"></span>${esc(l.account_name)}</div>
-              ${statusBadge(l.status)}
-              <span class="log-count">${l.success}/${l.total}</span>
-              <span class="log-time">${esc((l.created_at||'').slice(11,16))}</span>
+              <div class="log-account-meta">${statusBadge(l.status)}<span class="log-count">${l.success}/${l.total} 成功</span><span class="log-time">${clock}</span></div>
             </div>
             ${det ? `<div class="log-detail">${det}</div>` : message}
           </div>`;
@@ -491,7 +490,7 @@ async function loadLogs() {
         const time = g.created_at ? g.created_at.slice(11,16) : '';
         html += `<div class="log-task ${stateClass}">
           <div class="task-head">
-            <div class="task-title"><span class="task-ico">${g.status === 'success' ? '✓' : (g.status === 'failed' ? '!' : '•')}</span><strong>${esc(time)}</strong><span class="task-id">#${esc(g.task_id||'')}</span></div>
+            <div class="task-title"><span class="task-ico">${g.status === 'success' ? '✓' : (g.status === 'failed' ? '!' : '•')}</span><strong>${esc(time)}</strong><span class="task-label">执行记录</span></div>
             <div class="task-summary">${statusBadge(g.status)} <span>${g.accounts.length} 个账号</span></div>
           </div>
           <div class="task-progress"><i style="width:${pct}%"></i></div>
