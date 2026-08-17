@@ -209,6 +209,27 @@ input[type="checkbox"]{accent-color:var(--accent);width:15px;height:15px;cursor:
 .log-simple-time{font-variant-numeric:tabular-nums;color:var(--muted);white-space:nowrap;font-family:ui-monospace,Consolas,monospace;font-size:12px}
 .log-simple-name{font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .log-msg{color:var(--muted);margin-left:2px}.batch-bar{display:flex;align-items:center;gap:10px;margin:0 0 12px;padding:9px 12px;border:1px dashed var(--line);border-radius:10px;background:var(--surface-2)}
+.log-chan{font-size:11px;color:var(--muted);padding:2px 7px;border:1px solid var(--line);border-radius:999px;white-space:nowrap}
+.log-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.log-search,.log-filter{background:var(--surface-2);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font:inherit;font-size:13px}
+.log-search{width:170px;transition:border-color .18s,box-shadow .18s}
+.log-search:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);outline:none}
+
+/* 仪表盘：趋势 + 每日一言 */
+.dash-row{display:grid;grid-template-columns:1.4fr 1fr;gap:16px;margin-bottom:18px}
+.dash-row>.card{margin-bottom:0}
+.trend{display:flex;align-items:flex-end;gap:10px;height:132px;padding:6px 2px 0}
+.trend-col{flex:1;display:flex;flex-direction:column;align-items:center;gap:6px;height:100%}
+.trend-bars{flex:1;width:100%;max-width:34px;display:flex;flex-direction:column;justify-content:flex-end;background:var(--surface-2);border-radius:8px 8px 4px 4px;overflow:hidden}
+.trend-bars i{display:block;width:100%;animation:barGrow .45s ease both}
+.tb-ok{background:linear-gradient(180deg,var(--success),color-mix(in srgb,var(--success) 65%,transparent))}
+.tb-fail{background:linear-gradient(180deg,var(--danger),color-mix(in srgb,var(--danger) 60%,transparent))}
+.trend-col:hover .trend-bars{box-shadow:0 0 0 2px var(--accent-soft)}
+.trend-lbl{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+@keyframes barGrow{from{transform:scaleY(.05);transform-origin:bottom}to{transform:scaleY(1);transform-origin:bottom}}
+.quote{margin:2px 0 8px;padding:12px 14px;border-left:3px solid var(--accent);background:var(--surface-2);border-radius:0 10px 10px 0;font-size:14px;line-height:1.65;animation:softPop .3s ease both}
+.quote-from{color:var(--muted);font-size:12px;text-align:right;margin-bottom:10px}
+@media(max-width:900px){.dash-row{grid-template-columns:1fr}}
 .view:not([hidden]){animation:viewEnter .24s ease both}
 .batch-bar:not([hidden]){animation:softPop .2s ease both}
 .log-simple{animation:rowEnter .22s ease both}.log-simple:nth-child(2){animation-delay:.025s}.log-simple:nth-child(3){animation-delay:.05s}.log-simple:nth-child(4){animation-delay:.075s}.log-simple:nth-child(5){animation-delay:.1s}

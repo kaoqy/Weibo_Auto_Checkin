@@ -67,7 +67,45 @@ async function loadDashboard() {
     renderStats(stats, accounts);
     renderRecentTasks(tasks);
     renderDashAccounts(accounts);
+    loadTrend();
+    loadQuote();
   } catch(e) { toast('加载仪表盘失败', 'err'); }
+}
+
+async function loadTrend() {
+  const box = $('#trendChart');
+  if (!box) return;
+  try {
+    const data = await api.get('/api/logs/trend?days=7');
+    const max = Math.max(1, ...data.map(d=>d.success + d.fail));
+    box.innerHTML = data.map(d=>{
+      const totalH = Math.round((d.success + d.fail) / max * 100);
+      const okH = (d.success + d.fail) ? Math.round(d.success / (d.success + d.fail) * totalH) : 0;
+      const failH = Math.max(0, totalH - okH);
+      const title = `${d.day}：成功 ${d.success}，失败 ${d.fail}`;
+      return `<div class="trend-col" title="${esc(title)}">
+        <div class="trend-bars">
+          <i class="tb-fail" style="height:${failH}%"></i>
+          <i class="tb-ok" style="height:${okH}%"></i>
+        </div>
+        <span class="trend-lbl">${esc(d.label)}</span>
+      </div>`;
+    }).join('');
+    const sum = data.reduce((a,d)=>a + d.success, 0);
+    const hint = $('#trendHint');
+    if (hint) hint.textContent = `近 7 天成功 ${sum} 次`;
+  } catch(e) { box.innerHTML = '<div class="hint">趋势加载失败</div>'; }
+}
+
+async function loadQuote(refresh=false) {
+  const box = $('#quoteBox');
+  if (!box) return;
+  try {
+    const q = await api.get('/api/quote' + (refresh ? '?refresh=true' : ''));
+    box.textContent = q.text || '—';
+    const from = $('#quoteFrom');
+    if (from) from.textContent = q.source ? '—— ' + q.source : '';
+  } catch(e) { box.textContent = '每日一言加载失败'; }
 }
 
 function renderStats(stats, accounts) {
@@ -77,9 +115,9 @@ function renderStats(stats, accounts) {
     card('账号总数', accounts.length, 'acc', '个'),
     card('启用中', active.length, '', '个'),
     card('签到正常', okAcc, 'green', '个'),
-    card('累计签到', stats.total || 0, '', '次'),
-    card('成功', stats.success || 0, 'green', '次'),
-    card('失败', stats.fail || 0, 'red', '次'),
+    card('累计超话签到', stats.topics_signed || 0, 'green', '个'),
+    card('成功率', stats.success_rate || 0, '', '%'),
+    card('今日记录', stats.today || 0, '', '条'),
   ].join('');
 }
 function card(lbl, num, cls, suffix='') {
@@ -112,6 +150,16 @@ function renderDashAccounts(accounts) {
     </tr>`).join('') : '<tr><td colspan="4" style="color:var(--muted)">暂无账号，请到「账号管理」添加</td></tr>';
 }
 $('#btn-refresh-acc').onclick = loadDashboard;
+const btnQuoteRefresh = $('#btn-quote-refresh');
+if (btnQuoteRefresh) btnQuoteRefresh.onclick = ()=>loadQuote(true);
+const btnQuotePush = $('#btn-quote-push');
+if (btnQuotePush) btnQuotePush.onclick = async ()=>{
+  toast('推送中…');
+  try {
+    const r = await api.post('/api/notify/quote', {});
+    toast(r.ok ? '✅ 已推送到 TG' : '❌ 推送失败（检查 TG 配置）', r.ok?'good':'err');
+  } catch(e){ toast('推送失败','err'); }
+};
 
 /* ===== 账号管理 ===== */
 let editingId = null;
@@ -525,30 +573,59 @@ $('#qrRefresh').onclick = () => { qrTimer && clearInterval(qrTimer); loadQr(); }
 $('#qrImportBtn').onclick = doQrImport;
 
 /* ===== 日志 ===== */
+let logCache = [];
 async function loadLogs() {
   try {
-    const data = await api.get('/api/logs?limit=100');
-    const list = $('#logList');
-    if (!data || !data.length) {
-      list.innerHTML = '<div style="color:var(--muted);padding:20px">暂无签到日志</div>';
-      return;
-    }
-    list.innerHTML = data.map(l => {
-      const t = (l.created_at||'').slice(5,16);
-      const st = l.status==='success' ? '<span class="badge ok">成功</span>'
-              : l.status==='failed' ? '<span class="badge bad">失败</span>'
-              : '<span class="badge warn">部分</span>';
-      const cnt = (l.success!=null && l.total!=null) ? '<span class="log-count">'+l.success+'/'+l.total+'</span>' : '';
-      const msg = l.message ? '<span class="log-msg">'+esc(l.message)+'</span>' : '';
-      return '<div class="log-simple">' +
-        '<span class="log-simple-time">'+esc(t)+'</span>' +
-        '<span class="log-simple-name">'+esc(l.account_name||'')+'</span>' +
-        st + cnt + msg +
-      '</div>';
-    }).join('');
+    logCache = await api.get('/api/logs?limit=200');
+    renderLogs();
   } catch(e){ toast('加载日志失败','err'); }
 }
-$('#btn-refresh-logs').onclick = loadLogs;
+function renderLogs() {
+  const list = $('#logList');
+  if (!list) return;
+  const kw = (($('#logSearch')||{}).value || '').trim().toLowerCase();
+  const st = ($('#logFilter')||{}).value || '';
+  const rows = (logCache||[]).filter(l => {
+    if (st && l.status !== st) return false;
+    if (!kw) return true;
+    return ((l.account_name||'') + ' ' + (l.message||'')).toLowerCase().includes(kw);
+  });
+  const countBox = $('#logCount');
+  if (countBox) countBox.textContent = '共 ' + (logCache||[]).length + ' 条，当前显示 ' + rows.length + ' 条';
+  if (!rows.length) {
+    list.innerHTML = '<div style="color:var(--muted);padding:20px">' + ((logCache||[]).length ? '没有匹配的日志' : '暂无签到日志') + '</div>';
+    return;
+  }
+  list.innerHTML = rows.map(l => {
+    const t = (l.created_at||'').slice(5,16);
+    const badge = l.status==='success' ? '<span class="badge ok">成功</span>'
+            : l.status==='failed' ? '<span class="badge bad">失败</span>'
+            : '<span class="badge warn">部分</span>';
+    const cnt = (l.success!=null && l.total!=null) ? '<span class="log-count">'+l.success+'/'+l.total+'</span>' : '';
+    const ch = l.channel ? '<span class="log-chan">'+esc(l.channel)+'</span>' : '';
+    const msg = l.message ? '<span class="log-msg">'+esc(l.message)+'</span>' : '';
+    return '<div class="log-simple">' +
+      '<span class="log-simple-time">'+esc(t)+'</span>' +
+      '<span class="log-simple-name">'+esc(l.account_name||'')+'</span>' +
+      badge + cnt + ch + msg +
+    '</div>';
+  }).join('');
+}
+const btnRefreshLogs = $('#btn-refresh-logs');
+if (btnRefreshLogs) btnRefreshLogs.onclick = loadLogs;
+const logSearchEl = $('#logSearch');
+if (logSearchEl) logSearchEl.addEventListener('input', renderLogs);
+const logFilterEl = $('#logFilter');
+if (logFilterEl) logFilterEl.addEventListener('change', renderLogs);
+const btnClearLogs = $('#btn-clear-logs');
+if (btnClearLogs) btnClearLogs.onclick = async () => {
+  if (!confirm('确定清空全部签到日志？此操作不可恢复。')) return;
+  try {
+    const r = await api.del('/api/logs');
+    toast('已清空 ' + (r.removed||0) + ' 条日志', 'good');
+    loadLogs(); loadDashboard();
+  } catch(e){ toast('清空失败','err'); }
+};
 
 /* ===== 设置 ===== */
 let settingsCache = {};
@@ -568,25 +645,36 @@ async function loadSettings() {
     setVal('s-proxy_fallback', settingsCache.proxy_fallback!=='0');
     $('#s-checkin_delay_min').value = settingsCache.checkin_delay_min||'3';
     $('#s-checkin_delay_max').value = settingsCache.checkin_delay_max||'8';
+    setVal('s-tg_quote_enabled', settingsCache.tg_quote_enabled!=='0');
+    setVal('s-tg_only_on_change', settingsCache.tg_only_on_change==='1');
+    setVal('s-tg_silent', settingsCache.tg_silent==='1');
+    const retEl = $('#s-log_retention_days');
+    if (retEl) retEl.value = settingsCache.log_retention_days||'30';
   } catch(e){ toast('加载设置失败','err'); }
 }
 
-function setVal(id, checked) { $('#'+id).checked = !!checked; }
+function setVal(id, checked) { const el = $('#'+id); if (el) el.checked = !!checked; }
 function collectSettings() {
+  const val = (id, dflt='') => { const el = $('#'+id); return el ? el.value : dflt; };
+  const chk = (id) => { const el = $('#'+id); return el && el.checked ? '1':'0'; };
   return {
-    tg_enabled: $('#s-tg_enabled').checked ? '1':'0',
-    tg_bot_token: $('#s-tg_bot_token').value.trim(),
-    tg_user_id: $('#s-tg_user_id').value.trim(),
-    schedule_enabled: $('#s-schedule_enabled').checked ? '1':'0',
-    schedule_cron: $('#s-schedule_cron').value.trim(),
-    anti_ban_enabled: $('#s-anti_ban_enabled').checked ? '1':'0',
-    anti_ban_wait_min: $('#s-anti_ban_wait_min').value,
-    anti_ban_wait_max: $('#s-anti_ban_wait_max').value,
-    anti_ban_window_hour: $('#s-anti_ban_window_hour').value,
-    proxy_force: $('#s-proxy_force').checked ? '1':'0',
-    proxy_fallback: $('#s-proxy_fallback').checked ? '1':'0',
-    checkin_delay_min: $('#s-checkin_delay_min').value,
-    checkin_delay_max: $('#s-checkin_delay_max').value,
+    tg_enabled: chk('s-tg_enabled'),
+    tg_bot_token: val('s-tg_bot_token').trim(),
+    tg_user_id: val('s-tg_user_id').trim(),
+    tg_quote_enabled: chk('s-tg_quote_enabled'),
+    tg_only_on_change: chk('s-tg_only_on_change'),
+    tg_silent: chk('s-tg_silent'),
+    schedule_enabled: chk('s-schedule_enabled'),
+    schedule_cron: val('s-schedule_cron').trim(),
+    anti_ban_enabled: chk('s-anti_ban_enabled'),
+    anti_ban_wait_min: val('s-anti_ban_wait_min'),
+    anti_ban_wait_max: val('s-anti_ban_wait_max'),
+    anti_ban_window_hour: val('s-anti_ban_window_hour'),
+    proxy_force: chk('s-proxy_force'),
+    proxy_fallback: chk('s-proxy_fallback'),
+    checkin_delay_min: val('s-checkin_delay_min'),
+    checkin_delay_max: val('s-checkin_delay_max'),
+    log_retention_days: val('s-log_retention_days','30'),
   };
 }
 $('#btn-save-all').onclick = async () => {

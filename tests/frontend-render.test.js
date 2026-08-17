@@ -25,7 +25,22 @@ const html = fs.readFileSync(path.join(__dirname, '..', 'app', 'static', 'index.
 const js = fs.readFileSync(path.join(__dirname, '..', 'app', 'static', 'app.js'), 'utf8');
 
 // --- 构造 mock 数据 ---
-const mockStats = { total: 42, success: 38, partial: 2, fail: 2, today: 5 };
+const mockStats = { total: 42, success: 38, partial: 2, fail: 2, today: 5,
+  topics_signed: 126, success_rate: 90, last_log_at: '2026-08-17 07:00:00' };
+const mockTrend = [
+  { day: '2026-08-11', label: '08-11', runs: 1, success: 3, fail: 0 },
+  { day: '2026-08-12', label: '08-12', runs: 1, success: 2, fail: 1 },
+  { day: '2026-08-13', label: '08-13', runs: 0, success: 0, fail: 0 },
+  { day: '2026-08-14', label: '08-14', runs: 2, success: 5, fail: 0 },
+  { day: '2026-08-15', label: '08-15', runs: 1, success: 1, fail: 0 },
+  { day: '2026-08-16', label: '08-16', runs: 1, success: 4, fail: 0 },
+  { day: '2026-08-17', label: '08-17', runs: 1, success: 3, fail: 0 },
+];
+const mockQuote = { text: '日拱一卒无有尽', source: '网络' };
+const mockLogs = [
+  { id: 2, account_name: '小号A', status: 'success', total: 3, success: 3, fail: 0, channel: '直连', message: '签到完成', created_at: '2026-08-17 07:00:10' },
+  { id: 1, account_name: '小号B', status: 'failed', total: 0, success: 0, fail: 0, channel: 'SOCKS5 代理', message: 'Cookie 无效', created_at: '2026-08-17 07:00:02' },
+];
 const mockAccounts = [
   { id: 1, name: '小号A', enabled: 1, last_status: 'success', last_checkin: '2026-08-14 07:00:00', last_message: '签到完成', cookie_length: 40, cookie_preview: 'SUB=xxx…', remark: '', proxy_index: 0 },
   { id: 2, name: '小号B', enabled: 1, last_status: 'failed', last_checkin: null, last_message: 'Cookie 无效', cookie_length: 0, cookie_preview: '', remark: '', proxy_index: 0 },
@@ -42,6 +57,8 @@ const mockSettings = {
   anti_ban_wait_max: '300', anti_ban_window_hour: '7',
   proxies: 'socks5://a@1:1', proxy_force: '0', proxy_fallback: '1',
   checkin_delay_min: '3', checkin_delay_max: '8',
+  tg_quote_enabled: '1', tg_only_on_change: '0', tg_silent: '0',
+  log_retention_days: '30',
 };
 
 // --- mock fetch 路由 ---
@@ -53,7 +70,9 @@ function mockFetch(url) {
     '/api/tasks': { ok: true, json: () => Promise.resolve(mockTasks) },
     '/api/settings': { ok: true, json: () => Promise.resolve(mockSettings) },
     '/api/proxies': { ok: true, json: () => Promise.resolve(mockProxies) },
-    '/api/logs': { ok: true, json: () => Promise.resolve([]) },
+    '/api/logs': { ok: true, json: () => Promise.resolve(mockLogs) },
+    '/api/logs/trend': { ok: true, json: () => Promise.resolve(mockTrend) },
+    '/api/quote': { ok: true, json: () => Promise.resolve(mockQuote) },
     '/api/checkin/status': { ok: true, json: () => Promise.resolve({ running: false }) },
     '/api/checkin/last': { ok: true, json: () => Promise.resolve({ summary: { status:'success', accounts:2, success:38, fail:2 } }) },
   };
@@ -92,7 +111,10 @@ function check(name, cond) {
   check('页面标题正确', window.document.title.includes('微博超话签到'));
   check('6 张统计卡渲染', window.document.querySelectorAll('#statGrid .stat').length === 6);
   check('账号总数卡=2', window.document.querySelectorAll('#statGrid .stat .num')[0].textContent.includes('2'));
-  check('累计签到卡=42', window.document.querySelectorAll('#statGrid .stat .num')[3].textContent.includes('42'));
+  check('累计超话签到卡=126', window.document.querySelectorAll('#statGrid .stat .num')[3].textContent.includes('126'));
+  check('7 天趋势柱渲染', window.document.querySelectorAll('#trendChart .trend-col').length === 7);
+  check('每日一言展示', window.document.querySelector('#quoteBox').textContent.includes('日拱一卒'));
+  check('每日一言出处', window.document.querySelector('#quoteFrom').textContent.includes('网络'));
 
   console.log('— 导航 —');
   check('5 个导航项', window.document.querySelectorAll('.nav-item').length === 5);
@@ -112,12 +134,35 @@ function check(name, cond) {
   check('代理显示归属地', window.document.querySelector('#proxyList').textContent.includes('香港'));
   check('代理显示名称', window.document.querySelector('#proxyList').textContent.includes('香港节点'));
 
+  console.log('— 日志页 —');
+  window.document.querySelector('.nav-item[data-view="logs"]').click();
+  await new Promise(r => setTimeout(r, 250));
+  check('日志渲染 2 条', window.document.querySelectorAll('#logList .log-simple').length === 2);
+  check('日志显示通道', window.document.querySelector('#logList').textContent.includes('SOCKS5 代理'));
+  const search = window.document.querySelector('#logSearch');
+  search.value = '小号B';
+  search.dispatchEvent(new window.Event('input'));
+  await new Promise(r => setTimeout(r, 120));
+  check('日志搜索过滤生效', window.document.querySelectorAll('#logList .log-simple').length === 1);
+  search.value = '';
+  search.dispatchEvent(new window.Event('input'));
+  const filter = window.document.querySelector('#logFilter');
+  filter.value = 'failed';
+  filter.dispatchEvent(new window.Event('change'));
+  await new Promise(r => setTimeout(r, 120));
+  check('日志状态筛选生效', window.document.querySelectorAll('#logList .log-simple').length === 1);
+  filter.value = '';
+  filter.dispatchEvent(new window.Event('change'));
+
   console.log('— 设置页 —');
   window.document.querySelector('.nav-item[data-view="settings"]').click();
   await new Promise(r => setTimeout(r, 500));
   check('Cron 输入框有值', window.document.querySelector('#s-schedule_cron').value === '0 7 * * *');
   check('TG 开关为开', window.document.querySelector('#s-tg_enabled').checked === true);
   check('防封等待最小值 120', window.document.querySelector('#s-anti_ban_wait_min').value === '120');
+  check('每日一言开关存在', !!window.document.querySelector('#s-tg_quote_enabled'));
+  check('仅异常推送开关存在', !!window.document.querySelector('#s-tg_only_on_change'));
+  check('日志保留天数默认 30', window.document.querySelector('#s-log_retention_days').value === '30');
 
   console.log('— 弹窗 —');
   window.document.querySelector('.nav-item[data-view="accounts"]').click();

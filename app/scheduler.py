@@ -282,8 +282,29 @@ def start_scheduler() -> None:
             _sweep_browser_idle, trigger="interval", minutes=3,
             id="browser_sweep", max_instances=1, coalesce=True,
         )
+    # 每日清理过期日志（v7.0）
+    if not scheduler.get_job("log_purge"):
+        scheduler.add_job(
+            _purge_logs_job, trigger=CronTrigger(hour=4, minute=30,
+                                                 timezone="Asia/Shanghai"),
+            id="log_purge", max_instances=1, coalesce=True,
+            misfire_grace_time=3600,
+        )
     reload_schedule()
     log.info("调度器已启动")
+
+
+def _purge_logs_job() -> None:
+    """根据设置自动清理旧签到日志。"""
+    try:
+        days = int(database.get_setting("log_retention_days", "30") or 0)
+    except ValueError:
+        days = 30
+    if days <= 0:
+        return
+    removed = database.purge_old_logs(days)
+    if removed:
+        log.info("已清理 %d 条超过 %d 天的签到日志", removed, days)
 
 
 def _sweep_browser_idle():

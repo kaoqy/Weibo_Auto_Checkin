@@ -297,3 +297,158 @@ def test_checkin_run_accounts_api(client):
     # 空列表应 400
     r2 = client.post("/api/checkin/run-accounts", json={"account_ids": []})
     assert r2.status_code == 400
+
+
+# ========================= v7.0 =========================
+
+def test_hitokoto_fallback_offline(monkeypatch):
+    """无外网时每日一言应回退内置句库，且不抛异常。"""
+    from app import hitokoto
+
+    hitokoto.clear_cache()
+
+    def boom(*a, **kw):
+        raise OSError("no network")
+
+    monkeypatch.setattr(hitokoto.requests, "get", boom)
+    text, source = hitokoto.fetch_quote(use_cache=False)
+    assert text, "回退句库应返回非空文本"
+    assert isinstance(source, str)
+    line = hitokoto.format_quote(text, source)
+    assert "每日一言" in line and text in line
+
+
+def test_hitokoto_uses_api_when_available(monkeypatch):
+    """接口可用时应使用接口返回内容。"""
+    from app import hitokoto
+
+    hitokoto.clear_cache()
+
+    class FakeResp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"hitokoto": "测试句子", "from": "出处", "from_who": "作者"}
+
+    monkeypatch.setattr(hitokoto.requests, "get", lambda *a, **kw: FakeResp())
+    text, source = hitokoto.fetch_quote(use_cache=False)
+    assert text == "测试句子"
+    assert "作者" in source and "出处" in source
+    hitokoto.clear_cache()
+
+
+def test_quote_api(client):
+    """GET /api/quote 应返回每日一言。"""
+    r = client.get("/api/quote")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["text"]
+
+
+def test_log_trend_api(client):
+    """GET /api/logs/trend 应返回按天的固定长度序列。"""
+    r = client.get("/api/logs/trend?days=7")
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data) == 7
+    assert {"day", "label", "runs", "success", "fail"} <= set(data[0])
+
+
+def test_log_stats_extra_fields(client):
+    """日志统计应新增累计超话数、成功率、最近时间。"""
+    import app.database as db_mod
+    db_mod.add_log({
+        "account_name": "T", "task_id": "t1", "status": "success",
+        "total": 3, "success": 3, "fail": 0, "detail": [], "message": "ok",
+    })
+    r = client.get("/api/logs/stats")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["topics_signed"] >= 3
+    assert data["success_rate"] > 0
+    assert data["last_log_at"]
+
+
+def test_clear_and_purge_logs(client):
+    """清空日志与按天清理接口应可用。"""
+    import app.database as db_mod
+    db_mod.add_log({
+        "account_name": "T", "task_id": "t2", "status": "success",
+        "total": 1, "success": 1, "fail": 0, "detail": [], "message": "ok",
+    })
+    r = client.post("/api/logs/purge?days=0")
+    assert r.status_code == 200
+    assert r.json()["removed"] == 0
+
+    r2 = client.delete("/api/logs")
+    assert r2.status_code == 200
+    assert r2.json()["removed"] >= 1
+    assert client.get("/api/logs").json() == []
+
+
+def test_purge_old_logs_removes_only_old(tmp_path, monkeypatch):
+    """purge_old_logs 只删除超过保留期的日志。"""
+    import app.database as db
+    from datetime import datetime, timedelta
+
+    db_path = tmp_path / "test_purge.db"
+    monkeypatch.setattr(db, "DB_PATH", db_path)
+    db._local.conn = None
+    db.init_db()
+
+    new_id = db.add_log({"account_name": "new", "task_id": "n", "status": "success",
+                         "total": 1, "success": 1, "fail": 0, "detail": [], "message": ""})
+    old_id = db.add_log({"account_name": "old", "task_id": "o", "status": "success",
+                         "total": 1, "success": 1, "fail": 0, "detail": [], "message": ""})
+    old_time = (datetime.now() - timedelta(days=40)).strftime("%Y-%m-%d %H:%M:%S")
+    conn = db._get_conn()
+    conn.execute("UPDATE checkin_logs SET created_at = ? WHERE id = ?", (old_time, old_id))
+    conn.commit()
+
+    removed = db.purge_old_logs(30)
+    assert removed == 1
+    remaining = [l["id"] for l in db.get_logs(10)]
+    assert new_id in remaining and old_id not in remaining
+    db._local.conn = None
+
+
+def test_report_includes_quote_and_respects_only_on_change(tmp_path, monkeypatch):
+    """报告应可附带每日一言；仅异常推送模式下全成功时跳过。"""
+    import app.database as db
+    from app import notifier
+
+    db_path = tmp_path / "test_notify.db"
+    monkeypatch.setattr(db, "DB_PATH", db_path)
+    db._local.conn = None
+    db.init_db()
+    db.set_settings({"tg_enabled": "1", "tg_bot_token": "x", "tg_user_id": "1",
+                     "tg_quote_enabled": "1", "tg_only_on_change": "0"})
+
+    sent = {}
+
+    def fake_send(text, title="微博签到"):
+        sent["text"] = text
+        sent["title"] = title
+        return True
+
+    monkeypatch.setattr(notifier, "send_telegram", fake_send)
+    summary = {"time": "2026-08-17 07:00:00", "accounts": 1, "total": 2,
+               "success": 2, "fail": 0, "trigger_type": "schedule",
+               "detail": [{"name": "A", "status": "success",
+                           "results": [{"name": "超话1", "success": True, "message": "签到成功"}]}]}
+    assert notifier.send_checkin_report(summary) is True
+    assert "每日一言" in sent["text"]
+    assert "成功率" in sent["text"]
+
+    # 仅异常推送：全成功应跳过
+    db.set_settings({"tg_only_on_change": "1"})
+    sent.clear()
+    assert notifier.send_checkin_report(summary) is False
+    assert not sent
+
+    # 有失败时仍会推送
+    bad = dict(summary, fail=1)
+    assert notifier.send_checkin_report(bad) is True
+    assert sent["title"].startswith("⚠️")
+    db._local.conn = None

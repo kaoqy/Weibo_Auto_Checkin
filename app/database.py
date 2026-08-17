@@ -8,7 +8,7 @@ import json
 import logging
 import sqlite3
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # 数据库文件默认放在项目根目录下
@@ -190,6 +190,11 @@ def _seed_defaults(conn: sqlite3.Connection) -> None:
         "cookie_valid": "0",          # 最近一次 Cookie 是否校验过（占位）
         "auth_enabled": "1",          # 是否启用登录保护
         "admin_initialized": "0",     # 默认管理员是否已初始化
+        # ---- v7.0 新增 ----
+        "tg_quote_enabled": "1",      # TG 推送附带每日一言
+        "tg_only_on_change": "0",     # 仅在有失败/异常时推送
+        "tg_silent": "0",             # 静默推送（不震动提示）
+        "log_retention_days": "30",   # 日志保留天数（0=不清理）
     }
     for key, value in defaults.items():
         conn.execute(
@@ -456,13 +461,72 @@ def get_log_stats() -> dict:
         "SELECT COUNT(*) c FROM checkin_logs WHERE created_at LIKE ?",
         (today + "%",),
     ).fetchone()["c"]
+    topics_signed = conn.execute(
+        "SELECT COALESCE(SUM(success),0) s FROM checkin_logs"
+    ).fetchone()["s"]
+    last_row = conn.execute(
+        "SELECT created_at FROM checkin_logs ORDER BY id DESC LIMIT 1"
+    ).fetchone()
     return {
         "total": total,
         "success": success,
         "partial": partial,
         "fail": fail,
         "today": today_count,
+        "topics_signed": topics_signed,
+        "last_log_at": last_row["created_at"] if last_row else "",
+        "success_rate": round(success / total * 100) if total else 0,
     }
+
+
+def get_daily_trend(days: int = 7) -> list[dict]:
+    """近 N 天每天签到统计（用于仪表盘趋势图）。"""
+    conn = _get_conn()
+    rows = conn.execute(
+        """
+        SELECT substr(created_at, 1, 10) AS day,
+               COUNT(*) AS runs,
+               COALESCE(SUM(success), 0) AS success,
+               COALESCE(SUM(fail), 0) AS fail
+        FROM checkin_logs
+        WHERE created_at >= ?
+        GROUP BY day ORDER BY day
+        """,
+        ((datetime.now() - timedelta(days=days - 1)).strftime("%Y-%m-%d"),),
+    ).fetchall()
+    by_day = {r["day"]: dict(r) for r in rows}
+    result = []
+    for i in range(days - 1, -1, -1):
+        day = (datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d")
+        item = by_day.get(day) or {"day": day, "runs": 0, "success": 0, "fail": 0}
+        result.append({
+            "day": day,
+            "label": day[5:],
+            "runs": item["runs"],
+            "success": item["success"],
+            "fail": item["fail"],
+        })
+    return result
+
+
+def purge_old_logs(days: int) -> int:
+    """删除 N 天前的日志，返回删除条数。days<=0 时不做任何事。"""
+    if days <= 0:
+        return 0
+    cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d 00:00:00")
+    conn = _get_conn()
+    cur = conn.execute("DELETE FROM checkin_logs WHERE created_at < ?", (cutoff,))
+    conn.commit()
+    return cur.rowcount or 0
+
+
+def clear_logs() -> int:
+    """清空全部签到日志，返回删除条数。"""
+    conn = _get_conn()
+    count = conn.execute("SELECT COUNT(*) c FROM checkin_logs").fetchone()["c"]
+    conn.execute("DELETE FROM checkin_logs")
+    conn.commit()
+    return count
 
 
 def get_logs_grouped(limit: int = 20) -> list[dict]:

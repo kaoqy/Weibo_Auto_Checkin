@@ -86,6 +86,46 @@ def log_stats(user: dict = Depends(auth.require_admin)):
     return database.get_log_stats()
 
 
+@router.get("/logs/trend")
+def log_trend(days: int = 7, user: dict = Depends(auth.require_admin)):
+    """近 N 天签到趋势（仪表盘迷你图表）。"""
+    days = max(1, min(days, 30))
+    return database.get_daily_trend(days)
+
+
+@router.delete("/logs")
+def clear_all_logs(user: dict = Depends(auth.require_admin)):
+    """清空全部签到日志。"""
+    removed = database.clear_logs()
+    return {"ok": True, "removed": removed}
+
+
+@router.post("/logs/purge")
+def purge_logs(days: int | None = None, user: dict = Depends(auth.require_admin)):
+    """按保留天数清理旧日志（不传则用设置值）。"""
+    if days is None:
+        days = int(database.get_setting("log_retention_days", "30") or 0)
+    removed = database.purge_old_logs(days)
+    return {"ok": True, "removed": removed, "days": days}
+
+
+@router.get("/quote")
+def daily_quote(refresh: bool = False, user: dict = Depends(auth.require_admin)):
+    """每日一言（前端仪表盘展示 / TG 推送复用）。"""
+    from .. import hitokoto
+    if refresh:
+        hitokoto.clear_cache()
+    text, source = hitokoto.fetch_quote()
+    return {"text": text, "source": source}
+
+
+@router.post("/notify/quote")
+def push_quote(user: dict = Depends(auth.require_admin)):
+    """单独推送一条每日一言到 TG。"""
+    ok = notifier.send_daily_quote()
+    return {"ok": ok}
+
+
 @router.get("/settings")
 def get_settings(user: dict = Depends(auth.require_admin)):
     return database.get_settings()
@@ -96,11 +136,13 @@ def update_settings(values: dict, user: dict = Depends(auth.require_admin)):
     # 只允许更新已知 key
     known = {
         "tg_bot_token", "tg_user_id", "tg_enabled",
+        "tg_quote_enabled", "tg_only_on_change", "tg_silent",
         "schedule_enabled", "schedule_cron",
         "anti_ban_enabled", "anti_ban_wait_min", "anti_ban_wait_max",
         "anti_ban_window_hour",
         "proxies", "proxy_force", "proxy_fallback",
         "checkin_delay_min", "checkin_delay_max",
+        "log_retention_days",
     }
     updates = {k: v for k, v in values.items() if k in known}
     database.set_settings(updates)

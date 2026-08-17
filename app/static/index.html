@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>微博超话签到管理面板</title>
-  <link rel="stylesheet" href="/style.css?v=6.3" />
+  <link rel="stylesheet" href="/style.css?v=7.0" />
   <script>!function(){try{const t=localStorage.getItem('wcm-theme')||'system';document.documentElement.dataset.theme=t}catch(e){}}()</script>
 </head>
 <body>
@@ -64,6 +64,18 @@
       <!-- 仪表盘 -->
       <section class="view" id="view-dashboard">
         <div class="stat-grid" id="statGrid"></div>
+        <div class="dash-row">
+          <div class="card trend-card">
+            <div class="card-head"><h2>近 7 天签到趋势</h2><span class="hint" id="trendHint"></span></div>
+            <div class="trend" id="trendChart"></div>
+          </div>
+          <div class="card quote-card">
+            <div class="card-head"><h2>每日一言</h2><button class="btn btn-ghost btn-sm" id="btn-quote-refresh" title="换一句">🔄</button></div>
+            <blockquote class="quote" id="quoteBox">载入中…</blockquote>
+            <div class="quote-from" id="quoteFrom"></div>
+            <div class="form-actions"><button class="btn btn-ghost btn-sm" id="btn-quote-push">📮 推送到 TG</button></div>
+          </div>
+        </div>
         <div class="card">
           <div class="card-head"><h2>最近任务</h2></div>
           <div class="table-wrap"><table id="recentTasks"><thead><tr><th>任务ID</th><th>触发</th><th>状态</th><th>开始</th><th>结束</th></tr></thead><tbody></tbody></table></div>
@@ -114,8 +126,22 @@
       <!-- 日志 -->
       <section class="view" id="view-logs" hidden>
         <div class="card">
-          <div class="card-head"><h2>签到日志</h2><button class="btn btn-ghost btn-sm" id="btn-refresh-logs">刷新</button></div>
+          <div class="card-head">
+            <h2>签到日志</h2>
+            <div class="log-tools">
+              <input class="log-search" id="logSearch" placeholder="🔍 搜索账号/消息" />
+              <select id="logFilter" class="log-filter">
+                <option value="">全部状态</option>
+                <option value="success">仅成功</option>
+                <option value="partial">仅部分</option>
+                <option value="failed">仅失败</option>
+              </select>
+              <button class="btn btn-ghost btn-sm" id="btn-refresh-logs">刷新</button>
+              <button class="btn btn-danger btn-sm" id="btn-clear-logs">清空</button>
+            </div>
+          </div>
           <div class="log-list" id="logList"></div>
+          <div class="hint" id="logCount" style="margin-top:10px"></div>
         </div>
       </section>
 
@@ -128,6 +154,9 @@
               <label>启用 TG 推送<input type="checkbox" id="s-tg_enabled" /></label>
               <label>Bot Token <input id="s-tg_bot_token" placeholder="123456:ABC-DEF..." autocomplete="off" /></label>
               <label>Chat / User ID <input id="s-tg_user_id" placeholder="987654321" /></label>
+              <label>附带每日一言<input type="checkbox" id="s-tg_quote_enabled" /></label>
+              <label>仅异常时推送<input type="checkbox" id="s-tg_only_on_change" /></label>
+              <label>静默推送（不提示音）<input type="checkbox" id="s-tg_silent" /></label>
               <div class="form-actions">
                 <button class="btn btn-ghost" id="btn-test-tg">测试推送</button>
               </div>
@@ -170,6 +199,7 @@
                 <label>超话最小延时(s)<input type="number" id="s-checkin_delay_min" /></label>
                 <label>超话最大延时(s)<input type="number" id="s-checkin_delay_max" /></label>
               </div>
+              <label>日志保留天数<input type="number" id="s-log_retention_days" min="0" /><small>0 = 不自动清理</small></label>
             </div>
           </div>
           <div class="card">
@@ -292,6 +322,6 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <script src="/app.js?v=6.3"></script>
+  <script src="/app.js?v=7.0"></script>
 </body>
 </html>
