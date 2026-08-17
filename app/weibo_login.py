@@ -421,13 +421,65 @@ async def check_qrcode(qrid: str) -> dict:
             log.info("确认后全域cookie: %s", json.dumps(summ)[:500])
         except Exception as exc:
             log.warning("确认后cookie dump: %s", exc)
-        # 优先用 retdata 里的 redirect_url 主动导航触发跨域 cookie 落地
+        # ★ 首选：用 requests 完整走跨域链拿全部域有效 cookie（实测 login=true）
+        #   浏览器 page.goto 只拿 passport 域半成品(api/config 仍 login=false)，故优先 requests。
         redir = _get_redirect_url(retdata)
+        requests_cok = {}
         if redir:
             try:
-                log.info("确认后主动导航回调: %s", redir[:120])
-                await page.goto(redir, timeout=20000, wait_until="domcontentloaded")
-                await page.wait_for_timeout(2500)
+                cctx = await _collect_cookies(page)
+                requests_cok = await _complete_login_via_requests(redir, cctx)
+                if _is_real_login(requests_cok):
+                    log.info("requests跨域链拿到真实登录态: %s", sorted(requests_cok))
+            except Exception as exc:
+                log.warning("requests登录链异常: %s", exc)
+        if _is_real_login(requests_cok):
+            sess["status"] = "success"
+            sess["cookies"] = requests_cok
+            uid_req, sn_req = "", ""
+            try:
+                # 用 requests 拿 uid/账号名
+                import requests as _requests
+                S = _requests.Session()
+                S.headers.update({"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X)",
+                                  "Referer": "https://m.weibo.cn/"})
+                for k, v in requests_cok.items():
+                    if v:
+                        S.cookies.set(k, v, domain=".weibo.cn")
+                cfg = S.get("https://m.weibo.cn/api/config", timeout=15).json()
+                d = cfg.get("data") or {}
+                uid_req = str(d.get("uid") or "")
+                if uid_req:
+                    try:
+                        ui = S.get("https://m.weibo.cn/api/container/getIndex?type=uid&value=" + uid_req,
+                                   timeout=15).json().get("data") or {}
+                        sn_req = str((ui.get("userInfo") or {}).get("screen_name") or "")
+                    except Exception:
+                        pass
+            except Exception as exc:
+                log.warning("requests 补 uid/账号名: %s", exc)
+            if uid_req:
+                sess["uid"] = uid_req
+            if sn_req:
+                sess["username"] = sn_req
+            return {"status": "success", "message": "扫码登录成功",
+                    "cookies": requests_cok, "has_cookie": True,
+                    "uid": uid_req or sess.get("uid", ""),
+                    "username": sn_req or sess.get("username", "")}
+        # 退化：浏览器路径导航（若 requests 失败）
+        if redir:
+            try:
+                log.info("确认后浏览器导航回调: %s", redir[:120])
+                try:
+                    await page.evaluate("u => { location.replace(u); return true; }", redir)
+                except Exception:
+                    await page.goto(redir, timeout=20000, wait_until="domcontentloaded")
+                try:
+                    await page.wait_for_url("**m.weibo.cn**", timeout=15000,
+                                            wait_until="domcontentloaded")
+                except Exception:
+                    pass
+                await page.wait_for_timeout(3000)
             except Exception as exc:
                 log.warning("主动导航回调失败: %s", exc)
         else:
@@ -637,6 +689,43 @@ def _is_real_login(cookies: dict) -> bool:
                 or cookies.get("ALF"))
 
 
+async def _complete_login_via_requests(redir: str, ctx_cookies: dict) -> dict:
+    """用 requests 完整走 passport 确认后的跨域登录链，收集所有域有效 cookie。
+
+    passport 确认后返回 redir(passport.weibo.com/sso/v2/login?alt=...) ，
+    用 requests 带 passport 页面 cookie 访问并 follow 全部 302，能收集到
+    各域(.weibo.com/.weibo.cn/.sina.cn 等)的完整登录 cookie，含 SSOLoginState、
+    WEIBOCN_FROM、MLOGIN 等 m.weibo.cn 域 cookie —— 这些是 api/config
+    login=true 的关键。浏览器 page.goto 只拿 passport 域半成品，故改用 requests。
+    """
+    import requests as _requests
+    UA = ("Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) "
+          "AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 "
+          "MicroMessenger/8.0.49")
+    try:
+        S = _requests.Session()
+        S.headers.update({"User-Agent": UA, "Referer": "https://passport.weibo.com/"})
+        for k, v in (ctx_cookies or {}).items():
+            if v:
+                S.cookies.set(k, v, domain=".weibo.com")
+        r = S.get(redir, timeout=30, allow_redirects=True)
+        # 收集各域 cookie；跨域同名以 weibo.cn 域为准（签到用该域）
+        result = {}
+        sink = []
+        for c in S.cookies:
+            nm = c.name
+            dom = c.domain or ""
+            if nm not in result:
+                sink.append(nm)
+            if nm not in result or "weibo.cn" in dom:
+                result[nm] = c.value
+        log.info("requests跨域链: final_url=%s collected=%s", r.url[:80], sorted(result))
+        return result
+    except Exception as exc:
+        log.warning("requests 完整登录链失败: %s", exc)
+        return {}
+
+
 async def _finalize_with_uid(page, sess: dict):
     """页面已确认/跳转后抓取完整 Cookie 并验证真实登录。
 
@@ -658,16 +747,6 @@ async def _finalize_with_uid(page, sess: dict):
             if _is_real_login(cookies):
                 logged_in = True
                 break
-            # 兜底：哪怕没有 SCF，只要有 SUB/SUBP，实测 /api/config 是否已登录
-            if cookies.get("SUB"):
-                try:
-                    lg, u2, n2 = await _check_login(page)
-                    if lg:
-                        logged_in = True
-                        uid, screen_name = u2, n2
-                        break
-                except Exception:
-                    pass
         except Exception as exc:
             log.warning("finalize_with_uid 第 %d 轮: %s", i, exc)
         await page.wait_for_timeout(3000)
@@ -786,15 +865,24 @@ async def _finalize_cookies(page, allow_nav: bool = True) -> dict:
                 except Exception:
                     pass
         cookies = await _collect_cookies(page)
-        # 3) 若仍缺 SUB 且允许导航，再导航 m.weibo.cn 一次让回调链 cookie 落齐
-        if not cookies.get("SUB") and allow_nav:
-            try:
-                await page.goto("https://m.weibo.cn", timeout=15000,
-                                wait_until="domcontentloaded")
-                await page.wait_for_timeout(2500)
-                cookies = await _collect_cookies(page)
-            except Exception:
-                pass
+        # 3) 拿到 passport 域 SUB 后，必须再导航 m.weibo.cn 触发 m.weibo.cn 域
+        #    登录 cookie(SSOLoginState/WEIBOCN_FROM/MLOGIN/_T_WM 等)落地 ——
+        #    只有这些落地，m.weibo.cn /api/config 才 login=true（否则 cookie 无效）。
+        #    只要已登录(SUB+SCF等) 且缺 m 域关键cookie，就反复导航 m.weibo.cn。
+        m_keys = ("SSOLoginState", "WEIBOCN_FROM", "MLOGIN", "_T_WM", "XSRF-TOKEN")
+        has_login = _is_real_login(cookies)
+        lacks_m = not any(cookies.get(k) for k in m_keys)
+        if has_login and lacks_m and allow_nav:
+            for _try in range(3):
+                try:
+                    await page.goto("https://m.weibo.cn", timeout=20000,
+                                    wait_until="domcontentloaded")
+                    await page.wait_for_timeout(2500)
+                    cookies = await _collect_cookies(page)
+                    if any(cookies.get(k) for k in m_keys):
+                        break
+                except Exception:
+                    pass
     except Exception as exc:
         log.warning("finalize cookies: %s", exc)
     return cookies
