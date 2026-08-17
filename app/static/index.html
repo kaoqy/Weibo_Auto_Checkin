@@ -80,11 +80,18 @@
           <div class="card-head">
             <h2>账号列表</h2>
             <div>
+              <button class="btn btn-primary btn-sm" id="btn-checkin-selected" disabled>✔ 勾选手动签到</button>
               <button class="btn btn-ghost btn-sm" id="btn-qr-add">📱 扫码添加</button>
               <button class="btn btn-primary btn-sm" id="btn-add-acc">＋ 添加账号</button>
             </div>
           </div>
-          <div class="table-wrap"><table id="accTable"><thead><tr><th>ID</th><th>名称</th><th>状态</th><th>Cookie</th><th>代理</th><th>上次签到</th><th>操作</th></tr></thead><tbody></tbody></table></div>
+          <div class="batch-bar" id="batchBar" hidden>
+            <span class="hint">已选 <b id="selCount">0</b> 个账号</span>
+            <button class="btn btn-ghost btn-sm" id="btn-sel-enable">启用选中</button>
+            <button class="btn btn-ghost btn-sm" id="btn-sel-disable">停用选中</button>
+            <button class="btn btn-ghost btn-sm" id="btn-sel-clear">清空选择</button>
+          </div>
+          <div class="table-wrap"><table id="accTable"><thead><tr><th style="width:34px"><input type="checkbox" id="accCheckAll" title="全选" /></th><th>名称</th><th>状态</th><th>Cookie</th><th>代理</th><th>上次签到</th><th>操作</th></tr></thead><tbody></tbody></table></div>
         </div>
       </section>
 

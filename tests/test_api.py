@@ -215,3 +215,85 @@ def test_run_checkin_groups_by_proxy(tmp_path, monkeypatch):
     assert "socks5://p1:1080" in called, f"p1 代理应被调用, got {called}"
     assert "socks5://p2:1080" in called
     db._local.conn = None
+
+
+def test_run_checkin_selected_accounts(tmp_path, monkeypatch):
+    """手动签到指定账号（多选）：只签到选中且启用的账号。"""
+    import app.database as db
+    import app.scheduler as sched
+    from app import auth as auth_mod
+    from app.weibo_client import _bundle
+
+    db_path = tmp_path / "test_sel.db"
+    monkeypatch.setattr(db, "DB_PATH", db_path)
+    db._local.conn = None
+    db.init_db()
+    db.create_user("admin", auth_mod.hash_password("sec123456"))
+    db.set_settings({"auth_enabled": "0", "anti_ban_enabled": "0"})
+
+    a1 = db.add_account({"name": "A1", "cookie_raw": "SUB=a", "enabled": 1})
+    a2 = db.add_account({"name": "A2", "cookie_raw": "SUB=b", "enabled": 1})
+    a3 = db.add_account({"name": "A3", "cookie_raw": "SUB=c", "enabled": 1})
+
+    called = []
+    def fake_checkin(cookie, opts, proxy_url=None, proxy_index=0):
+        name = cookie.get("SUB", "?")
+        called.append(name)
+        return _bundle("success", "ok", 1, 1, 0,
+                       [{"name": "超话", "success": True, "message": "已签到"}],
+                       dict(cookie), [], proxy_url or "direct")
+
+    from unittest.mock import patch
+    with patch.object(sched, "run_account_checkin", side_effect=fake_checkin):
+        summary = sched.run_checkin("manual", account_ids=[a1, a3])
+
+    assert summary["accounts"] == 2, f"应只签到 2 个账号, got {summary['accounts']}"
+    assert set(called) == {"a", "c"}, f"应只含 A1/A3, got {called}"
+    db._local.conn = None
+
+
+def test_run_checkin_disabled_excluded(tmp_path, monkeypatch):
+    """禁用的账号不应进入自动签到队列。"""
+    import app.database as db
+    import app.scheduler as sched
+    from app import auth as auth_mod
+    from app.weibo_client import _bundle
+
+    db_path = tmp_path / "test_dis.db"
+    monkeypatch.setattr(db, "DB_PATH", db_path)
+    db._local.conn = None
+    db.init_db()
+    db.create_user("admin", auth_mod.hash_password("sec123456"))
+    db.set_settings({"auth_enabled": "0", "anti_ban_enabled": "0"})
+
+    db.add_account({"name": "ON", "cookie_raw": "SUB=on", "enabled": 1})
+    db.add_account({"name": "OFF", "cookie_raw": "SUB=off", "enabled": 0})
+
+    called = []
+    def fake_checkin(cookie, opts, proxy_url=None, proxy_index=0):
+        called.append(cookie.get("SUB"))
+        return _bundle("success", "ok", 1, 1, 0, [], dict(cookie), [], "direct")
+
+    from unittest.mock import patch
+    with patch.object(sched, "run_account_checkin", side_effect=fake_checkin):
+        summary = sched.run_checkin("manual")
+
+    assert called == ["on"], f"禁用账号不应进入队列, got {called}"
+    assert summary["accounts"] == 1
+    db._local.conn = None
+
+
+def test_checkin_run_accounts_api(client):
+    """POST /api/checkin/run-accounts 应启动后台线程并返回 ok。"""
+    db = client.app.state  # noqa
+    import app.database as db_mod
+    a1 = db_mod.add_account({"name": "T1", "cookie_raw": "SUB=t1", "enabled": 1})
+    r = client.post("/api/checkin/run-accounts", json={"account_ids": [a1]})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is True
+    assert data["count"] == 1
+
+    # 空列表应 400
+    r2 = client.post("/api/checkin/run-accounts", json={"account_ids": []})
+    assert r2.status_code == 400

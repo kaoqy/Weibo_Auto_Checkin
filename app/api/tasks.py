@@ -16,6 +16,28 @@ class CronIn(BaseModel):
     enabled: bool = True
 
 
+class RunAccountsIn(BaseModel):
+    account_ids: list[int]
+
+
+@router.post("/checkin/run-accounts")
+def run_selected_accounts(data: RunAccountsIn, user: dict = Depends(auth.require_admin)):
+    """手动签到指定账号（可多选）。立即返回，后台线程执行。"""
+    ids = data.account_ids
+    if not ids:
+        raise HTTPException(400, "请至少选择一个账号")
+    # 校验账号存在
+    acc = database.get_account(ids[0])
+    if not acc:
+        raise HTTPException(404, "账号不存在")
+
+    def _worker():
+        scheduler.run_checkin("manual", account_ids=ids)
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+    return {"ok": True, "message": f"已为 {len(ids)} 个账号启动手动签到", "count": len(ids)}
+
+
 @router.post("/checkin/run")
 def run_now(user: dict = Depends(auth.require_admin)):
     """手动触发一次签到（立即返回，签到在后台线程执行）。"""

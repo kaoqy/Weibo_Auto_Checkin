@@ -196,7 +196,11 @@ tbody tr:hover{background:var(--surface-2);transition:background .15s}
 .save-status.ok{color:var(--success)}
 
 /* ===== 日志：执行摘要 + 账号结果时间线 ===== */
-.log-list{display:flex;flex-direction:column;gap:12px}
+.log-list{display:flex;flex-direction:column;gap:8px}
+.log-simple{display:flex;align-items:center;flex-wrap:wrap;gap:8px 10px;padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface);font-size:13px}
+.log-simple-time{font-variant-numeric:tabular-nums;color:var(--muted);white-space:nowrap;font-family:ui-monospace,Consolas,monospace;font-size:12px}
+.log-simple-name{font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.log-msg{color:var(--muted);margin-left:2px}.batch-bar{display:flex;align-items:center;gap:10px;margin:0 0 12px;padding:9px 12px;border:1px dashed var(--line);border-radius:10px;background:var(--surface-2)}
 .log-task{border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--surface);box-shadow:var(--shadow)}
 .task-head{padding:13px 15px 10px;display:flex;align-items:center;justify-content:space-between;gap:12px}
 .task-title,.task-summary,.log-account-line{display:flex;align-items:center;gap:8px;min-width:0}.task-title strong{font-size:15px;letter-spacing:.2px}.task-label{font-size:12px;color:var(--muted)}

@@ -38,9 +38,9 @@ def get_current_run() -> dict | None:
 
 # ========================= 核心签到流程 =========================
 
-def run_checkin(trigger_type: str = "manual") -> dict:
+def run_checkin(trigger_type: str = "manual", account_ids: list[int] | None = None) -> dict:
     """
-    执行一次完整签到：遍历启用账号 → 防封等待 → 签到 → 记录日志 → 汇总。
+    执行一次完整签到：遍历启用账号（或指定 account_ids）→ 防封等待 → 签到 → 记录日志 → 汇总。
     返回汇总 dict。线程安全（同一时刻只允许一个运行）。
     """
     global _current_run, _last_run_summary
@@ -61,9 +61,12 @@ def run_checkin(trigger_type: str = "manual") -> dict:
 
     try:
         accounts = database.get_enabled_accounts()
+        if account_ids:
+            ids = set(account_ids)
+            accounts = [a for a in accounts if a["id"] in ids]
         _current_run["accounts_total"] = len(accounts)
         if not accounts:
-            summary = _finish(task_id, "success", "没有启用的账号", started,
+            summary = _finish(task_id, "success", "没有可用账号", started,
                               {"accounts": 0, "total": 0, "success": 0,
                                "fail": 0, "detail": []})
             return summary

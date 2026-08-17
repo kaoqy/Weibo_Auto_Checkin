@@ -118,22 +118,78 @@ let editingId = null;
 async function loadAccounts() {
   try {
     const accounts = await api.get('/api/accounts');
+    window.__accounts = accounts;
     const tb = $('#accTable tbody');
     tb.innerHTML = accounts.length ? accounts.map(a=>`
-      <tr>
-        <td>#${a.id}</td>
+      <tr data-id="${a.id}">
+        <td><input type="checkbox" class="acc-check" data-id="${a.id}" ${a.enabled?'':'disabled'} /></td>
         <td><strong>${esc(a.name)}</strong></td>
-        <td>${a.enabled?statusBadge('success'):'<span class="badge gray">已停用</span>'} · ${statusBadge(a.last_status)}</td>
+        <td>${a.enabled?statusBadge('success')+' 启用':'<span class="badge gray">已停用</span>'} <span style="color:var(--muted)">·</span> ${statusBadge(a.last_status)}</td>
         <td style="color:var(--muted)">${a.cookie_length} 字符</td>
         <td>${a.proxy? '<span class="badge">'+esc(a.proxy.replace(/socks5.*@/,'socks5://***@').slice(0,28))+'</span>' : '<span class="badge gray">直连</span>'}</td>
         <td>${a.last_checkin||'从未'}</td>
         <td>
+          <button class="btn btn-ghost btn-sm" onclick="toggleAccEnabled(${a.id})">${a.enabled?'停用':'启用'}</button>
           <button class="btn btn-ghost btn-sm" onclick="openAccModal(${a.id})">编辑</button>
           <button class="btn btn-ghost btn-sm" onclick="verifyAcc(${a.id})">校验</button>
           <button class="btn btn-danger btn-sm" onclick="delAcc(${a.id})">删除</button>
         </td>
       </tr>`).join('') : '<tr><td colspan="7" style="color:var(--muted)">暂无账号</td></tr>';
+    $('#accCheckAll').checked = false;
+    updateSelCount();
+    $('#btn-checkin-selected').disabled = true;
   } catch(e) { toast('加载账号失败', 'err'); }
+}
+
+// ---------- 账号多选 + 批量操作 ----------
+function getSelectedAccountIds() {
+  return Array.from(document.querySelectorAll('.acc-check:checked')).map(c=>+c.dataset.id);
+}
+function updateSelCount() {
+  const n = getSelectedAccountIds().length;
+  $('#batchBar').hidden = n === 0;
+  $('#selCount').textContent = n;
+  $('#btn-checkin-selected').disabled = n === 0;
+  const cbs = document.querySelectorAll('.acc-check');
+  if (cbs.length) $('#accCheckAll').checked = cbs.length === Array.from(cbs).filter(c=>c.checked).length;
+}
+const accCheckAllEl = $('#accCheckAll');
+const btnCheckinSel = $('#btn-checkin-selected');
+if (accCheckAllEl) accCheckAllEl.addEventListener('change', e=>{
+  document.querySelectorAll('.acc-check').forEach(c=>{ if(!c.disabled) c.checked = e.target.checked; });
+  updateSelCount();
+});
+document.addEventListener('change', e=>{
+  if (e.target.classList && e.target.classList.contains('acc-check')) updateSelCount();
+});
+const btnSelClear = $('#btn-sel-clear');
+if (btnSelClear) btnSelClear.onclick = ()=>{ document.querySelectorAll('.acc-check').forEach(c=>c.checked=false); updateSelCount(); };
+
+function batchSetEnabled(enabled) {
+  const ids = getSelectedAccountIds();
+  if (!ids.length) return;
+  Promise.all(ids.map(id=>api.put('/api/accounts/'+id, {enabled}))).then(()=>{
+    toast((enabled?'已启用':'已停用')+' '+ids.length+' 个账号', 'good');
+    loadAccounts();
+  }).catch(()=>toast('批量操作失败','err'));
+}
+const btnSelEnable = $('#btn-sel-enable'); if (btnSelEnable) btnSelEnable.onclick = ()=>batchSetEnabled(true);
+const btnSelDisable = $('#btn-sel-disable'); if (btnSelDisable) btnSelDisable.onclick = ()=>batchSetEnabled(false);
+if (btnCheckinSel) btnCheckinSel.onclick = ()=>{
+  const ids = getSelectedAccountIds();
+  if (!ids.length) { toast('请先勾选账号','err'); return; }
+  api.post('/api/checkin/run-accounts', {account_ids: ids}).then(r=>{
+    toast(r.message || '已启动手动签到', 'good');
+  }).catch(()=>toast('启动失败','err'));
+};
+async function toggleAccEnabled(id) {
+  const a = (window.__accounts||[]).find(x=>x.id===id);
+  if (!a) return;
+  try {
+    await api.put('/api/accounts/'+id, {enabled: !a.enabled});
+    toast(a.enabled?'已停用自动签到':'已启用自动签到', 'good');
+    loadAccounts();
+  } catch(e){ toast('操作失败','err'); }
 }
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 
@@ -462,44 +518,25 @@ $('#qrImportBtn').onclick = doQrImport;
 /* ===== 日志 ===== */
 async function loadLogs() {
   try {
-    const data = await api.get('/api/logs/grouped?limit=20');
+    const data = await api.get('/api/logs?limit=100');
     const list = $('#logList');
-    if (!data.length) {
+    if (!data || !data.length) {
       list.innerHTML = '<div style="color:var(--muted);padding:20px">暂无签到日志</div>';
       return;
     }
-    let html = '';
-    data.forEach((day) => {
-      html += `<div class="log-date"><span>📅 ${esc(day.date)}</span><span class="day-count">${day.groups.length} 次执行</span></div>`;
-      day.groups.forEach((g) => {
-        const total = g.success + g.fail;
-        const pct = total ? Math.round(g.success / total * 100) : 0;
-        const stateClass = g.status === 'success' ? 'is-success' : (g.status === 'failed' ? 'is-failed' : 'is-partial');
-        const rows = g.accounts.map(l => {
-          const det = (l.detail||[]).map(d=>`<span class="tag ${d.success?'ok':'bad'}"><b>${d.success?'✓':'×'}</b>${esc(d.name)}</span>`).join('');
-          const message = l.message ? `<span class="log-message">${esc(l.message)}</span>` : '';
-          const clock = esc((l.created_at||'').slice(11,16));
-          return `<div class="log-item">
-            <div class="log-account-line">
-              <div class="log-account-name"><span class="account-dot ${l.status==='success'?'ok':'bad'}"></span>${esc(l.account_name)}</div>
-              <div class="log-account-meta">${statusBadge(l.status)}<span class="log-count">${l.success}/${l.total} 成功</span><span class="log-time">${clock}</span></div>
-            </div>
-            ${det ? `<div class="log-detail">${det}</div>` : message}
-          </div>`;
-        }).join('');
-        const time = g.created_at ? g.created_at.slice(11,16) : '';
-        html += `<div class="log-task ${stateClass}">
-          <div class="task-head">
-            <div class="task-title"><span class="task-ico">${g.status === 'success' ? '✓' : (g.status === 'failed' ? '!' : '•')}</span><strong>${esc(time)}</strong><span class="task-label">执行记录</span></div>
-            <div class="task-summary">${statusBadge(g.status)} <span>${g.accounts.length} 个账号</span></div>
-          </div>
-          <div class="task-progress"><i style="width:${pct}%"></i></div>
-          <div class="task-meta"><span>成功 <b>${g.success}</b></span><span>失败 <b>${g.fail}</b></span><span>${pct}% 完成</span></div>
-          <div class="task-accounts">${rows}</div>
-        </div>`;
-      });
-    });
-    list.innerHTML = html;
+    list.innerHTML = data.map(l => {
+      const t = (l.created_at||'').slice(5,16);
+      const st = l.status==='success' ? '<span class="badge ok">成功</span>'
+              : l.status==='failed' ? '<span class="badge bad">失败</span>'
+              : '<span class="badge warn">部分</span>';
+      const cnt = (l.success!=null && l.total!=null) ? '<span class="log-count">'+l.success+'/'+l.total+'</span>' : '';
+      const msg = l.message ? '<span class="log-msg">'+esc(l.message)+'</span>' : '';
+      return '<div class="log-simple">' +
+        '<span class="log-simple-time">'+esc(t)+'</span>' +
+        '<span class="log-simple-name">'+esc(l.account_name||'')+'</span>' +
+        st + cnt + msg +
+      '</div>';
+    }).join('');
   } catch(e){ toast('加载日志失败','err'); }
 }
 $('#btn-refresh-logs').onclick = loadLogs;
