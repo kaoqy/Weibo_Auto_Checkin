@@ -26,3 +26,6 @@ ssh_tmp.py
 ssh_run.py
 remote_deploy.py
 .tmp-qr/
+
+# 本地备份目录（勿提交）
+backups/

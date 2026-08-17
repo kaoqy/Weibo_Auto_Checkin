@@ -69,7 +69,49 @@ async function loadDashboard() {
     renderDashAccounts(accounts);
     loadTrend();
     loadQuote();
+    loadNextRun();
   } catch(e) { toast('加载仪表盘失败', 'err'); }
+}
+
+/* ===== 下次定时签到倒计时（v7.1） ===== */
+let schedTimer = null;
+let schedLeft = null;
+function fmtLeft(sec) {
+  if (sec == null) return '';
+  if (sec <= 0) return '即将开始';
+  const d = Math.floor(sec/86400), h = Math.floor(sec%86400/3600),
+        m = Math.floor(sec%3600/60), s = sec%60;
+  if (d) return `${d} 天 ${h} 小时后`;
+  if (h) return `${h} 小时 ${m} 分后`;
+  if (m) return `${m} 分 ${s} 秒后`;
+  return `${s} 秒后`;
+}
+function paintCountdown() {
+  const el = $('#schedCountdown');
+  if (!el) return;
+  el.textContent = schedLeft == null ? '' : fmtLeft(schedLeft);
+  if (schedLeft != null && schedLeft > 0) schedLeft -= 1;
+}
+async function loadNextRun() {
+  const strip = $('#schedStrip');
+  if (!strip) return;
+  try {
+    const info = await api.get('/api/schedule/next');
+    if (!info.enabled) {
+      strip.hidden = false;
+      $('#schedText').textContent = '定时签到已关闭（可到设置里开启）';
+      schedLeft = null; paintCountdown();
+      return;
+    }
+    strip.hidden = false;
+    $('#schedText').textContent = info.next_run
+      ? `下次定时签到：${info.next_run}（cron ${info.cron}）`
+      : `定时已开启（cron ${info.cron}），尚未排程`;
+    schedLeft = info.seconds_left;
+    paintCountdown();
+    if (schedTimer) clearInterval(schedTimer);
+    schedTimer = setInterval(paintCountdown, 1000);
+  } catch(e) { strip.hidden = true; }
 }
 
 async function loadTrend() {
@@ -174,7 +216,7 @@ async function loadAccounts() {
         <td><strong>${esc(a.name)}</strong></td>
         <td>${a.enabled?statusBadge('success')+' 启用':'<span class="badge gray">已停用</span>'} <span style="color:var(--muted)">·</span> ${statusBadge(a.last_status)}</td>
         <td style="color:var(--muted)">${a.cookie_length} 字符</td>
-        <td>${a.proxy? '<span class="badge">'+esc(a.proxy.replace(/socks5.*@/,'socks5://***@').slice(0,28))+'</span>' : '<span class="badge gray">直连</span>'}</td>
+        <td>${a.proxy_label ? '<span class="badge">'+esc(a.proxy_label)+'</span>' : (a.proxy ? '<span class="badge">'+esc(a.proxy)+'</span>' : '<span class="badge gray">直连</span>')}</td>
         <td>${a.last_checkin||'从未'}</td>
         <td>
           <button class="btn btn-ghost btn-sm" onclick="toggleAccEnabled(${a.id})">${a.enabled?'停用':'启用'}</button>
@@ -251,8 +293,8 @@ async function toggleAccEnabled(id) {
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 
 let accModal = (()=>{})();
-async function populateProxySelect(sel, selected='') {
-  // 从管理的代理列表读取（含归属地），账号可选指定
+async function populateProxySelect(sel, selectedId=null) {
+  // v7.1：下拉用代理 id 作为值，不再把含密码的完整链接塞进 DOM
   let proxies = [];
   try {
     const list = await api.get('/api/proxies');
@@ -260,14 +302,12 @@ async function populateProxySelect(sel, selected='') {
       const cc = p.geo_country_code || '';
       const flag = cc ? (String.fromCodePoint(0x1F1E6+cc.charCodeAt(0)-65, 0x1F1E6+cc.charCodeAt(1)-65)) : '🌐';
       const name = p.label || (p.geo_country ? p.geo_country+' '+(p.geo_region||'') : (p.ip||'节点'));
-      return { url: p.url || `${p.ip}:${p.port}`, label: `${flag} ${name}${p.ip?' ('+p.ip+':'+p.port+')':''}` };
+      return { id: p.id, label: `${flag} ${name}${p.ip?' ('+p.ip+':'+p.port+')':''}` };
     });
   } catch(e) { /* 忽略 */ }
-  if (!proxies.length && selected) {
-    proxies = [{ url: selected, label: selected }];
-  }
-  const opt = (v, t) => `<option value="${esc(v)}"${v===selected?' selected':''}>${esc(t)}</option>`;
-  sel.innerHTML = opt('', '自动 / 直连') + proxies.map(p => opt(p.url, p.label)).join('');
+  const cur = selectedId == null ? '' : String(selectedId);
+  const opt = (v, t) => `<option value="${esc(v)}"${String(v)===cur?' selected':''}>${esc(t)}</option>`;
+  sel.innerHTML = opt('', '自动 / 直连') + proxies.map(p => opt(p.id, p.label)).join('');
 }
 
 function openAccModal(id=null) {
@@ -275,14 +315,14 @@ function openAccModal(id=null) {
   $('#accModalTitle').textContent = id ? '编辑账号' : '添加账号';
   $('#m-name').value = ''; $('#m-cookie').value = ''; $('#m-remark').value='';
   $('#m-enabled').checked = true;
-  populateProxySelect($('#m-proxy'), '');
+  populateProxySelect($('#m-proxy'), null);
   if (id) {
     api.get('/api/accounts/'+id).then(a=>{
       $('#m-name').value = a.name;
       $('#m-cookie').value = a.cookie_raw || a.cookie || '';
       $('#m-remark').value = a.remark||'';
       $('#m-enabled').checked = !!a.enabled;
-      populateProxySelect($('#m-proxy'), a.proxy || '');
+      populateProxySelect($('#m-proxy'), a.proxy_id ?? null);
     });
   }
   $('#accModal').hidden = false;
@@ -295,12 +335,11 @@ $('#accModalSave').onclick = async () => {
     cookie_raw: $('#m-cookie').value.trim(),
     remark: $('#m-remark').value.trim(),
     enabled: $('#m-enabled').checked,
-    proxy: $('#m-proxy').value,
+    proxy_id: $('#m-proxy').value ? +$('#m-proxy').value : 0,
   };
   try {
     if (editingId) await api.put('/api/accounts/'+editingId, body);
     else await api.post('/api/accounts', body);
-    $('#accModal').hidden = false;
     toast('保存成功', 'good');
     $('#accModal').hidden = true;
     loadAccounts(); loadDashboard();

@@ -293,6 +293,52 @@ def get_proxies(include_disabled: bool = True) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def mask_proxy_url(url: str) -> str:
+    """把 socks5://user:pass@host:port 打码成 socks5://***@host:port（v7.1）。
+
+    面板/API 只应看到打码结果；真实凭据只在服务端发起请求时使用。
+    """
+    s = (url or "").strip()
+    if not s:
+        return ""
+    if "@" not in s:
+        return s
+    head, _, tail = s.partition("://")
+    if not tail:
+        return "***@" + s.split("@", 1)[-1]
+    return f"{head}://***@" + tail.split("@", 1)[-1]
+
+
+def find_proxy_by_url(url: str) -> dict | None:
+    """按完整链接反查代理记录（用于账号 proxy 字段 → 代理 id 映射）。"""
+    s = (url or "").strip()
+    if not s:
+        return None
+    for p in get_proxies(include_disabled=True):
+        full = p.get("url") or build_proxy_url(p)
+        if full and full == s:
+            return p
+    # 退化匹配：host:port 相同即认为同一节点
+    tail = s.split("@", 1)[-1]
+    for p in get_proxies(include_disabled=True):
+        if p.get("ip") and f"{p['ip']}:{p.get('port')}" == tail:
+            return p
+    return None
+
+
+def proxy_display_label(p: dict) -> str:
+    """代理的人类可读名称（不含凭据）。"""
+    if not p:
+        return ""
+    if p.get("label"):
+        return str(p["label"])
+    if p.get("geo_country"):
+        return f"{p['geo_country']} {p.get('geo_region') or ''}".strip()
+    if p.get("ip"):
+        return f"{p['ip']}:{p.get('port')}"
+    return "代理节点"
+
+
 def build_proxy_url(p: dict) -> str:
     """由字段拼接 socks5 链接。"""
     ip, port = p.get("ip", ""), p.get("port", 0)

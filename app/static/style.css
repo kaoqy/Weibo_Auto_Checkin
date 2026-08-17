@@ -229,6 +229,13 @@ input[type="checkbox"]{accent-color:var(--accent);width:15px;height:15px;cursor:
 @keyframes barGrow{from{transform:scaleY(.05);transform-origin:bottom}to{transform:scaleY(1);transform-origin:bottom}}
 .quote{margin:2px 0 8px;padding:12px 14px;border-left:3px solid var(--accent);background:var(--surface-2);border-radius:0 10px 10px 0;font-size:14px;line-height:1.65;animation:softPop .3s ease both}
 .quote-from{color:var(--muted);font-size:12px;text-align:right;margin-bottom:10px}
+
+/* 下次定时签到提示条（v7.1） */
+.sched-strip{display:flex;align-items:center;gap:10px;margin:-4px 0 18px;padding:10px 14px;border:1px solid var(--line);border-radius:12px;background:var(--surface);font-size:13px;box-shadow:var(--shadow);animation:softPop .25s ease both}
+.sched-icon{font-size:15px}
+.sched-text{color:var(--muted);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sched-countdown{margin-left:auto;font-weight:600;font-variant-numeric:tabular-nums;color:var(--accent);white-space:nowrap}
+@media(max-width:560px){.sched-strip{flex-wrap:wrap}.sched-countdown{margin-left:0}}
 @media(max-width:900px){.dash-row{grid-template-columns:1fr}}
 .view:not([hidden]){animation:viewEnter .24s ease both}
 .batch-bar:not([hidden]){animation:softPop .2s ease both}

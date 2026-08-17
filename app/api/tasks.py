@@ -65,6 +65,12 @@ def last_run(user: dict = Depends(auth.require_admin)):
     return {"summary": scheduler._last_run_summary}
 
 
+@router.get("/schedule/next")
+def schedule_next(user: dict = Depends(auth.require_admin)):
+    """下一次定时签到时间（v7.1），面板用于展示倒计时。"""
+    return scheduler.next_run_info()
+
+
 @router.get("/tasks")
 def list_tasks(limit: int = 20, user: dict = Depends(auth.require_admin)):
     return database.get_tasks(limit)

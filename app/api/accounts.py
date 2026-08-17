@@ -17,6 +17,7 @@ class AccountIn(BaseModel):
     cookie_raw: str = ""
     enabled: bool = True
     proxy: str = ""
+    proxy_id: int | None = None      # v7.1：按代理 id 绑定（推荐）
     proxy_index: int | None = None   # 兼容旧字段
     remark: str = ""
 
@@ -27,17 +28,47 @@ class AccountUpdate(BaseModel):
     cookie_raw: str | None = None
     enabled: bool | None = None
     proxy: str | None = None
+    proxy_id: int | None = None      # v7.1
     proxy_index: int | None = None   # 兼容旧字段
     remark: str | None = None
 
 
+def _resolve_proxy(payload: dict, current: str = "") -> dict:
+    """把前端传来的代理引用解析成服务端真实链接（v7.1）。
+
+    规则：
+    - 传 `proxy_id`（>0）→ 用数据库里的真实链接；`proxy_id=0` 表示改为直连。
+    - 传 `proxy` 且带 `***`（打码回传）→ 视为“不修改”，保留原值。
+    - 其余情况按原样使用（兼容老前端/脚本直接传完整链接）。
+    """
+    payload = dict(payload)
+    pid = payload.pop("proxy_id", None)
+    if pid is not None:
+        if not pid:
+            payload["proxy"] = ""
+            return payload
+        p = database.get_proxy(int(pid))
+        if not p:
+            raise HTTPException(400, "指定的代理不存在")
+        payload["proxy"] = p.get("url") or database.build_proxy_url(p)
+        return payload
+    if "proxy" in payload and "***" in (payload.get("proxy") or ""):
+        payload["proxy"] = current
+    return payload
+
+
 def _public(acc: dict) -> dict:
-    # 隐藏完整 cookie 中的敏感字段？这里保留，但前端仅展示长度/状态。
+    """对外输出：不泄露 cookie 全文，也不泄露代理凭据（v7.1）。"""
     acc = dict(acc)
     cookie = acc.get("cookie") or acc.get("cookie_raw") or ""
     acc["cookie_length"] = len(cookie) if cookie else 0
     acc["cookie_preview"] = (cookie[:20] + "…") if len(cookie) > 20 else cookie
-    acc["proxy"] = acc.get("proxy", "") or ""
+    raw_proxy = acc.get("proxy", "") or ""
+    # 代理只对外给“打码链接 + 可读名称 + 引用 id”，不给明文密码。
+    acc["proxy"] = database.mask_proxy_url(raw_proxy)
+    matched = database.find_proxy_by_url(raw_proxy) if raw_proxy else None
+    acc["proxy_id"] = matched["id"] if matched else None
+    acc["proxy_label"] = database.proxy_display_label(matched) if matched else ""
     return acc
 
 
@@ -49,8 +80,9 @@ def list_accounts(user: dict = Depends(auth.require_admin)):
 
 @router.post("")
 def create_account(data: AccountIn, user: dict = Depends(auth.require_admin)):
-    acc_id = database.add_account(data.model_dump())
-    return {"id": acc_id, **data.model_dump()}
+    payload = _resolve_proxy(data.model_dump())
+    acc_id = database.add_account(payload)
+    return _public(database.get_account(acc_id))
 
 
 @router.get("/{account_id}")
@@ -63,9 +95,11 @@ def get_one(account_id: int, user: dict = Depends(auth.require_admin)):
 
 @router.put("/{account_id}")
 def update_one(account_id: int, data: AccountUpdate, user: dict = Depends(auth.require_admin)):
-    if not database.get_account(account_id):
+    existing = database.get_account(account_id)
+    if not existing:
         raise HTTPException(404, "账号不存在")
     payload = {k: v for k, v in data.model_dump().items() if v is not None}
+    payload = _resolve_proxy(payload, existing.get("proxy") or "")
     database.update_account(account_id, payload)
     return _public(database.get_account(account_id))
 
@@ -90,9 +124,10 @@ def verify_one(account_id: int, user: dict = Depends(auth.require_admin)):
     if not cookie:
         return {"valid": False, "message": "Cookie 为空"}
     opts = CheckinOptions.from_settings(database.get_setting)
-    proxy = None
-    channel = "direct"
-    if opts.proxies:
+    # v7.1：优先用账号自己绑定的代理校验，与实际签到链路保持一致
+    proxy = (acc.get("proxy") or "").strip() or None
+    channel = "socks" if proxy else "direct"
+    if not proxy and opts.proxies:
         idx = (acc.get("proxy_index") or 0) % len(opts.proxies)
         proxy = opts.proxies[idx]
         channel = "socks"

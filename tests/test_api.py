@@ -512,3 +512,98 @@ def test_old_logs_channel_is_masked(tmp_path, monkeypatch):
     flat = [a["channel"] for day in grouped for g in day["groups"] for a in g["accounts"]]
     assert all("secretpass" not in c for c in flat)
     db._local.conn = None
+
+
+# ===================== v7.1：代理凭据不出网 + 定时倒计时 =====================
+
+@pytest.fixture()
+def no_geo(monkeypatch):
+    """屏蔽归属地识别的真实网络请求（沙箱无外网时会超时拖慢测试）。"""
+    import app.proxy_geo as proxy_geo
+    monkeypatch.setattr(proxy_geo, "detect",
+                        lambda url, use_cache=True: {"ok": False, "message": "skipped"})
+    yield
+
+
+def test_proxy_api_never_leaks_credentials(client, no_geo):
+    """代理列表/详情接口不得返回明文密码或完整含认证的链接。"""
+    r = client.post("/api/proxies", json={
+        "url": "socks5://puser:supersecret@9.9.9.9:1080", "label": "测试节点",
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert "supersecret" not in str(body)
+    assert body["password"] == "***"
+    assert body["url"] == "socks5://***@9.9.9.9:1080"
+    assert body["has_auth"] is True
+
+    lst = client.get("/api/proxies").json()
+    assert "supersecret" not in str(lst)
+
+
+def test_proxy_update_keeps_password_when_link_has_no_auth(client, no_geo):
+    """只改 label 或提交不带认证的链接时，不能把已有密码洗掉。"""
+    pid = client.post("/api/proxies", json={
+        "url": "socks5://puser:supersecret@9.9.9.9:1080",
+    }).json()["id"]
+
+    # 前端回填的是打码密码，不应写入库
+    client.put(f"/api/proxies/{pid}", json={"password": "***", "label": "改名"})
+    assert db.get_proxy(pid)["password"] == "supersecret"
+
+    # 提交不带认证的链接，认证信息保留
+    client.put(f"/api/proxies/{pid}", json={"url": "socks5://9.9.9.9:1080"})
+    p = db.get_proxy(pid)
+    assert p["password"] == "supersecret" and p["username"] == "puser"
+
+
+def test_account_binds_proxy_by_id_without_exposing_url(client, no_geo):
+    """账号按 proxy_id 绑定代理；对外只给打码链接与可读名称。"""
+    pid = client.post("/api/proxies", json={
+        "url": "socks5://auser:apass@8.8.8.8:1080", "label": "东京节点",
+    }).json()["id"]
+
+    acc = client.post("/api/accounts", json={
+        "name": "A", "cookie_raw": "SUB=x", "proxy_id": pid,
+    }).json()
+    assert acc["proxy_id"] == pid
+    assert acc["proxy_label"] == "东京节点"
+    assert "apass" not in str(acc)
+    assert acc["proxy"] == "socks5://***@8.8.8.8:1080"
+
+    # 服务端仍存真实链接，签到才能用
+    assert db.get_account(acc["id"])["proxy"] == "socks5://auser:apass@8.8.8.8:1080"
+
+    # 打码值回传不应破坏已存链接
+    client.put(f"/api/accounts/{acc['id']}", json={"proxy": acc["proxy"]})
+    assert db.get_account(acc["id"])["proxy"] == "socks5://auser:apass@8.8.8.8:1080"
+
+    # proxy_id=0 → 改为直连
+    client.put(f"/api/accounts/{acc['id']}", json={"proxy_id": 0})
+    assert db.get_account(acc["id"])["proxy"] == ""
+
+    # 不存在的代理 id → 400
+    assert client.put(f"/api/accounts/{acc['id']}",
+                      json={"proxy_id": 99999}).status_code == 400
+
+
+def test_mask_proxy_url_helper():
+    assert db.mask_proxy_url("") == ""
+    assert db.mask_proxy_url("socks5://1.2.3.4:1080") == "socks5://1.2.3.4:1080"
+    assert db.mask_proxy_url("socks5://u:p@1.2.3.4:1080") == "socks5://***@1.2.3.4:1080"
+    assert "p@" not in db.mask_proxy_url("socks5://u:p@1.2.3.4:1080")
+
+
+def test_schedule_next_api(client):
+    """下次定时签到接口：开启时给 cron，关闭时 enabled=False。"""
+    client.post("/api/settings", json={"schedule_enabled": "1",
+                                       "schedule_cron": "0 7 * * *"})
+    client.post("/api/settings/reload-schedule")
+    info = client.get("/api/schedule/next").json()
+    assert info["enabled"] is True
+    assert info["cron"] == "0 7 * * *"
+
+    client.post("/api/settings", json={"schedule_enabled": "0"})
+    info = client.get("/api/schedule/next").json()
+    assert info["enabled"] is False
+    assert info["next_run"] is None

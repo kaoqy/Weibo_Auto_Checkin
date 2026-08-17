@@ -53,11 +53,19 @@ def _parse_link(url: str) -> dict:
 
 
 def _public(p: dict) -> dict:
+    """对外输出：绝不返回含认证信息的完整代理链接（v7.1）。
+
+    历史版本把 `url` 原样返回，浏览器 DevTools / 任意 API 调用方都能拿到
+    socks5://user:pass@host:port 的明文密码。现在只返回打码链接，
+    真实链接仅在服务端（调度器直接读数据库）使用。
+    """
     p = dict(p)
-    p["url"] = p.get("url", "") or ""
+    raw = p.get("url", "") or ""
+    if not raw and p.get("ip"):
+        raw = database.build_proxy_url(p)
     p["password"] = "***" if p.get("password") else ""
-    if not p.get("url") and p.get("ip"):
-        p["url"] = database.build_proxy_url(p)
+    p["has_auth"] = bool(p.get("username") or p.get("password"))
+    p["url"] = database.mask_proxy_url(raw)
     return p
 
 
@@ -92,16 +100,21 @@ def create_proxy(data: ProxyIn, user: dict = Depends(auth.require_admin)):
 
 @router.put("/{proxy_id}")
 def update_one(proxy_id: int, data: ProxyUpdate, user: dict = Depends(auth.require_admin)):
-    if not database.get_proxy(proxy_id):
+    existing = database.get_proxy(proxy_id)
+    if not existing:
         raise HTTPException(404, "代理不存在")
     payload = {k: v for k, v in data.model_dump().items() if v is not None}
-    # 若更新了 url，重新解析/识别
+    # 前端不会回填密码，打码占位符一律忽略，避免把 "***" 当真密码存进库。
+    if payload.get("password") in ("***", "•••"):
+        payload.pop("password", None)
+    # 若更新了 url，重新解析；但链接里没带认证时不要把已有账密洗成空（v7.1 修复）。
     if "url" in payload and payload["url"]:
         parsed = _parse_link(payload["url"])
         for k, v in parsed.items():
+            if k in ("username", "password") and not v:
+                continue   # 链接未带认证 → 保留原有凭据
             payload.setdefault(k, v)
     if payload.get("ip"):
-        existing = database.get_proxy(proxy_id)
         merged = dict(existing)
         merged.update(payload)
         url = database.build_proxy_url(merged) or payload.get("url", existing.get("url", ""))

@@ -242,6 +242,30 @@ def _fire_scheduled():
     run_checkin(trigger_type="schedule")
 
 
+def next_run_info() -> dict:
+    """返回下一次定时签到的信息（v7.1）。
+
+    {enabled, cron, next_run, seconds_left}；next_run 为本地时间字符串或 None。
+    """
+    enabled = database.get_setting("schedule_enabled", "1") == "1"
+    cron_expr = database.get_setting("schedule_cron", "0 7 * * *")
+    info = {"enabled": enabled, "cron": cron_expr,
+            "next_run": None, "seconds_left": None}
+    if not enabled:
+        return info
+    job = scheduler.get_job("weibo_checkin")
+    nxt = getattr(job, "next_run_time", None) if job else None
+    if not nxt:
+        return info
+    info["next_run"] = nxt.strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        delta = (nxt - datetime.now(nxt.tzinfo)).total_seconds()
+        info["seconds_left"] = int(delta) if delta > 0 else 0
+    except Exception:
+        pass
+    return info
+
+
 def reload_schedule() -> None:
     """根据当前设置重建定时签到任务。
 

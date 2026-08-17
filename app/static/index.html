@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>微博超话签到管理面板</title>
-  <link rel="stylesheet" href="/style.css?v=7.0" />
+  <link rel="stylesheet" href="/style.css?v=7.1" />
   <script>!function(){try{const t=localStorage.getItem('wcm-theme')||'system';document.documentElement.dataset.theme=t}catch(e){}}()</script>
 </head>
 <body>
@@ -64,6 +64,11 @@
       <!-- 仪表盘 -->
       <section class="view" id="view-dashboard">
         <div class="stat-grid" id="statGrid"></div>
+        <div class="sched-strip" id="schedStrip" hidden>
+          <span class="sched-icon">⏰</span>
+          <span class="sched-text" id="schedText">—</span>
+          <span class="sched-countdown" id="schedCountdown"></span>
+        </div>
         <div class="dash-row">
           <div class="card trend-card">
             <div class="card-head"><h2>近 7 天签到趋势</h2><span class="hint" id="trendHint"></span></div>
@@ -322,6 +327,6 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <script src="/app.js?v=7.0"></script>
+  <script src="/app.js?v=7.1"></script>
 </body>
 </html>

@@ -42,15 +42,16 @@ const mockLogs = [
   { id: 1, account_name: '小号B', status: 'failed', total: 0, success: 0, fail: 0, channel: 'SOCKS5 代理', message: 'Cookie 无效', created_at: '2026-08-17 07:00:02' },
 ];
 const mockAccounts = [
-  { id: 1, name: '小号A', enabled: 1, last_status: 'success', last_checkin: '2026-08-14 07:00:00', last_message: '签到完成', cookie_length: 40, cookie_preview: 'SUB=xxx…', remark: '', proxy_index: 0 },
-  { id: 2, name: '小号B', enabled: 1, last_status: 'failed', last_checkin: null, last_message: 'Cookie 无效', cookie_length: 0, cookie_preview: '', remark: '', proxy_index: 0 },
+  { id: 1, name: '小号A', enabled: 1, last_status: 'success', last_checkin: '2026-08-14 07:00:00', last_message: '签到完成', cookie_length: 40, cookie_preview: 'SUB=xxx…', remark: '', proxy: 'socks5://***@1.2.3.4:1080', proxy_id: 1, proxy_label: '香港节点' },
+  { id: 2, name: '小号B', enabled: 1, last_status: 'failed', last_checkin: null, last_message: 'Cookie 无效', cookie_length: 0, cookie_preview: '', remark: '', proxy: '', proxy_id: null, proxy_label: '' },
 ];
 const mockTasks = [
   { task_id: 'abc123', trigger_type: 'schedule', status: 'success', started_at: '2026-08-14 07:00:00', finished_at: '2026-08-14 07:00:05' },
 ];
 const mockProxies = [
-  { id: 1, label: '香港节点', ip: '1.2.3.4', port: 1080, geo_country: '中国', geo_region: '香港', geo_country_code: 'CN', enabled: 1 },
+  { id: 1, label: '香港节点', ip: '1.2.3.4', port: 1080, url: 'socks5://***@1.2.3.4:1080', password: '***', has_auth: true, geo_country: '中国', geo_region: '香港', geo_country_code: 'CN', enabled: 1 },
 ];
+const mockNextRun = { enabled: true, cron: '0 7 * * *', next_run: '2026-08-18 07:00:00', seconds_left: 3600 };
 const mockSettings = {
   tg_enabled: '1', tg_bot_token: 'tok', tg_user_id: '123', schedule_enabled: '1',
   schedule_cron: '0 7 * * *', anti_ban_enabled: '1', anti_ban_wait_min: '120',
@@ -73,6 +74,7 @@ function mockFetch(url) {
     '/api/logs': { ok: true, json: () => Promise.resolve(mockLogs) },
     '/api/logs/trend': { ok: true, json: () => Promise.resolve(mockTrend) },
     '/api/quote': { ok: true, json: () => Promise.resolve(mockQuote) },
+    '/api/schedule/next': { ok: true, json: () => Promise.resolve(mockNextRun) },
     '/api/checkin/status': { ok: true, json: () => Promise.resolve({ running: false }) },
     '/api/checkin/last': { ok: true, json: () => Promise.resolve({ summary: { status:'success', accounts:2, success:38, fail:2 } }) },
   };
@@ -115,6 +117,9 @@ function check(name, cond) {
   check('7 天趋势柱渲染', window.document.querySelectorAll('#trendChart .trend-col').length === 7);
   check('每日一言展示', window.document.querySelector('#quoteBox').textContent.includes('日拱一卒'));
   check('每日一言出处', window.document.querySelector('#quoteFrom').textContent.includes('网络'));
+  check('下次定时签到提示条可见', window.document.querySelector('#schedStrip').hidden === false);
+  check('提示条显示下次时间', window.document.querySelector('#schedText').textContent.includes('2026-08-18 07:00:00'));
+  check('倒计时已渲染', /小时|分|秒|即将/.test(window.document.querySelector('#schedCountdown').textContent));
 
   console.log('— 导航 —');
   check('5 个导航项', window.document.querySelectorAll('.nav-item').length === 5);
@@ -125,6 +130,10 @@ function check(name, cond) {
   await new Promise(r => setTimeout(r, 200));
   check('账号表渲染 2 行', window.document.querySelectorAll('#accTable tbody tr').length === 2);
   check('账号名正确', window.document.querySelector('#accTable tbody tr').textContent.includes('小号A'));
+  const accTableText = window.document.querySelector('#accTable').textContent;
+  check('账号行显示代理可读名称', accTableText.includes('香港节点'));
+  check('账号行不含代理明文链接', !accTableText.includes('socks5://') && !accTableText.includes('@1.2.3.4'));
+  check('账号行显示直连', accTableText.includes('直连'));
 
   if (errs.length) { console.log('⚠️ window 错误:', errs); }
   console.log('— 代理页 —');
@@ -170,6 +179,10 @@ function check(name, cond) {
   window.document.querySelector('#btn-add-acc').click();
   check('添加账号弹窗打开', window.document.querySelector('#accModal').hidden === false);
   check('弹窗标题为"添加账号"', window.document.querySelector('#accModalTitle').textContent === '添加账号');
+  await new Promise(r => setTimeout(r, 150));
+  const proxyOpts = [...window.document.querySelectorAll('#m-proxy option')];
+  check('代理下拉用 id 作为值', proxyOpts.some(o => o.value === '1'));
+  check('代理下拉不含明文链接', !proxyOpts.some(o => o.value.includes('socks5://')));
   // 填表并保存
   window.document.querySelector('#m-name').value = '新账号';
   window.document.querySelector('#m-cookie').value = 'SUB=new';
