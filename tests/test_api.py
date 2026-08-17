@@ -480,3 +480,35 @@ def test_reload_schedule_keeps_maintenance_jobs(tmp_path, monkeypatch):
     assert sched.scheduler.get_job("log_purge") is not None
     assert sched.scheduler.get_job("weibo_checkin") is not None
     db._local.conn = None
+
+
+def test_old_logs_channel_is_masked(tmp_path, monkeypatch):
+    """历史日志里存的完整代理 URL 不能在读取时泄漏凭据。"""
+    import app.database as db
+
+    db_path = tmp_path / "test_mask.db"
+    monkeypatch.setattr(db, "DB_PATH", db_path)
+    db._local.conn = None
+    db.init_db()
+
+    db.add_log({
+        "account_name": "old", "task_id": "old1", "status": "success",
+        "channel": "socks[socks5://user:secretpass@1.2.3.4:1080]",
+        "total": 1, "success": 1, "fail": 0, "detail": [], "message": "ok",
+    })
+    db.add_log({
+        "account_name": "old2", "task_id": "old2", "status": "success",
+        "channel": "direct[__direct__]",
+        "total": 1, "success": 1, "fail": 0, "detail": [], "message": "ok",
+    })
+
+    logs = db.get_logs(10)
+    channels = [l["channel"] for l in logs]
+    assert "SOCKS5 代理" in channels and "直连" in channels
+    joined = " ".join(channels)
+    assert "secretpass" not in joined and "@" not in joined
+
+    grouped = db.get_logs_grouped(10)
+    flat = [a["channel"] for day in grouped for g in day["groups"] for a in g["accounts"]]
+    assert all("secretpass" not in c for c in flat)
+    db._local.conn = None

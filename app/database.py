@@ -421,6 +421,32 @@ def add_log(entry: dict) -> int:
     return cur.lastrowid
 
 
+def _safe_channel(value: str) -> str:
+    """读取层脱敏：旧日志可能存了完整代理 URL（含用户名密码），
+    统一折叠为“SOCKS5 代理 / 直连”，避免历史数据在面板泄露凭据。"""
+    s = (value or "").strip()
+    if not s:
+        return ""
+    low = s.lower()
+    if "socks" in low:
+        return "SOCKS5 代理"
+    if "direct" in low or "直连" in s:
+        return "直连"
+    if "@" in s:  # 其他带认证信息的形式，一律不展示原值
+        return "代理"
+    return s
+
+
+def _row_to_log(row) -> dict:
+    d = dict(row)
+    try:
+        d["detail"] = json.loads(d["detail"]) if d["detail"] else []
+    except json.JSONDecodeError:
+        d["detail"] = []
+    d["channel"] = _safe_channel(d.get("channel", ""))
+    return d
+
+
 def get_logs(limit: int = 50, account_id: int | None = None) -> list[dict]:
     conn = _get_conn()
     if account_id is not None:
@@ -433,15 +459,7 @@ def get_logs(limit: int = 50, account_id: int | None = None) -> list[dict]:
         rows = conn.execute(
             "SELECT * FROM checkin_logs ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
-    result = []
-    for r in rows:
-        d = dict(r)
-        try:
-            d["detail"] = json.loads(d["detail"]) if d["detail"] else []
-        except json.JSONDecodeError:
-            d["detail"] = []
-        result.append(d)
-    return result
+    return [_row_to_log(r) for r in rows]
 
 
 def get_log_stats() -> dict:
@@ -552,12 +570,7 @@ def get_logs_grouped(limit: int = 20) -> list[dict]:
     ).fetchall()
     entries = []
     for r in reversed(rows):  # 变回时间正序
-        d = dict(r)
-        try:
-            d["detail"] = json.loads(d["detail"]) if d["detail"] else []
-        except json.JSONDecodeError:
-            d["detail"] = []
-        entries.append(d)
+        entries.append(_row_to_log(r))
 
     # 按 task_id 归组
     tasks = {}
