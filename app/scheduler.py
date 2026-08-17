@@ -243,11 +243,14 @@ def _fire_scheduled():
 
 
 def reload_schedule() -> None:
-    """根据当前设置重建定时任务。"""
-    global scheduler
-    # 清空现有任务
-    for job in list(scheduler.get_jobs()):
-        job.remove()
+    """根据当前设置重建定时签到任务。
+
+    注意：只能移除签到任务本身（weibo_checkin），不能清空全部 job，
+    否则会误删 browser_sweep / log_purge 等维护任务。
+    """
+    existing = scheduler.get_job("weibo_checkin")
+    if existing:
+        existing.remove()
 
     enabled = database.get_setting("schedule_enabled", "1") == "1"
     cron_expr = database.get_setting("schedule_cron", "0 7 * * *")

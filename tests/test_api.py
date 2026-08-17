@@ -452,3 +452,31 @@ def test_report_includes_quote_and_respects_only_on_change(tmp_path, monkeypatch
     assert notifier.send_checkin_report(bad) is True
     assert sent["title"].startswith("⚠️")
     db._local.conn = None
+
+
+def test_reload_schedule_keeps_maintenance_jobs(tmp_path, monkeypatch):
+    """reload_schedule 不能误删 browser_sweep / log_purge 等维护任务。"""
+    import app.database as db
+    import app.scheduler as sched
+
+    db_path = tmp_path / "test_sched.db"
+    monkeypatch.setattr(db, "DB_PATH", db_path)
+    db._local.conn = None
+    db.init_db()
+    db.set_settings({"schedule_enabled": "1", "schedule_cron": "0 7 * * *"})
+
+    for jid in ("weibo_checkin", "browser_sweep", "log_purge"):
+        job = sched.scheduler.get_job(jid)
+        if job:
+            job.remove()
+    sched.scheduler.add_job(lambda: None, trigger="interval", minutes=3,
+                            id="browser_sweep", max_instances=1, coalesce=True)
+    sched.scheduler.add_job(lambda: None, trigger="interval", hours=24,
+                            id="log_purge", max_instances=1, coalesce=True)
+
+    sched.reload_schedule()
+
+    assert sched.scheduler.get_job("browser_sweep") is not None
+    assert sched.scheduler.get_job("log_purge") is not None
+    assert sched.scheduler.get_job("weibo_checkin") is not None
+    db._local.conn = None
