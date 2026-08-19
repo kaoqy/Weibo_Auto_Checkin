@@ -145,8 +145,12 @@ do_update() {
   log "拉取最新镜像 ..."
   docker pull "${IMAGE}" || err "镜像拉取失败"
 
-  log "重建容器（数据在 $DATA_DIR，不会丢失）..."
-  docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
+  log "停止并删除旧容器 ..."
+  docker stop weibo-checkin 2>/dev/null || true
+  docker rm weibo-checkin 2>/dev/null || true
+
+  log "启动新容器（数据在 $DATA_DIR，不会丢失）..."
+  docker compose -f "$COMPOSE_FILE" up -d
   wait_health
 
   NEW_VER="$(docker exec weibo-checkin sh -c 'echo ok' >/dev/null 2>&1 && \
