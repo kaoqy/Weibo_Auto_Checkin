@@ -53,6 +53,9 @@ ENV PATH="/opt/venv/bin:$PATH"
 RUN /opt/venv/bin/pip uninstall -y pip setuptools 2>/dev/null || true \
     && find /opt/venv -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 
+# 强制重新构建（确保修复生效）
+RUN echo "Build timestamp: $(date)" > /build-info.txt
+
 # 安装 Playwright 的 headless Chromium（不装 ffmpeg，扫码用不到；清理下载缓存减体积）
 RUN /opt/venv/bin/playwright install chromium-headless-shell \
     && (rm -rf /root/.cache/ms-playwright/ffmpeg-* 2>/dev/null || true) \
