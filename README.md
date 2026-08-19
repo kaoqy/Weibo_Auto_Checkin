@@ -22,12 +22,15 @@
 方式一：**App 镜像一键部署（推荐，无需源码）**
 
 ```bash
-# 下载脚本后运行（root）
+# 下载脚本后运行
+curl -o install.sh https://raw.githubusercontent.com/kaoqy/Weibo_Auto_Checkin/main/install.sh
+chmod +x install.sh
 bash install.sh            # 默认端口 8000
 bash install.sh 8080       # 指定端口
 ```
 
 脚本会自动：安装 Docker → 拉取镜像 → 启动容器 → 等待健康。完成后访问 `http://<服务器IP>:<端口>`，**首次进入初始化页设置管理员账号密码**。
+
 
 ## 🔄 更新到最新版
 
