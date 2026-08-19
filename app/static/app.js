@@ -670,6 +670,78 @@ $('#batchImportModalSave').onclick = async () => {
   finally { btn.disabled = false; btn.textContent = old; }
 };
 
+/* ===== 导出/导入 JSON ===== */
+$('#btn-export').onclick = async () => {
+  try {
+    const data = await api.get('/api/accounts/export');
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `weibo-accounts-${new Date().toISOString().slice(0,10)}.json`;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast(`已导出 ${data.count} 个账号`, 'ok');
+  } catch(e) { toast('导出失败', 'err'); }
+};
+
+let importData = null;
+$('#btn-import').onclick = () => {
+  importData = null;
+  $('#importFile').value = '';
+  $('#importResult').innerHTML = '';
+  $('#importModalSave').disabled = true;
+  $('#importModal').hidden = false;
+};
+$('#importModalClose').onclick = $('#importModalCancel').onclick = () => {
+  $('#importModal').hidden = true;
+  importData = null;
+};
+$('#importFile').onchange = (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    try {
+      const data = JSON.parse(ev.target.result);
+      if (!data.accounts || !Array.isArray(data.accounts)) {
+        $('#importResult').innerHTML = '<span style="color:var(--red)">JSON 格式错误：需要 accounts 数组</span>';
+        $('#importModalSave').disabled = true;
+        return;
+      }
+      importData = data.accounts;
+      $('#importResult').innerHTML = `<span style="color:var(--green)">✓ 检测到 ${data.accounts.length} 个账号，准备导入</span>`;
+      $('#importModalSave').disabled = false;
+    } catch(err) {
+      $('#importResult').innerHTML = '<span style="color:var(--red)">JSON 解析失败</span>';
+      $('#importModalSave').disabled = true;
+    }
+  };
+  reader.readAsText(file);
+};
+$('#importModalSave').onclick = async () => {
+  if (!importData) return;
+  const btn = $('#importModalSave');
+  btn.disabled = true; const old = btn.textContent; btn.textContent = '导入中…';
+  try {
+    const r = await api.post('/api/accounts/import', { accounts: importData, overwrite: false });
+    let html = `<b style="color:var(--green)">✅ 导入完成：新增 ${r.added}，更新 ${r.updated}，跳过 ${r.skipped}</b>`;
+    if (r.errors && r.errors.length) {
+      html += '<ul style="text-align:left;max-height:120px;overflow-y:auto;margin:6px 0 0">';
+      r.errors.slice(0, 10).forEach(e => { html += `<li style="color:var(--red);font-size:12px">${esc(e)}</li>`; });
+      if (r.errors.length > 10) html += `<li style="color:var(--muted);font-size:12px">…还有 ${r.errors.length - 10} 条</li>`;
+      html += '</ul>';
+    }
+    $('#importResult').innerHTML = html;
+    if (r.added > 0 || r.updated > 0) {
+      loadAccounts();
+      loadDashboard();
+    }
+  } catch(e) { toast('导入失败', 'err'); }
+  finally { btn.disabled = false; btn.textContent = old; }
+};
+
 /* ===== 日志 ===== */
 let logCache = [];
 let logTotal = 0;

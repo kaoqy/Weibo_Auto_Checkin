@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>微博超话签到管理面板</title>
-  <link rel="stylesheet" href="/style.css?v=7.3" />
+  <link rel="stylesheet" href="/style.css?v=1.0.1" />
   <script>!function(){try{const t=localStorage.getItem('wcm-theme')||'system';document.documentElement.dataset.theme=t}catch(e){}}()</script>
 </head>
 <body>
@@ -53,11 +53,9 @@
       <header class="topbar">
         <h1 id="view-title">仪表盘</h1>
         <div class="topbar-actions">
-          <a class="toplink" href="/cookiegen.html">🍪 Cookie生成器</a>
-          <a class="toplink-icon" href="/cookiegen.html" title="Cookie生成器">🍪</a>
           <button class="btn btn-ghost" id="btn-health" title="服务状态">●</button>
-          <button class="btn btn-primary" id="btn-run">▶ 立即签到</button>
           <button class="btn btn-ghost" id="btn-user" title="账户">👤</button>
+          <button class="btn btn-primary" id="btn-run">▶ 立即签到</button>
         </div>
       </header>
 
@@ -96,11 +94,13 @@
         <div class="card">
           <div class="card-head">
             <h2>账号列表</h2>
-            <div>
-              <button class="btn btn-primary btn-sm" id="btn-checkin-selected" disabled>✔ 勾选手动签到</button>
+            <div class="account-actions">
+              <button class="btn btn-primary btn-sm" id="btn-add-acc">＋ 添加账号</button>
               <button class="btn btn-ghost btn-sm" id="btn-qr-add">📱 扫码添加</button>
               <button class="btn btn-ghost btn-sm" id="btn-batch-import">📥 批量导入</button>
-              <button class="btn btn-primary btn-sm" id="btn-add-acc">＋ 添加账号</button>
+              <button class="btn btn-ghost btn-sm" id="btn-export">📤 导出</button>
+              <button class="btn btn-ghost btn-sm" id="btn-import">📂 从文件导入</button>
+              <button class="btn btn-primary btn-sm" id="btn-checkin-selected" disabled>✔ 勾选签到</button>
             </div>
           </div>
           <div class="batch-bar" id="batchBar" hidden>
@@ -335,6 +335,29 @@
     </div>
   </div>
 
+  <!-- 弹窗：从 JSON 文件导入账号 -->
+  <div class="modal-mask" id="importModal" hidden>
+    <div class="modal">
+      <div class="modal-head">
+        <h2>📂 从文件导入账号</h2>
+        <button class="modal-close" id="importModalClose">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="form">
+          <p class="hint" style="margin-bottom:8px">选择之前导出的 JSON 文件，会自动跳过已存在的账号（按名称判断）。</p>
+          <label>JSON 文件
+            <input type="file" id="importFile" accept=".json" />
+          </label>
+          <div id="importResult" style="margin-top:8px"></div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-ghost" id="importModalCancel">取消</button>
+        <button class="btn btn-primary" id="importModalSave" disabled>开始导入</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 弹窗：扫码登录添加账号 -->
   <div class="modal-mask" id="qrModal" hidden>
     <div class="modal">
@@ -359,6 +382,6 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <script src="/app.js?v=7.3"></script>
+  <script src="/app.js?v=1.0.1"></script>
 </body>
 </html>

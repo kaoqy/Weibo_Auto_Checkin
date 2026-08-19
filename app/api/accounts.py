@@ -1,6 +1,8 @@
 """账号管理 API。"""
 from __future__ import annotations
 
+from datetime import datetime
+
 import requests
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -143,6 +145,81 @@ def batch_import_accounts(data: AccountBatchImport, user: dict = Depends(auth.re
             results["skipped"] += 1
             results["errors"].append(f"第 {counter} 行：{exc}")
         counter += 1
+    return results
+
+
+# ========================= JSON 导出/导入 =========================
+
+@router.get("/export")
+def export_accounts(user: dict = Depends(auth.require_admin)):
+    """导出所有账号为 JSON 文件（不包含代理密码等敏感字段）。"""
+    accounts = database.get_accounts()
+    export_list = []
+    for acc in accounts:
+        export_list.append({
+            "name": acc.get("name", ""),
+            "cookie": acc.get("cookie") or acc.get("cookie_raw") or "",
+            "enabled": bool(acc.get("enabled", 1)),
+            "remark": acc.get("remark", ""),
+        })
+    return {
+        "version": "1.0.1",
+        "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "count": len(export_list),
+        "accounts": export_list,
+    }
+
+
+class AccountImportData(BaseModel):
+    """从 JSON 文件导入账号。"""
+    accounts: list[dict]
+    overwrite: bool = False  # 同名账号是否覆盖
+
+
+@router.post("/import")
+def import_accounts(data: AccountImportData, user: dict = Depends(auth.require_admin)):
+    """从 JSON 文件导入账号。"""
+    # 收集现有账号名，用于去重
+    existing_names = {a["name"] for a in database.get_accounts()}
+    results = {"added": 0, "skipped": 0, "updated": 0, "errors": []}
+    for idx, item in enumerate(data.accounts, start=1):
+        name = (item.get("name") or "").strip()
+        cookie = (item.get("cookie") or "").strip()
+        if not cookie:
+            results["skipped"] += 1
+            results["errors"].append(f"第 {idx} 项：Cookie 为空，已跳过")
+            continue
+        if not name:
+            name = f"微博账号{datetime.now().strftime('%H%M%S%f')[:10]}_{idx}"
+        if name in existing_names and not data.overwrite:
+            results["skipped"] += 1
+            continue
+        try:
+            if name in existing_names and data.overwrite:
+                # 查找并更新现有账号
+                for acc in database.get_accounts():
+                    if acc["name"] == name:
+                        database.update_account(acc["id"], {
+                            "cookie": cookie,
+                            "cookie_raw": cookie,
+                            "enabled": bool(item.get("enabled", True)),
+                            "remark": item.get("remark", "从文件导入"),
+                        })
+                        results["updated"] += 1
+                        break
+            else:
+                database.add_account({
+                    "name": name,
+                    "cookie": cookie,
+                    "cookie_raw": cookie,
+                    "enabled": bool(item.get("enabled", True)),
+                    "remark": item.get("remark", "从文件导入"),
+                })
+                existing_names.add(name)
+                results["added"] += 1
+        except Exception as exc:
+            results["skipped"] += 1
+            results["errors"].append(f"第 {idx} 项：{exc}")
     return results
 
 
