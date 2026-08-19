@@ -493,19 +493,35 @@ def _row_to_log(row) -> dict:
     return d
 
 
-def get_logs(limit: int = 50, account_id: int | None = None) -> list[dict]:
+def get_logs_paginated(limit: int = 50, offset: int = 0, account_id: int | None = None) -> dict:
+    """分页获取日志，返回 {items, total, has_more}。"""
     conn = _get_conn()
+    base_where = "WHERE account_id = ?" if account_id is not None else ""
+    count_row = conn.execute(
+        f"SELECT COUNT(*) c FROM checkin_logs {base_where}",
+        (account_id,) if account_id is not None else (),
+    ).fetchone()
+    total = count_row["c"] if count_row else 0
     if account_id is not None:
         rows = conn.execute(
-            "SELECT * FROM checkin_logs WHERE account_id = ? "
-            "ORDER BY id DESC LIMIT ?",
-            (account_id, limit),
+            "SELECT * FROM checkin_logs WHERE account_id = ? ORDER BY id DESC LIMIT ? OFFSET ?",
+            (account_id, limit, offset),
         ).fetchall()
     else:
         rows = conn.execute(
-            "SELECT * FROM checkin_logs ORDER BY id DESC LIMIT ?", (limit,)
+            "SELECT * FROM checkin_logs ORDER BY id DESC LIMIT ? OFFSET ?",
+            (limit, offset),
         ).fetchall()
-    return [_row_to_log(r) for r in rows]
+    return {
+        "items": [_row_to_log(r) for r in rows],
+        "total": total,
+        "has_more": offset + len(rows) < total,
+    }
+
+
+def get_logs(limit: int = 50, account_id: int | None = None) -> list[dict]:
+    """保留旧接口，调用分页版本。"""
+    return get_logs_paginated(limit=limit, offset=0, account_id=account_id)["items"]
 
 
 def get_log_stats() -> dict:

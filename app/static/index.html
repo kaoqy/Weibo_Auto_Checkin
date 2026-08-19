@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>微博超话签到管理面板</title>
-  <link rel="stylesheet" href="/style.css?v=7.2" />
+  <link rel="stylesheet" href="/style.css?v=7.3" />
   <script>!function(){try{const t=localStorage.getItem('wcm-theme')||'system';document.documentElement.dataset.theme=t}catch(e){}}()</script>
 </head>
 <body>
@@ -99,6 +99,7 @@
             <div>
               <button class="btn btn-primary btn-sm" id="btn-checkin-selected" disabled>✔ 勾选手动签到</button>
               <button class="btn btn-ghost btn-sm" id="btn-qr-add">📱 扫码添加</button>
+              <button class="btn btn-ghost btn-sm" id="btn-batch-import">📥 批量导入</button>
               <button class="btn btn-primary btn-sm" id="btn-add-acc">＋ 添加账号</button>
             </div>
           </div>
@@ -303,6 +304,37 @@
     </div>
   </div>
 
+  <!-- 弹窗：批量导入 -->
+  <div class="modal-mask" id="batchImportModal" hidden>
+    <div class="modal">
+      <div class="modal-head">
+        <h2>📥 批量导入账号</h2>
+        <button class="modal-close" id="batchImportModalClose">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="form">
+          <p class="hint" style="margin-bottom:8px">每行一个账号，支持以下格式：</p>
+          <ul class="hint" style="margin:0 0 12px 20px;line-height:1.8">
+            <li>纯 Cookie（自动命名为「微博账号1」「微博账号2」…）</li>
+            <li><code>名称|Cookie</code>（名称与 Cookie 用 <code>|</code> 分隔）</li>
+            <li>以 <code>#</code> 开头的行视为注释，自动跳过</li>
+          </ul>
+          <label>账号数据
+            <textarea id="batchImportContent" rows="12" placeholder="SUB=xxx; SUBP=xxx; SCF=xxx
+小明的账号|SUB=xxx; SUBP=xxx; SCF=xxx
+# 这是注释行
+微博账号3|SUB=xxx; SUBP=xxx; SCF=xxx"></textarea>
+          </label>
+          <div id="batchImportResult" style="margin-top:8px"></div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-ghost" id="batchImportModalCancel">取消</button>
+        <button class="btn btn-primary" id="batchImportModalSave">开始导入</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 弹窗：扫码登录添加账号 -->
   <div class="modal-mask" id="qrModal" hidden>
     <div class="modal">
@@ -327,6 +359,6 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <script src="/app.js?v=7.2"></script>
+  <script src="/app.js?v=7.3"></script>
 </body>
 </html>

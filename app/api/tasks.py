@@ -81,6 +81,12 @@ def list_logs(limit: int = 50, account_id: int | None = None, user: dict = Depen
     return database.get_logs(limit, account_id)
 
 
+@router.get("/logs/paginated")
+def list_logs_paginated(limit: int = 50, offset: int = 0, account_id: int | None = None, user: dict = Depends(auth.require_admin)):
+    """分页获取日志，支持按账号筛选。返回 {items, total, has_more}。"""
+    return database.get_logs_paginated(limit, offset, account_id)
+
+
 @router.get("/logs/grouped")
 def list_logs_grouped(limit: int = 20, user: dict = Depends(auth.require_admin)):
     """按日期分组、单次执行归并的日志。"""

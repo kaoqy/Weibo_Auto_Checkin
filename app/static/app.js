@@ -637,14 +637,60 @@ $('#qrModalClose').onclick = qrClose;
 $('#qrRefresh').onclick = () => { qrTimer && clearInterval(qrTimer); loadQr(); };
 $('#qrImportBtn').onclick = doQrImport;
 
+/* ===== 批量导入 ===== */
+let batchImportModal = (()=>{})();
+$('#btn-batch-import').onclick = () => {
+  $('#batchImportModal').hidden = false;
+  $('#batchImportContent').value = '';
+  $('#batchImportResult').innerHTML = '';
+};
+$('#batchImportModalClose').onclick = $('#batchImportModalCancel').onclick = () => {
+  $('#batchImportModal').hidden = true;
+};
+$('#batchImportModalSave').onclick = async () => {
+  const content = $('#batchImportContent').value.trim();
+  if (!content) { toast('请输入账号数据', 'err'); return; }
+  const btn = $('#batchImportModalSave');
+  btn.disabled = true; const old = btn.textContent; btn.textContent = '导入中…';
+  try {
+    const r = await api.post('/api/accounts/batch-import', { content });
+    let html = `<b style="color:var(--green)">✅ 成功导入 ${r.added} 个账号</b>`;
+    if (r.skipped) html += `，跳过 ${r.skipped} 个`;
+    if (r.errors && r.errors.length) {
+      html += '<ul style="text-align:left;max-height:120px;overflow-y:auto;margin:6px 0 0">';
+      r.errors.slice(0, 10).forEach(e => { html += `<li style="color:var(--red);font-size:12px">${esc(e)}</li>`; });
+      if (r.errors.length > 10) html += `<li style="color:var(--muted);font-size:12px">…还有 ${r.errors.length - 10} 条</li>`;
+      html += '</ul>';
+    }
+    $('#batchImportResult').innerHTML = html;
+    if (r.added > 0) {
+      setTimeout(() => { $('#batchImportModal').hidden = true; loadAccounts(); loadDashboard(); }, 1500);
+    }
+  } catch(e) { toast('导入失败', 'err'); }
+  finally { btn.disabled = false; btn.textContent = old; }
+};
+
 /* ===== 日志 ===== */
 let logCache = [];
-async function loadLogs() {
+let logTotal = 0;
+let logOffset = 0;
+const LOG_PAGE_SIZE = 100;
+
+async function loadLogs(reset = true) {
+  if (reset) {
+    logOffset = 0;
+    logCache = [];
+    $('#logList').innerHTML = '<div style="color:var(--muted);padding:16px">加载中…</div>';
+  }
   try {
-    logCache = await api.get('/api/logs?limit=200');
+    const data = await api.get(`/api/logs/paginated?limit=${LOG_PAGE_SIZE}&offset=${logOffset}`);
+    logCache = logCache.concat(data.items);
+    logTotal = data.total;
+    logOffset += data.items.length;
     renderLogs();
   } catch(e){ toast('加载日志失败','err'); }
 }
+
 function renderLogs() {
   const list = $('#logList');
   if (!list) return;
@@ -656,9 +702,9 @@ function renderLogs() {
     return ((l.account_name||'') + ' ' + (l.message||'')).toLowerCase().includes(kw);
   });
   const countBox = $('#logCount');
-  if (countBox) countBox.textContent = '共 ' + (logCache||[]).length + ' 条，当前显示 ' + rows.length + ' 条';
+  if (countBox) countBox.textContent = `共 ${logTotal} 条，当前显示 ${rows.length} 条${logOffset < logTotal ? ' · <button class="btn btn-ghost btn-sm" onclick="loadLogs(false)">加载更多</button>' : ''}`;
   if (!rows.length) {
-    list.innerHTML = '<div style="color:var(--muted);padding:20px">' + ((logCache||[]).length ? '没有匹配的日志' : '暂无签到日志') + '</div>';
+    list.innerHTML = '<div style="color:var(--muted);padding:20px">' + (logTotal ? '没有匹配的日志' : '暂无签到日志') + '</div>';
     return;
   }
   list.innerHTML = rows.map(l => {

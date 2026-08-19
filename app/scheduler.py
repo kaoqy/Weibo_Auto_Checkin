@@ -20,7 +20,7 @@ from .weibo_client import CheckinOptions, cookie_to_string, normalize_cookie, ru
 log = logging.getLogger("weibo.scheduler")
 
 scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
-_running_lock = threading.Lock()
+_running_lock = threading.ReentrantLock()
 _current_run = None          # 当前运行状态（供前端轮询）
 _last_run_summary = None     # 最近一次任务汇总
 

@@ -78,6 +78,74 @@ def list_accounts(user: dict = Depends(auth.require_admin)):
     return [_public(a) for a in accounts]
 
 
+class AccountBatchImport(BaseModel):
+    """批量导入账号。
+
+    每行一个账号，支持以下格式：
+      cookie（只用 cookie，自动命名为「微博账号1」「微博账号2」…）
+      name|cookie（用 | 分隔名称和 cookie）
+      name|Cookie|Cookie|…|Cookie（cookie 含多个键值对，带 | 分隔，前 N-1 个是 name）
+    以 # 开头的行视为注释，自动跳过。
+    """
+    content: str
+
+
+def _parse_account_line(line: str, index: int) -> dict | None:
+    """解析单行账号数据，返回 account dict 或 None（跳过）。"""
+    raw = line.strip()
+    # 跳过空行和注释
+    if not raw or raw.startswith("#"):
+        return None
+    # 按最后一个 | 分组：前面全是 name，最后一个是 cookie
+    # 但如果 cookie 里本身含 |（key=value; key2=value2 格式），
+    # 就不好办了。实际场景中 cookie 通常是 ; 分隔的字符串，| 极少出现。
+    # 简单策略：先尝试 name|cookie 模式（name 非空），
+    # 若 cookie 含 | 且 name 部分为空则退化为纯 cookie。
+    parts = raw.split("|")
+    if len(parts) >= 2 and parts[0].strip():
+        name = parts[0].strip()
+        cookie = "|".join(parts[1:]).strip()
+        if cookie:
+            return {"name": name, "cookie_raw": cookie}
+    # 纯 cookie（无显式 name）
+    cookie_only = raw
+    return {
+        "name": f"微博账号{index}",
+        "cookie_raw": cookie_only,
+    }
+
+
+@router.post("/batch-import")
+def batch_import_accounts(data: AccountBatchImport, user: dict = Depends(auth.require_admin)):
+    """批量导入多行账号（每行一个）。"""
+    lines = data.content.strip().split("\n")
+    results = {"added": 0, "skipped": 0, "errors": []}
+    counter = 1
+    for line in lines:
+        parsed = _parse_account_line(line, counter)
+        if not parsed:
+            continue
+        cookie = parsed.get("cookie_raw", "").strip()
+        if not cookie:
+            results["skipped"] += 1
+            results["errors"].append(f"第 {counter} 行：Cookie 为空，已跳过")
+            counter += 1
+            continue
+        try:
+            acc_id = database.add_account({
+                "name": parsed.get("name", f"微博账号{results['added'] + 1}"),
+                "cookie_raw": cookie,
+                "enabled": True,
+                "remark": "批量导入",
+            })
+            results["added"] += 1
+        except Exception as exc:
+            results["skipped"] += 1
+            results["errors"].append(f"第 {counter} 行：{exc}")
+        counter += 1
+    return results
+
+
 @router.post("")
 def create_account(data: AccountIn, user: dict = Depends(auth.require_admin)):
     payload = _resolve_proxy(data.model_dump())
