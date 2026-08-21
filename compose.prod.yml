@@ -10,7 +10,7 @@ name: weibo-checkin
 
 services:
   weibo-checkin:
-    image: ${WCM_IMAGE:-kaoqy666/weibo-checkin:latest}
+    image: ${WCM_IMAGE:-weibo-checkin:latest}
     container_name: weibo-checkin
     restart: unless-stopped
     ports:
@@ -19,8 +19,6 @@ services:
       - TZ=Asia/Shanghai
       - APP_HOST=0.0.0.0
       - APP_PORT=8000
-      - WCM_ADMIN_USER=${WCM_ADMIN_USER:-admin}
-      - WCM_ADMIN_PASSWORD=${WCM_ADMIN_PASSWORD:-}
     volumes:
       - ${WCM_DATA_DIR:-./data}:/app/data
     healthcheck:

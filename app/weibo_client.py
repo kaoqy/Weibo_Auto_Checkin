@@ -16,13 +16,6 @@ import requests
 
 log = logging.getLogger("weibo.client")
 
-# SOCKS 支持检测（缺失时给出明确提示）
-try:
-    import socks as _socks  # noqa: F401  (PySocks)
-    SOCKS_AVAILABLE = True
-except ImportError:
-    SOCKS_AVAILABLE = False
-
 BASE = "https://m.weibo.cn"
 CONFIG_URL = BASE + "/api/config"
 TOPICS_URL = BASE + "/api/container/getIndex"
@@ -117,17 +110,6 @@ def request_via_proxy(session, method, url, channel="auto", proxy=None,
         return session.request(method, url, **kwargs)
 
     if proxy and channel in ("socks", "auto"):
-        if not SOCKS_AVAILABLE:
-            # 配置了 SOCKS 代理但未装 PySocks
-            msg = ("配置了 SOCKS5 代理，但缺少 PySocks 支持。请安装：pip install PySocks "
-                   "（或移除设置里的 SOCKS 代理节点改用直连）")
-            log.error(msg)
-            if channel == "socks" or force or not allow_fallback:
-                raise NetworkError(msg)
-            log.warning("PySocks 缺失，回退直连")
-            kwargs.pop("proxies", None)
-            return session.request(method, url, **kwargs)
-
         pk = dict(kwargs)
         merged = proxy_proxies_dict(proxy)
         merged.update(pk.get("proxies") or {})
@@ -138,7 +120,7 @@ def request_via_proxy(session, method, url, channel="auto", proxy=None,
             if channel == "socks":
                 raise NetworkError(f"socks 代理请求失败：{exc}") from exc
             if force or not allow_fallback:
-                raise NetworkError(f"socks 代理请求失败：{exc}") from exc
+                raise
             log.warning("socks 代理失败（%s），回退直连", exc)
         except Exception:
             raise
@@ -280,25 +262,19 @@ class CheckinOptions:
 
 
 def run_account_checkin(cookie_dict: dict, opts: CheckinOptions,
-                        proxy_url: str | None = None,
                         proxy_index: int = 0) -> dict:
     """
     对单个账号执行一遍签到。
-    - proxy_url: 账号指定使用的 socks 链接（优先）
-    - proxy_index: 无指定时按 opts.proxies 轮询的序号（兼容旧逻辑）
     返回 dict：{status, channel, total, success, fail, message, results, cookie, cookie_changed}
     """
     cookie_dict = normalize_cookie(cookie_dict)
     if not cookie_dict:
         return _bundle("failed", "Cookie 为空", 0, 0, 0, [], cookie_dict, [])
 
-    # 代理选择：账号指定 proxy_url 优先；否则按 opts.proxies 轮询
+    # 节点池选择：按账号轮询（proxy_index）
     proxy = None
     channel = "direct"
-    if proxy_url and proxy_url.strip().startswith(("socks5://", "socks5h://")):
-        proxy = proxy_url.strip()
-        channel = "socks"
-    elif opts.proxies:
+    if opts.proxies:
         proxy = opts.proxies[proxy_index % len(opts.proxies)]
         channel = "socks"
 
