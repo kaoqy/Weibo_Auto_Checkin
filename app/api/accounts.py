@@ -1,6 +1,7 @@
 """账号管理 API。"""
 from __future__ import annotations
 
+import json
 import secrets
 import time
 
@@ -48,6 +49,20 @@ def _cookie_string(session: requests.Session) -> str:
     )
 
 
+def _parse_jsonp_response(response: requests.Response) -> dict:
+    """解析微博接口返回的 JSON 或 JSONP 数据。"""
+    text = response.text.strip()
+    if not text:
+        raise ValueError("微博接口返回空响应")
+    if text.startswith("{"):
+        return response.json()
+    start = text.find("{")
+    end = text.rfind("}")
+    if start < 0 or end <= start:
+        raise ValueError("微博接口返回的数据格式无效")
+    return json.loads(text[start:end + 1])
+
+
 class AccountIn(BaseModel):
     name: str = "未命名账号"
     cookie: str = ""
@@ -82,11 +97,15 @@ def start_qr_login():
     try:
         response = session.get(
             "https://login.sina.com.cn/sso/qrcode/image",
-            params={"entry": "weibo", "size": 180},
+            params={
+                "entry": "weibo",
+                "size": 180,
+                "callback": "STK_1",
+            },
             timeout=15,
         )
         response.raise_for_status()
-        payload = response.json()
+        payload = _parse_jsonp_response(response)
     except (requests.RequestException, ValueError) as exc:
         raise HTTPException(502, f"获取微博登录二维码失败：{exc}") from exc
 
@@ -135,13 +154,7 @@ def get_qr_login_status(session_id: str):
             timeout=15,
         )
         response.raise_for_status()
-        text = response.text.strip()
-        start = text.find("{")
-        end = text.rfind("}")
-        payload = response.json() if text.startswith("{") else {}
-        if not payload and start >= 0 and end > start:
-            import json
-            payload = json.loads(text[start:end + 1])
+        payload = _parse_jsonp_response(response)
     except (requests.RequestException, ValueError) as exc:
         raise HTTPException(502, f"查询扫码状态失败：{exc}") from exc
 

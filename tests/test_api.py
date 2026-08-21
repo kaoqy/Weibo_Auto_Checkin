@@ -173,6 +173,23 @@ def test_qr_finish_requires_completed_login(client):
     assert response.status_code == 409
 
 
+def test_parse_weibo_jsonp_response():
+    """微博二维码接口返回 JSONP 时应正确提取数据。"""
+    from app.api.accounts import _parse_jsonp_response
+
+    class FakeResponse:
+        text = ('window.STK_1 && STK_1({"retcode":20000000,'
+                '"msg":"succ","data":{"qrid":"q1",'
+                '"image":"//v2.qr.weibo.cn/test"}})')
+
+        def json(self):
+            raise AssertionError("JSONP 响应不应直接调用 json()")
+
+    payload = _parse_jsonp_response(FakeResponse())
+    assert payload["retcode"] == 20000000
+    assert payload["data"]["qrid"] == "q1"
+
+
 def test_qr_finish_saves_account(client):
     """扫码确认后的 Cookie 应保存到新账号。"""
     import time
