@@ -552,9 +552,9 @@ async function loadQr() {
   $('#qrImage').src = '';
   qrImporting = false;
   try {
-    const d = await api.get('/api/auth/qrcode');
-    if (!d.qrid) throw new Error('no qrid');
-    qrId = d.qrid;
+    const d = await api.post('/api/accounts/qr/start', {});
+    if (!d.session_id) throw new Error('no qrid');
+    qrId = d.session_id;
     // 优先用后端渲染的 base64 二维码（无防盗链、100% 可显示），否则用外链图片
     if (d.image_b64) {
       $('#qrImage').src = 'data:image/png;base64,' + d.image_b64;
@@ -577,17 +577,17 @@ function startQrPoll() {
   const tick = async () => {
     if (!qrId || qrImporting) { return; }
     try {
-      const st = await api.get('/api/auth/qrcode/check?qrid=' + encodeURIComponent(qrId));
-      if (st.status === 'pending') {
+      const st = await api.get('/api/accounts/qr/' + encodeURIComponent(qrId) + '/status');
+      if (st.status === 'waiting') {
         $('#qrStatus').textContent = '等待扫码…';
         status_speed = 2000;
-      } else if (st.status === 'scanned') {
+      } else if (st.status === 'waiting' && st.message.includes('已扫码')) {
         $('#qrStatus').textContent = '✅ 已扫码，请在手机上确认';
         $('#qrStatus').className = 'qr-status success';
         // 已扫码→加速轮询，捕捉确认瞬间（20000000），降低错过概率
         status_speed = 400;
         $('#qrImportBtn').disabled = false;
-      } else if (st.status === 'success') {
+      } else if (st.status === 'confirmed') {
         qrTimer && clearInterval(qrTimer);
         $('#qrStatus').textContent = '✅ 扫码成功，正在自动导入…';
         $('#qrStatus').className = 'qr-status success';
@@ -619,7 +619,7 @@ async function doQrImport() {
   const btn = $('#qrImportBtn');
   btn.disabled = true; const old = btn.textContent; btn.textContent = '导入中…';
   try {
-    const r = await api.post('/api/auth/qrcode/import', { qrid: qrId, name: $('#qrName').value.trim() });
+    const r = await api.post('/api/accounts/qr/finish', { session_id: qrId, name: $('#qrName').value.trim() });
     toast('✅ 账号已自动导入：' + r.name, 'good');
     qrClose();
     loadAccounts(); loadDashboard();

@@ -43,12 +43,6 @@ async def lifespan(app: FastAPI):
     log.info("微博签到管理面板已就绪（数据库：%s）", database.DB_PATH)
     yield
     scheduler.stop_scheduler()
-    # 释放扫码浏览器内存
-    try:
-        from . import weibo_login
-        await weibo_login.close_browser()
-    except Exception:
-        pass
 
 
 app = FastAPI(

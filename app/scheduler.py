@@ -303,12 +303,6 @@ def start_scheduler() -> None:
     """启动调度器（幂等）。"""
     if not scheduler.running:
         scheduler.start()
-    # 定期清理空闲扫码浏览器，释放内存（资源占用优化）
-    if not scheduler.get_job("browser_sweep"):
-        scheduler.add_job(
-            _sweep_browser_idle, trigger="interval", minutes=3,
-            id="browser_sweep", max_instances=1, coalesce=True,
-        )
     # 每日清理过期日志（v7.0）
     if not scheduler.get_job("log_purge"):
         scheduler.add_job(
@@ -333,16 +327,6 @@ def _purge_logs_job() -> None:
     if removed:
         log.info("已清理 %d 条超过 %d 天的签到日志", removed, days)
 
-
-def _sweep_browser_idle():
-    """清理空闲 Playwright 浏览器（释放内存）。
-
-    说明：_sweep_idle_browser 现在是 async 且绑定主事件循环；APScheduler 在
-    独立线程执行，跨线程直接 await playwright 会报 “cannot switch to a different
-    thread”。因此空闲清理改由扫码请求自身在 check_qrcode/finalize_login 开头统一
-    await _sweep_idle_browser() 完成，这里保留空占位（定时任务本身无害）。
-    """
-    pass
 
 
 def stop_scheduler() -> None:

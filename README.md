@@ -126,7 +126,7 @@ weibo-checkin-manager/
 ├── Dockerfile
 ├── app/              # 后端 + 前端
 │   ├── main.py       # FastAPI 入口 + 认证中间件
-│   ├── weibo_client.py / weibo_login.py
+│   ├── weibo_client.py
 │   ├── proxy_geo.py  # SOCKS5 代理归属地识别
 │   ├── scheduler.py  # 定时 + 防封 + 分组并行调度
 │   ├── notifier.py   # TG 推送

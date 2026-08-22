@@ -5,4 +5,3 @@ requests>=2.31
 PySocks>=1.7.1
 pydantic>=2.6
 python-multipart>=0.0.9
-playwright>=1.40

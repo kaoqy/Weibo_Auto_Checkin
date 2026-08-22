@@ -23,10 +23,6 @@ class ChangePasswordIn(BaseModel):
     new_password: str
 
 
-class QrImportAccount(BaseModel):
-    qrid: str
-    name: str = ""
-
 
 class InitIn(BaseModel):
     username: str
@@ -129,48 +125,3 @@ def init_first_user(data: InitIn, request: Request):
 def needs_init():
     """判断是否需要初始化（无任何用户时返回 true）。"""
     return {"needs_init": database.count_users() == 0}
-
-
-# ========================= 扫码登录添加账号 =========================
-@router.get("/qrcode")
-async def qr_generate(user: dict = Depends(auth.require_admin)):
-    """获取微博登录二维码（供添加新账号用）。"""
-    from .. import weibo_login
-    try:
-        return await weibo_login.generate_qrcode()
-    except Exception as exc:
-        log.exception("获取二维码失败")
-        raise HTTPException(status_code=502, detail=f"获取二维码失败：{exc}")
-
-
-@router.get("/qrcode/check")
-async def qr_check(qrid: str, user: dict = Depends(auth.require_admin)):
-    """轮询二维码扫码状态。"""
-    from .. import weibo_login
-    return await weibo_login.check_qrcode(qrid)
-
-
-@router.post("/qrcode/import")
-async def qr_import_account(data: QrImportAccount, user: dict = Depends(auth.require_admin)):
-    """扫码确认后，将得到的 Cookie 存为新账号。"""
-    from .. import weibo_login
-    result = await weibo_login.finalize_login(data.qrid)
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result.get("message", "获取 Cookie 失败"))
-    cookies = result.get("cookies", {})
-    cookie_str = "; ".join(f"{k}={v}" for k, v in cookies.items() if v)
-    # 必须真实登录态（SUB+SCF/SSOLoginState/ALF 并存），区分 m.weibo.cn 发的假 SUB，
-    # 避免导入后签到必然失败。
-    if not weibo_login._is_real_login(cookies):
-        raise HTTPException(status_code=400, detail="未获取到完整登录态，请重新扫码")
-    uid = result.get("uid", "")
-    name = (data.name or "").strip() or result.get("username") or (
-        f"微博用户{uid}" if uid else "扫码账号"
-    )
-    acc_id = database.add_account({
-        "name": name,
-        "cookie_raw": cookie_str,
-        "enabled": True,
-        "remark": f"扫码登录 uid={uid}" if uid else "扫码登录",
-    })
-    return {"ok": True, "id": acc_id, "name": name, "cookie_length": len(cookie_str), "uid": uid}
