@@ -347,15 +347,27 @@ input[type="checkbox"]{accent-color:var(--accent);width:15px;height:15px;cursor:
 
 /* ===== 扫码登录 ===== */
 .qr-body{text-align:center}
-.qr-tip{color:var(--muted);font-size:13px;margin:0 0 14px;line-height:1.6}
-.qr-box{display:inline-flex;padding:10px;border:1px solid var(--line);border-radius:13px;background:#fff;margin-bottom:12px}
-.qr-box img{width:200px;height:200px;display:block}
-.qr-status{font-size:13px;color:var(--muted);min-height:20px;margin-bottom:10px}
-.qr-status.success{color:var(--success);font-weight:600}
-.qr-status.bad{color:var(--danger)}
-.qr-name{text-align:left;margin-top:8px}
-.qr-name label{display:block;font-size:12px;color:var(--muted);font-weight:600;margin-bottom:6px}
-.qr-name input{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:9px;background:var(--surface-2);color:var(--ink);font:inherit;outline:none}
+.qr-tip{max-width:390px;color:var(--muted);font-size:13px;margin:0 auto 16px;line-height:1.7}
+.qr-stage{display:flex;flex-direction:column;align-items:center}
+.qr-box{position:relative;display:inline-flex;padding:12px;border:1px solid var(--line);border-radius:16px;background:#fff;box-shadow:0 8px 24px rgba(15,23,42,.08);margin-bottom:12px;overflow:hidden}
+.qr-box img{width:200px;height:200px;display:block;border-radius:5px}
+.qr-box.loading img{opacity:.12}
+.qr-loading{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px;color:#64748b;font-size:12px;font-weight:600;background:rgba(255,255,255,.88)}
+.qr-loading[hidden]{display:none}
+.qr-spinner{width:24px;height:24px;border:3px solid #dbe4f0;border-top-color:var(--accent);border-radius:50%;animation:qrSpin .7s linear infinite}
+@keyframes qrSpin{to{transform:rotate(360deg)}}
+.qr-status{display:inline-flex;align-items:center;justify-content:center;min-height:32px;padding:6px 12px;margin-bottom:12px;border-radius:999px;background:var(--surface-2);color:var(--muted);font-size:13px;line-height:1.4}
+.qr-status.success{color:var(--success);background:var(--success-soft);font-weight:600}
+.qr-status.bad{color:var(--danger);background:var(--danger-soft)}
+.qr-name{text-align:left;margin-top:4px;padding:13px 14px;border:1px solid var(--line);border-radius:12px;background:var(--surface-2)}
+.qr-name label{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--ink);font-weight:600;margin-bottom:7px}
+.qr-name label span{padding:2px 6px;border-radius:999px;background:var(--accent-soft);color:var(--accent);font-size:10px}
+.qr-name input{width:100%;padding:10px 11px;border:1px solid var(--line);border-radius:9px;background:var(--surface);color:var(--ink);font:inherit;outline:none;transition:border-color .2s,box-shadow .2s}
+.qr-name input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.qr-name-hint{margin:7px 1px 0;color:var(--muted);font-size:11px;line-height:1.5}
+.qr-actions .btn{min-width:118px}
+.qr-actions .btn:disabled{cursor:not-allowed;opacity:.58}
+@media(max-width:640px){.qr-tip{margin-bottom:12px}.qr-box img{width:170px;height:170px}.qr-actions{display:grid;grid-template-columns:1fr 1fr}.qr-actions .btn{min-width:0}}
 
 /* ===== 日志日期分组 ===== */
 .log-date{display:flex;align-items:center;gap:10px;margin:22px 0 10px;font-size:14px;font-weight:700;color:var(--ink)}

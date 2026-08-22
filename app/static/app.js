@@ -545,17 +545,23 @@ function qrClose() {
   qrImporting = false;
 }
 async function loadQr() {
+  qrTimer && clearTimeout(qrTimer);
+  qrId = null;
+  qrImporting = false;
   $('#qrStatus').textContent = '正在获取二维码…';
   $('#qrStatus').className = 'qr-status';
   $('#qrImportBtn').disabled = true;
+  $('#qrImportBtn').textContent = '等待扫码';
+  $('#qrRefresh').disabled = true;
   $('#qrName').value = '';
   $('#qrImage').src = '';
-  qrImporting = false;
+  $('#qrBox').classList.add('loading');
+  $('#qrLoading').hidden = false;
   try {
     const d = await api.post('/api/accounts/qr/start', {});
-    if (!d.session_id) throw new Error('no qrid');
+    if (!d.session_id) throw new Error('二维码会话创建失败');
     qrId = d.session_id;
-    // 优先用后端渲染的 base64 二维码（无防盗链、100% 可显示），否则用外链图片
+    // 优先使用后端渲染的 base64 二维码，避免外链防盗链导致无法显示。
     if (d.image_b64) {
       $('#qrImage').src = 'data:image/png;base64,' + d.image_b64;
     } else if (d.image) {
@@ -563,53 +569,65 @@ async function loadQr() {
     } else {
       throw new Error('二维码数据为空');
     }
-    $('#qrStatus').textContent = '等待扫码…';
+    $('#qrBox').classList.remove('loading');
+    $('#qrLoading').hidden = true;
+    $('#qrStatus').textContent = '请使用微博 App 扫码';
+    $('#qrRefresh').disabled = false;
     startQrPoll();
   } catch(e) {
+    $('#qrBox').classList.remove('loading');
+    $('#qrLoading').hidden = true;
     $('#qrStatus').textContent = '获取二维码失败：' + e.message;
     $('#qrStatus').className = 'qr-status bad';
+    $('#qrRefresh').disabled = false;
+    $('#qrImportBtn').textContent = '获取失败';
     toast('获取二维码失败', 'err');
   }
 }
 function startQrPoll() {
-  qrTimer && clearInterval(qrTimer);
-  let status_speed = 2000;   // pending 轮询间隔
+  qrTimer && clearTimeout(qrTimer);
+  let statusSpeed = 2000;
   const tick = async () => {
-    if (!qrId || qrImporting) { return; }
+    if (!qrId || qrImporting || qrModal.hidden) return;
     try {
       const st = await api.get('/api/accounts/qr/' + encodeURIComponent(qrId) + '/status');
-      if (st.status === 'waiting') {
-        $('#qrStatus').textContent = '等待扫码…';
-        status_speed = 2000;
-      } else if (st.status === 'waiting' && st.message.includes('已扫码')) {
+      const message = String(st.message || '');
+      if (st.status === 'waiting' && message.includes('已扫码')) {
         $('#qrStatus').textContent = '✅ 已扫码，请在手机上确认';
         $('#qrStatus').className = 'qr-status success';
-        // 已扫码→加速轮询，捕捉确认瞬间（20000000），降低错过概率
-        status_speed = 400;
-        $('#qrImportBtn').disabled = false;
+        $('#qrImportBtn').disabled = true;
+        $('#qrImportBtn').textContent = '等待确认';
+        statusSpeed = 400;
+      } else if (st.status === 'waiting') {
+        $('#qrStatus').textContent = message || '等待扫码…';
+        $('#qrStatus').className = 'qr-status';
+        $('#qrImportBtn').disabled = true;
+        $('#qrImportBtn').textContent = '等待扫码';
+        statusSpeed = 2000;
       } else if (st.status === 'confirmed') {
-        qrTimer && clearInterval(qrTimer);
-        $('#qrStatus').textContent = '✅ 扫码成功，正在自动导入…';
+        qrTimer && clearTimeout(qrTimer);
+        $('#qrStatus').textContent = '✅ 登录成功，正在获取昵称并导入…';
         $('#qrStatus').className = 'qr-status success';
-        $('#qrImportBtn').disabled = false;
+        $('#qrImportBtn').disabled = true;
+        $('#qrImportBtn').textContent = '正在导入';
         await doQrImport();
         return;
-      } else if (st.status === 'expired') {
-        $('#qrStatus').textContent = '二维码已过期，请刷新';
+      } else if (st.status === 'expired' || st.status === 'failed') {
+        $('#qrStatus').textContent = message || '二维码已失效，请重新获取';
         $('#qrStatus').className = 'qr-status bad';
         $('#qrImportBtn').disabled = true;
-        qrTimer && clearInterval(qrTimer);
+        $('#qrImportBtn').textContent = '二维码已失效';
         return;
-      } else if (st.status === 'error') {
-        $('#qrStatus').textContent = '查询失败：' + st.message;
-        $('#qrStatus').className = 'qr-status bad';
-      } else if (st.status === 'unknown') {
-        $('#qrStatus').textContent = '正在确认扫码状态…';
-        $('#qrStatus').className = 'qr-status';
+      } else {
+        $('#qrStatus').textContent = message || '正在确认扫码状态…';
+        $('#qrStatus').className = st.status === 'error' ? 'qr-status bad' : 'qr-status';
       }
-    } catch(e) { /* 轮询错误忽略，继续 */ }
-    // 无条件递归调度下一次（不能依赖 if(qrTimer)，首次时 qrTimer 尚为 null）
-    qrTimer = setTimeout(tick, status_speed);
+    } catch(e) {
+      $('#qrStatus').textContent = '网络波动，正在自动重试…';
+      $('#qrStatus').className = 'qr-status';
+      statusSpeed = 2000;
+    }
+    qrTimer = setTimeout(tick, statusSpeed);
   };
   tick();
 }
@@ -617,24 +635,29 @@ async function doQrImport() {
   if (!qrId || qrImporting) return;
   qrImporting = true;
   const btn = $('#qrImportBtn');
-  btn.disabled = true; const old = btn.textContent; btn.textContent = '导入中…';
+  btn.disabled = true;
+  btn.textContent = '正在获取昵称…';
   try {
-    const r = await api.post('/api/accounts/qr/finish', { session_id: qrId, name: $('#qrName').value.trim() });
-    toast('✅ 账号已自动导入：' + r.name, 'good');
+    const r = await api.post('/api/accounts/qr/finish', {
+      session_id: qrId,
+      name: $('#qrName').value.trim()
+    });
+    toast('✅ 账号已导入：' + r.name, 'good');
     qrClose();
-    loadAccounts(); loadDashboard();
+    await Promise.all([loadAccounts(), loadDashboard()]);
   } catch(e) {
     toast('自动导入失败：' + e.message, 'err');
-    $('#qrStatus').textContent = '导入失败:' + e.message;
+    $('#qrStatus').textContent = '导入失败：' + e.message;
     $('#qrStatus').className = 'qr-status bad';
-    btn.disabled = false; btn.textContent = old;
+    btn.disabled = false;
+    btn.textContent = '重试导入';
   } finally {
     qrImporting = false;
   }
 }
 $('#btn-qr-add').onclick = qrOpen;
 $('#qrModalClose').onclick = qrClose;
-$('#qrRefresh').onclick = () => { qrTimer && clearInterval(qrTimer); loadQr(); };
+$('#qrRefresh').onclick = () => { qrTimer && clearTimeout(qrTimer); loadQr(); };
 $('#qrImportBtn').onclick = doQrImport;
 
 /* ===== 批量导入 ===== */

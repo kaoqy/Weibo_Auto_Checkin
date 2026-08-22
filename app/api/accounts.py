@@ -407,6 +407,69 @@ def get_qr_login_status(session_id: str, user: dict = Depends(auth.require_admin
     }
 
 
+def _extract_weibo_username(payload: object) -> str:
+    """从微博不同接口的响应结构中提取昵称。"""
+    if not isinstance(payload, dict):
+        return ""
+
+    candidates: list[object] = [payload]
+    data = payload.get("data")
+    if isinstance(data, dict):
+        candidates.append(data)
+        for key in ("userInfo", "user", "userinfo"):
+            nested = data.get(key)
+            if isinstance(nested, dict):
+                candidates.append(nested)
+
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        for key in ("screen_name", "screenName", "nickname", "name"):
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return ""
+
+
+def _fetch_weibo_username(session: requests.Session) -> str:
+    """扫码成功后使用已登录会话获取微博昵称，并在接口变化时自动回退。"""
+    endpoints = (
+        (
+            "https://m.weibo.cn/api/config",
+            {
+                "Referer": "https://m.weibo.cn/",
+                "X-Requested-With": "XMLHttpRequest",
+            },
+        ),
+        (
+            "https://m.weibo.cn/api/container/getIndex?containerid=100505",
+            {
+                "Referer": "https://m.weibo.cn/",
+                "X-Requested-With": "XMLHttpRequest",
+            },
+        ),
+    )
+
+    for url, headers in endpoints:
+        try:
+            response = session.get(
+                url,
+                timeout=10,
+                allow_redirects=True,
+                headers=headers,
+            )
+            if response.status_code != 200:
+                continue
+            name = _extract_weibo_username(response.json())
+            if name:
+                return name
+        except (requests.RequestException, ValueError, TypeError) as exc:
+            log.info("微博昵称接口不可用，尝试下一接口：%s", exc)
+
+    log.warning("扫码登录成功，但微博昵称接口未返回有效昵称")
+    return ""
+
+
 @router.post("/qr/finish")
 def finish_qr_login(data: QrLoginFinish, user: dict = Depends(auth.require_admin)):
     """把扫码登录取得的 Cookie 保存为签到账号。"""
@@ -418,8 +481,17 @@ def finish_qr_login(data: QrLoginFinish, user: dict = Depends(auth.require_admin
     if not cookie:
         raise HTTPException(409, "扫码登录尚未完成")
 
+    # 自动获取昵称（仅当用户未手动填写名称）
+    name = data.name.strip()
+    if not name:
+        sess = item.get("session")
+        if sess is not None:
+            fetched = _fetch_weibo_username(sess)
+            if fetched:
+                name = fetched
+
     account = {
-        "name": data.name.strip() or "扫码登录账号",
+        "name": name or "扫码登录账号",
         "cookie": cookie,
         "cookie_raw": cookie,
         "enabled": data.enabled,

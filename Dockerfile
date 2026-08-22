@@ -47,8 +47,7 @@ RUN /opt/venv/bin/pip uninstall -y pip setuptools 2>/dev/null || true \
 # 强制重新构建（确保修复生效）
 RUN echo "Build timestamp: $(date)" > /build-info.txt
 
-# 安装 Playwright 的 headless Chromium（不装 ffmpeg，扫码用不到；清理下载缓存减体积）
-
+# 扫码登录使用纯 requests 实现，无需安装浏览器或浏览器运行库。
 WORKDIR /app
 
 # 复制应用代码

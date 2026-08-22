@@ -366,17 +366,23 @@
         <button class="modal-close" id="qrModalClose">×</button>
       </div>
       <div class="modal-body qr-body">
-        <p class="qr-tip">请用<b>微博 App</b> 扫描下方二维码并确认登录，成功后自动添加为账号</p>
-        <div class="qr-box"><img id="qrImage" alt="二维码" /></div>
-        <div class="qr-status" id="qrStatus">正在获取二维码…</div>
+        <p class="qr-tip">使用 <b>微博 App</b> 扫描二维码并在手机上确认。确认后系统会自动获取微博昵称并导入账号。</p>
+        <div class="qr-stage">
+          <div class="qr-box" id="qrBox">
+            <img id="qrImage" alt="微博登录二维码" />
+            <div class="qr-loading" id="qrLoading"><span class="qr-spinner"></span><span>正在生成二维码</span></div>
+          </div>
+          <div class="qr-status" id="qrStatus" role="status" aria-live="polite">正在获取二维码…</div>
+        </div>
         <div class="qr-name">
-          <label>账号名称（可选，留空自动获取昵称）</label>
-          <input id="qrName" placeholder="例如：我的主号" />
+          <label for="qrName">账号名称 <span>可选</span></label>
+          <input id="qrName" autocomplete="off" placeholder="留空将自动获取微博昵称" />
+          <p class="qr-name-hint">如果微博昵称接口暂时不可用，也可以在这里手动填写名称。</p>
         </div>
       </div>
-      <div class="modal-foot">
-        <button class="btn btn-ghost" id="qrRefresh">↻ 刷新二维码</button>
-        <button class="btn btn-primary" id="qrImportBtn" disabled>导入账号</button>
+      <div class="modal-foot qr-actions">
+        <button class="btn btn-ghost" id="qrRefresh" type="button">↻ 重新获取</button>
+        <button class="btn btn-primary" id="qrImportBtn" type="button" disabled>等待扫码</button>
       </div>
     </div>
   </div>
