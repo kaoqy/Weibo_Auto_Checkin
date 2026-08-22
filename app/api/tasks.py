@@ -30,12 +30,19 @@ def run_now():
 def checkin_status():
     run = scheduler.get_current_run()
     if run is None:
-        return {"running": False}
+        return {"running": False, "schedule": scheduler.get_schedule_status()}
     running = run.get("status") == "running"
     return {
         "running": running,
         "run": run,
+        "schedule": scheduler.get_schedule_status(),
     }
+
+
+@router.get("/schedule/status")
+def schedule_status():
+    """返回定时签到状态及下一次执行时间。"""
+    return scheduler.get_schedule_status()
 
 
 @router.get("/checkin/last")

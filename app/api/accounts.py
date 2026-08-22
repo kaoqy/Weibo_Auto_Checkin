@@ -81,7 +81,13 @@ class AccountUpdate(BaseModel):
     remark: str | None = None
 
 
-class QrLoginFinish(BaseModel):
+class AccountBatchIn(BaseModel):
+    account_ids: list[int]
+    action: str
+
+
+def _validated_account_ids(account_ids: list[int]) -> list[int]:
+    """严格校验批量操作账号 ID。"""
     session_id: str
     name: str = "扫码登录账号"
     enabled: bool = True

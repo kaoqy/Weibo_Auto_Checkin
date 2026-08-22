@@ -36,6 +36,21 @@ def get_current_run() -> dict | None:
     return _last_run_summary
 
 
+def get_schedule_status() -> dict:
+    """返回定时签到的启用状态、Cron 表达式和下次执行时间。"""
+    enabled = database.get_setting("schedule_enabled", "1") == "1"
+    cron_expr = database.get_setting("schedule_cron", "0 7 * * *")
+    job = scheduler.get_job("weibo_checkin")
+    next_run = job.next_run_time.isoformat() if job and job.next_run_time else None
+    return {
+        "enabled": enabled,
+        "cron": cron_expr,
+        "scheduled": job is not None,
+        "next_run_time": next_run,
+        "timezone": "Asia/Shanghai",
+    }
+
+
 # ========================= 核心签到流程 =========================
 
 def run_checkin(trigger_type: str = "manual") -> dict:
@@ -186,8 +201,9 @@ def reload_schedule() -> None:
         return
 
     try:
-        # 支持 5 段或 6 段 cron
-        parts = cron_expr.strip().split()
+        # APScheduler 的 from_crontab 严格支持标准 5 段 Cron。
+        if len(cron_expr.strip().split()) != 5:
+            raise ValueError("Cron 表达式必须为 5 段")
         trigger = CronTrigger.from_crontab(cron_expr, timezone="Asia/Shanghai")
         scheduler.add_job(_fire_scheduled, trigger, id="weibo_checkin",
                           name=f"微博定时签到 ({cron_expr})",
