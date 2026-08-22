@@ -1,6 +1,8 @@
 """账号管理 API。"""
 from __future__ import annotations
 
+import logging
+import re
 from datetime import datetime
 import json
 import secrets
@@ -14,6 +16,8 @@ from pydantic import BaseModel, Field
 from .. import auth, database
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
+
+log = logging.getLogger("weibo.accounts")
 
 
 class AccountIn(BaseModel):
@@ -94,12 +98,120 @@ class AccountBatchIn(BaseModel):
 
 
 def _validated_account_ids(account_ids: list[int]) -> list[int]:
-    """严格校验批量操作账号 ID。"""
+    """严格校验批量操作账号 ID：去重 + 过滤非正整数 + 限制数量。"""
+    if not account_ids:
+        return []
+    seen: set[int] = set()
+    for raw in account_ids:
+        try:
+            aid = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if aid > 0 and aid not in seen:
+            seen.add(aid)
+    return list(seen)
+
+
+class QrLoginFinish(BaseModel):
     session_id: str
     name: str = "扫码登录账号"
     enabled: bool = True
     proxy_index: int = 0
     remark: str = "扫码登录"
+
+
+# ============== 纯 requests 微博扫码登录（不启动任何无头浏览器） ==============
+# 流程：
+#   1) /qr/start   → 拿到 qrid 与 image（passport 的 qrcode/image）
+#   2) /qr/{id}/status 轮询
+#       - 50114001 (未扫码) / 50114002 (已扫码待确认) → waiting
+#       - 50114003 / 其他错误码 → expired / failed
+#       - 20000000 → 命中确认，触发跨域回调 + 聚合多域 Cookie
+#   3) /qr/finish  → 把聚合后的 Cookie 写入账号
+
+# 真实登录态判定：m.weibo.cn 会给所有未登录访问者也 Set-Cookie 一个孤零零的假 SUB，
+# 必须 SUB 与 (SCF 或 SSOLoginState 或 ALF) 同时存在才视为真实登录。
+_REAL_LOGIN_KEYS = ("SCF", "SSOLoginState", "ALF")
+
+
+def _is_real_login(cookies: dict) -> bool:
+    if not cookies.get("SUB"):
+        return False
+    return any(cookies.get(k) for k in _REAL_LOGIN_KEYS)
+
+
+def _collect_session_cookies(session: requests.Session) -> dict:
+    """聚合当前 Session 内所有域名下的 Cookie（同名以 weibo.cn 域为准）。"""
+    out: dict[str, str] = {}
+    for c in session.cookies:
+        name = c.name
+        if not c.value:
+            continue
+        prev = out.get(name)
+        if prev is None or "weibo.cn" in (c.domain or ""):
+            out[name] = c.value
+    return out
+
+
+_URL_PATTERN = re.compile(r"https?://[^\s'\"\u4e00-\u9fff]+")
+
+
+def _extract_callback_urls(payload: dict) -> list[str]:
+    """从 qrcode/check 的 retdata 中尽可能提取所有回调 URL。
+
+    passport 在确认(20000000)后可能返回：
+      - data.url / data.alt / data.redirect_url / data.location （单一 URL）
+      - data.arrURL / data.arrUrl / data.crossDomainUrlList / data.urlList
+        （字符串或数组形式的多个 URL）
+      - top-level url / redirect_url / new_url / return_url / location
+    """
+    urls: list[str] = []
+    seen: set[str] = set()
+
+    def _push(v):
+        if isinstance(v, str):
+            for m in _URL_PATTERN.findall(v):
+                if m not in seen:
+                    seen.add(m)
+                    urls.append(m)
+        elif isinstance(v, (list, tuple)):
+            for item in v:
+                _push(item)
+        elif isinstance(v, dict):
+            for item in v.values():
+                _push(item)
+
+    if isinstance(payload, dict):
+        inner = payload.get("data")
+        if isinstance(inner, dict):
+            for k in ("arrURL", "arrUrl", "arr_url", "crossDomainUrlList",
+                      "crossdomain_url_list", "urlList", "urls", "url_list"):
+                _push(inner.get(k))
+        _push(payload)
+    return urls
+
+
+def _complete_qr_login(session: requests.Session, item: dict, payload: dict) -> dict:
+    """扫码确认后：访问所有回调 URL（含 arrURL/跨域同步）以落地各域 Cookie。
+
+    返回聚合后的 cookie 字典。
+    """
+    urls = _extract_callback_urls(payload)
+    fallback = item.get("alt")
+    if isinstance(fallback, str) and fallback.startswith("http") and fallback not in urls:
+        urls.append(fallback)
+    log.info("扫码确认回调 URL 数：%d", len(urls))
+    for u in urls:
+        try:
+            session.get(u, timeout=15, allow_redirects=True)
+        except requests.RequestException as exc:
+            log.warning("回调 %s 异常：%s", u, exc)
+    # 兜底：触发 m.weibo.cn 跨域写 cookie（SSOLoginState/WEIBOCN_FROM/MLOGIN 等）
+    try:
+        session.get("https://m.weibo.cn/api/config", timeout=10, allow_redirects=True)
+    except requests.RequestException as exc:
+        log.warning("m.weibo.cn 兜底请求异常：%s", exc)
+    return _collect_session_cookies(session)
 
 
 @router.post("/qr/start")
@@ -191,15 +303,23 @@ def get_qr_login_status(session_id: str, user: dict = Depends(auth.require_admin
         except requests.RequestException as exc:
             raise HTTPException(502, f"完成微博登录失败：{exc}") from exc
 
-    cookie = _cookie_string(session)
-    if not cookie:
+    # 跨域同步（arrURL/crossDomainUrlList 等）+ 多域 Cookie 聚合
+    cookies = _complete_qr_login(session, item, data)
+    if not cookies:
         return {"status": "failed", "message": "登录成功但未能获取 Cookie"}
-    item["cookie"] = cookie
+    if not _is_real_login(cookies):
+        # 没有 SUB+SCF/SSOLoginState/ALF：登录态未落地（可能为假 SUB）
+        item["pending_cookies"] = cookies
+        return {
+            "status": "scanned",
+            "message": "扫码已确认，正在同步登录态…",
+        }
+    item["cookie"] = "; ".join(f"{k}={v}" for k, v in cookies.items())
     item["login_url"] = login_url or ""
     return {
         "status": "confirmed",
         "message": "扫码登录成功，可以保存账号",
-        "cookie_length": len(cookie),
+        "cookie_length": len(item["cookie"]),
     }
 
 
@@ -355,7 +475,7 @@ def export_accounts(user: dict = Depends(auth.require_admin)):
             "remark": acc.get("remark", ""),
         })
     return {
-        "version": "1.0.1",
+        "version": "1.1.0",
         "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "count": len(export_list),
         "accounts": export_list,
