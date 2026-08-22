@@ -122,7 +122,7 @@ def _seed_qr_session(session_id="s1", qrid="q1", alt=""):
             self.cookies = []
             self.headers = {}
 
-        def get(self, url, params=None, timeout=15, allow_redirects=True):
+        def get(self, url, params=None, timeout=15, allow_redirects=True, headers=None):
             if "qrcode/image" in url:
                 payload = {
                     "data": {"qrid": qrid, "image": "https://i/qr.png", "alt": alt},

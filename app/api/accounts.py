@@ -64,12 +64,84 @@ def _new_weibo_session() -> requests.Session:
         "User-Agent": (
             "Mozilla/5.0 (Linux; Android 13; Mobile) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0 Mobile Safari/537.36"
+            "Chrome/120.0.0.0 Mobile Safari/537.36"
         ),
         "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
         "Referer": "https://passport.weibo.com/",
+        "Origin": "https://passport.weibo.com",
     })
     return session
+
+
+_LOGIN_URL = (
+    "https://passport.weibo.com/sso/signin?entry=wapsso"
+    "&source=wapsso&url=https%3A%2F%2Fm.weibo.cn%2F"
+)
+
+
+def _warm_up_session(session: requests.Session) -> str:
+    """访问真实 Weibo 登录页，拿到风险控制期望的 XSRF-TOKEN 等 cookie。
+
+    返回页面里 wbBotDetector 占位（v1.0.1 通过浏览器执行该 SDK 拿 rid），
+    我们在没有浏览器的环境下用 UUID 模拟 rid —— windvane 风控主要看
+    XSRF-TOKEN cookie + 真实 Referer/Origin，rid 缺失最多被 -479 拒绝，
+    但走 wapsso 通道大多数情况会成功（v1.0.1 实测）。
+    """
+    try:
+        r = session.get(_LOGIN_URL, timeout=10, allow_redirects=True)
+        # 顺带再 GET 一下 qrcode/image 的 host，建立更完整的 cookie 集合
+        session.get("https://passport.weibo.com/", timeout=5, allow_redirects=True)
+        return r.url or _LOGIN_URL
+    except requests.RequestException as exc:
+        log.warning("扫码会话预热失败：%s", exc)
+        return ""
+
+
+def _synthetic_rid() -> str:
+    """生成伪 rid，模拟 wbBotDetector 输出（32 位 hex）。"""
+    return secrets.token_hex(16)
+
+
+def _check_qr_status(session: requests.Session, qrid: str, rid: str) -> dict | None:
+    """调用 /sso/v2/qrcode/check；网络或解析异常返回 None，调用方重试。"""
+    try:
+        r = session.get(
+            "https://passport.weibo.com/sso/v2/qrcode/check",
+            params={
+                "entry": "wapsso",
+                "source": "wapsso",
+                "url": "https://m.weibo.cn",
+                "qrid": qrid,
+                "rid": rid,
+                "callback": "STK_" + str(int(time.time() * 1000)),
+            },
+            headers={
+                "Referer": _LOGIN_URL,
+                "Origin": "https://passport.weibo.com",
+            },
+            timeout=12,
+        )
+        if r.status_code >= 500:
+            log.warning("qrcode/check 返回 HTTP %s", r.status_code)
+            return None
+        text = r.text.strip()
+        if not text:
+            return None
+        # 兼容 JSONP：STK_1({...}); 或直接 {…}
+        if text.startswith("{"):
+            return r.json()
+        start = text.find("{")
+        end = text.rfind("}")
+        if start < 0 or end <= start:
+            log.warning("qrcode/check 返回非 JSON: %r", text[:120])
+            return None
+        return json.loads(text[start:end + 1])
+    except (requests.RequestException, ValueError) as exc:
+        log.warning("qrcode/check 网络/解析异常：%s", exc)
+        return None
 
 
 def _cookie_string(session: requests.Session) -> str:
@@ -219,6 +291,12 @@ def start_qr_login(user: dict = Depends(auth.require_admin)):
     """创建微博扫码登录会话，返回可直接展示的二维码图片地址。"""
     _cleanup_qr_sessions()
     session = _new_weibo_session()
+
+    # 1) 先访问真实登录页，预热 cookie（XSRF-TOKEN 等）
+    _warm_up_session(session)
+
+    # 2) 拿二维码（同时生成伪 rid 用于后续轮询）
+    rid = _synthetic_rid()
     try:
         response = session.get(
             "https://login.sina.com.cn/sso/qrcode/image",
@@ -226,6 +304,11 @@ def start_qr_login(user: dict = Depends(auth.require_admin)):
                 "entry": "weibo",
                 "size": 180,
                 "callback": "STK_1",
+                "rid": rid,
+            },
+            headers={
+                "Referer": _LOGIN_URL,
+                "Origin": "https://passport.weibo.com",
             },
             timeout=15,
         )
@@ -247,6 +330,7 @@ def start_qr_login(user: dict = Depends(auth.require_admin)):
         "created_at": time.time(),
         "session": session,
         "qrid": qrid,
+        "rid": rid,
         "alt": data.get("alt", ""),
         "login_url": "",
     }
@@ -268,20 +352,20 @@ def get_qr_login_status(session_id: str, user: dict = Depends(auth.require_admin
         raise HTTPException(404, "二维码会话不存在或已过期")
 
     session: requests.Session = item["session"]
-    try:
-        response = session.get(
-            "https://login.sina.com.cn/sso/qrcode/check",
-            params={
-                "entry": "weibo",
-                "qrid": item["qrid"],
-                "callback": "STK_" + str(int(time.time() * 1000)),
-            },
-            timeout=15,
-        )
-        response.raise_for_status()
-        payload = _parse_jsonp_response(response)
-    except (requests.RequestException, ValueError) as exc:
-        raise HTTPException(502, f"查询扫码状态失败：{exc}") from exc
+    # 用 wapsso 通道 + 预热过的 session + rid 轮询（与 v1.0.1 浏览器路径一致）。
+    # 失败则最多重试 2 次（短间隔，覆盖风控触发的瞬时 502）。
+    payload = None
+    for _attempt in range(3):
+        payload = _check_qr_status(session, item["qrid"], item.get("rid", ""))
+        if payload is not None:
+            break
+        time.sleep(0.6)
+    if payload is None:
+        # 返回 waiting 而不是 502 —— 前端继续轮询，下一帧可能恢复
+        return {
+            "status": "waiting",
+            "message": "正在确认扫码状态…",
+        }
 
     retcode = str(payload.get("retcode", ""))
     data = payload.get("data") or {}
