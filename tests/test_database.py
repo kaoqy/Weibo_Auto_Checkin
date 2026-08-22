@@ -142,3 +142,37 @@ def test_notification_record(tmp_db):
     assert len(notif) == 2
     assert notif[0]["success"] == 0  # 最新在前
     assert notif[1]["success"] == 1
+
+
+def test_get_logs_grouped(tmp_db):
+    """日志按日期分组 + 同次执行归并。"""
+    acc_a = tmp_db.add_account({"name": "A", "cookie": ""})
+    acc_b = tmp_db.add_account({"name": "B", "cookie": ""})
+    # 同一次任务（同 task_id）两个账号
+    tmp_db.add_log({"account_id": acc_a, "account_name": "A", "task_id": "t1",
+                    "status": "success", "channel": "direct", "total": 2, "success": 2, "fail": 0,
+                    "detail": [{"name": "超话1", "success": True}], "message": ""})
+    tmp_db.add_log({"account_id": acc_b, "account_name": "B", "task_id": "t1",
+                    "status": "failed", "channel": "socks", "total": 1, "success": 0, "fail": 1,
+                    "detail": [], "message": "Cookie 失效"})
+    # 另一次任务
+    tmp_db.add_log({"account_id": acc_a, "account_name": "A", "task_id": "t2",
+                    "status": "success", "channel": "direct", "total": 0, "success": 0, "fail": 0,
+                    "detail": [], "message": "成功"})
+
+    grouped = tmp_db.get_logs_grouped()
+    assert len(grouped) >= 1
+    # 取最新日期组
+    day = grouped[0]
+    assert day["date"]  # 有日期
+    # 该日期下的任务组
+    groups = day["groups"]
+    # t2 是最新的，可能在前面；但关键是 t1 的两个账号归为一组
+    t1_groups = [g for g in groups if g["task_id"] == "t1"]
+    assert t1_groups, "t1 任务应存在"
+    g = t1_groups[0]
+    assert len(g["accounts"]) == 2          # 两个账号归并到同一组
+    assert g["total"] == 3                  # 2+1
+    assert g["success"] == 2
+    assert g["fail"] == 1
+    assert g["status"] == "failed"          # 有 failed 账号 → 组失败

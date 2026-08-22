@@ -19,6 +19,8 @@ services:
       - TZ=Asia/Shanghai
       - APP_HOST=0.0.0.0
       - APP_PORT=8000
+      - WCM_ADMIN_USER=${WCM_ADMIN_USER:-admin}
+      - WCM_ADMIN_PASSWORD=${WCM_ADMIN_PASSWORD:-}
     volumes:
       # SQLite 数据库持久化到宿主机 ./data
       - ./data:/app/data
