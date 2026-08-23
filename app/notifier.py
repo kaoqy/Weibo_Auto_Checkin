@@ -61,9 +61,14 @@ def send_telegram(text: str, title: str = "微博签到") -> bool:
 def send_checkin_report(task_summary: dict) -> bool:
     """发送一份签到汇总报告。task_summary 由调度器构建。"""
     accounts = task_summary.get("detail", [])
+    cookie_invalid_accounts = [
+        a.get("name", "未知账号")
+        for a in accounts
+        if a.get("failure_type") == "cookie_invalid"
+    ]
     all_ok = task_summary.get("fail", 0) == 0 and not any(
         a.get("status") == "failed" for a in accounts
-    )
+    ) and not cookie_invalid_accounts
 
     # 仅异常推送模式：全部成功时不打扰
     if all_ok and database.get_setting("tg_only_on_change", "0") == "1":
@@ -88,6 +93,12 @@ def send_checkin_report(task_summary: dict) -> bool:
         f"📋 超话：{total} 个 ｜ ✅ 成功：{success} ｜ ❌ 失败：{fail}",
         f"📈 成功率：{rate}%  {_progress_bar(rate)}",
     ]
+    if cookie_invalid_accounts:
+        lines += [
+            "",
+            "🔐 Cookie 已失效：" + "、".join(cookie_invalid_accounts),
+            "请重新登录上述账号并更新 Cookie。",
+        ]
     for idx, acc in enumerate(accounts, start=1):
         icon = {"success": "✅", "partial": "⚠️", "failed": "❌"}.get(
             acc.get("status"), "ℹ️"
@@ -99,6 +110,8 @@ def send_checkin_report(task_summary: dict) -> bool:
         fails = [r for r in acc.get("results", []) if not r.get("success")]
         lines.append("")
         lines.append(f"{icon} {idx}. {acc.get('name', '未知')}")
+        if acc.get("failure_type") == "cookie_invalid":
+            lines.append("   🔐 Cookie 已失效，请重新登录并更新 Cookie")
         if signed:
             lines.append("   🎉 本次签到：" + "、".join(signed))
         if already:

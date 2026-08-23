@@ -290,7 +290,8 @@ def run_account_checkin(cookie_dict: dict, opts: CheckinOptions,
     """
     cookie_dict = normalize_cookie(cookie_dict)
     if not cookie_dict:
-        return _bundle("failed", "Cookie 为空", 0, 0, 0, [], cookie_dict, [])
+        return _bundle("failed", "Cookie 为空，请重新登录", 0, 0, 0, [],
+                       cookie_dict, [], failure_type="cookie_invalid")
 
     # 代理选择：账号指定 proxy_url 优先；否则按 opts.proxies 轮询
     proxy = None
@@ -312,10 +313,13 @@ def run_account_checkin(cookie_dict: dict, opts: CheckinOptions,
         )
     except NetworkError as exc:
         return _bundle("failed", f"验证 Cookie 网络失败：{exc}", 0, 0, 0, [],
-                       cookie_dict, [], channel)
+                       cookie_dict, [], channel, failure_type="network")
 
     if not logged_in:
-        return _bundle("failed", "Cookie 无效或已过期", 0, 0, 0, [], cookie_dict, [], channel)
+        merged, changed = merge_refreshed_cookies(session, cookie_dict)
+        return _bundle("failed", "Cookie 无效或已过期，请重新登录", 0, 0, 0,
+                       [], merged, changed, channel,
+                       failure_type="cookie_invalid")
 
     try:
         topics = get_followed_topics(
@@ -389,7 +393,7 @@ def run_account_checkin(cookie_dict: dict, opts: CheckinOptions,
 
 
 def _bundle(status, message, total, success, fail, results, cookie,
-            cookie_changed, channel="direct"):
+            cookie_changed, channel="direct", failure_type=None):
     return {
         "status": status,
         "message": message,
@@ -400,4 +404,5 @@ def _bundle(status, message, total, success, fail, results, cookie,
         "cookie": cookie,
         "cookie_changed": cookie_changed,
         "channel": channel,
+        "failure_type": failure_type,
     }

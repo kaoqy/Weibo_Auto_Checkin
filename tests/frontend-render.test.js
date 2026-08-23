@@ -173,6 +173,13 @@ function check(name, cond) {
   check('每日一言开关存在', !!window.document.querySelector('#s-tg_quote_enabled'));
   check('仅异常推送开关存在', !!window.document.querySelector('#s-tg_only_on_change'));
   check('日志保留天数默认 30', window.document.querySelector('#s-log_retention_days').value === '30');
+  check('账号操作已按功能分组', window.document.querySelectorAll('.account-action-group').length === 2);
+  check('设置页使用分组网格', !!window.document.querySelector('.settings-grid'));
+  check('设置页有统一保存操作区', !!window.document.querySelector('.settings-save'));
+
+  const pageHtml = window.document.documentElement.outerHTML;
+  check('样式缓存版本为 1.1.2', pageHtml.includes('/style.css?v=1.1.2'));
+  check('脚本缓存版本为 1.1.2', pageHtml.includes('/app.js?v=1.1.2'));
 
   console.log('— 弹窗 —');
   window.document.querySelector('.nav-item[data-view="accounts"]').click();

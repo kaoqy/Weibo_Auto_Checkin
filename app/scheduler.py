@@ -122,12 +122,17 @@ def run_checkin(trigger_type: str = "manual", account_ids: list[int] | None = No
             log.info("👤 [%s] 账号：%s", log_label, acc.get("name"))
             result = run_account_checkin(cookie_dict, opts, proxy_url=proxy_url)
 
-            # 回写刷新后的 Cookie
-            if result.get("cookie"):
-                new_cookie_str = cookie_to_string(result["cookie"])
-                database.update_account(acc["id"], {"cookie": new_cookie_str})
-                if not acc.get("cookie_raw"):
-                    database.update_account(acc["id"], {"cookie_raw": new_cookie_str})
+            # 仅在 Session 实际获得 Cookie 更新时回写完整合并值。
+            # cookie 与 cookie_raw 始终保持一致，且只使用客户端返回的原始值，
+            # 不使用任何用于日志或 API 展示的脱敏内容。
+            cookie_changed = result.get("cookie_changed") or []
+            refreshed_cookie = result.get("cookie") or {}
+            if cookie_changed and refreshed_cookie:
+                new_cookie_str = cookie_to_string(refreshed_cookie)
+                database.update_account(acc["id"], {
+                    "cookie": new_cookie_str,
+                    "cookie_raw": new_cookie_str,
+                })
 
             # 更新账号状态
             database.touch_account_result(
@@ -138,6 +143,7 @@ def run_checkin(trigger_type: str = "manual", account_ids: list[int] | None = No
             entry = {
                 "name": acc.get("name", "未命名账号"),
                 "status": result["status"],
+                "failure_type": result.get("failure_type"),
                 "message": result.get("message", ""),
                 "channel": _safe_channel_label(result.get("channel", "direct"), group_label),
                 "total": result.get("total", 0),

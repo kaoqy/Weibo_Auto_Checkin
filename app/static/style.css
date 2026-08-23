@@ -405,3 +405,25 @@ input[type="checkbox"]{accent-color:var(--accent);width:15px;height:15px;cursor:
   .proxy-top{flex-wrap:wrap}
   .proxy-actions{width:100%;justify-content:flex-end}
 }
+
+/* v1.1.2: account and settings action layout */
+.account-actions{display:flex;align-items:center;justify-content:flex-end;gap:10px;flex-wrap:wrap}
+.account-action-group{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.account-action-files{padding-left:10px;border-left:1px solid var(--border)}
+.settings-grid .card-head{align-items:flex-start}
+.settings-grid .card-head h2{margin-bottom:2px}
+.settings-grid .form small{display:block;margin-top:5px;color:var(--muted);line-height:1.45}
+.settings-save{position:sticky;bottom:14px;z-index:5;justify-content:flex-end;padding:12px 14px;border:1px solid var(--border);border-radius:12px;background:var(--card);box-shadow:0 8px 24px rgba(0,0,0,.08)}
+@media(max-width:760px){
+  .card-head:has(.account-actions){align-items:stretch;flex-direction:column}
+  .account-actions,.account-action-group{width:100%}
+  .account-action-group{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+  .account-action-group .btn{width:100%;min-width:0}
+  .account-action-files{padding-left:0;padding-top:10px;border-left:0;border-top:1px solid var(--border)}
+  .settings-grid{grid-template-columns:1fr}
+  .settings-save{bottom:8px;display:grid;grid-template-columns:1fr}
+  .settings-save .btn{width:100%}
+}
+@media(max-width:420px){
+  .account-action-group{grid-template-columns:1fr}
+}

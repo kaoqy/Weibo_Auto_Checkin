@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>微博超话签到管理面板</title>
-  <link rel="stylesheet" href="/style.css?v=1.1.1" />
+  <link rel="stylesheet" href="/style.css?v=1.1.2" />
   <script>!function(){try{const t=localStorage.getItem('wcm-theme')||'system';document.documentElement.dataset.theme=t}catch(e){}}()</script>
 </head>
 <body>
@@ -94,13 +94,17 @@
         <div class="card">
           <div class="card-head">
             <h2>账号列表</h2>
-            <div class="account-actions">
-              <button class="btn btn-primary btn-sm" id="btn-add-acc">＋ 添加账号</button>
-              <button class="btn btn-ghost btn-sm" id="btn-qr-add">📱 扫码添加</button>
-              <button class="btn btn-ghost btn-sm" id="btn-batch-import">📥 批量导入</button>
-              <button class="btn btn-ghost btn-sm" id="btn-export">📤 导出</button>
-              <button class="btn btn-ghost btn-sm" id="btn-import">📂 从文件导入</button>
-              <button class="btn btn-primary btn-sm" id="btn-checkin-selected" disabled>✔ 勾选签到</button>
+            <div class="account-actions" aria-label="账号操作">
+              <div class="account-action-group account-action-primary">
+                <button class="btn btn-primary btn-sm" id="btn-add-acc">＋ 添加账号</button>
+                <button class="btn btn-ghost btn-sm" id="btn-qr-add">📱 扫码添加</button>
+                <button class="btn btn-primary btn-sm" id="btn-checkin-selected" disabled>✔ 勾选签到</button>
+              </div>
+              <div class="account-action-group account-action-files">
+                <button class="btn btn-ghost btn-sm" id="btn-batch-import">📥 批量导入</button>
+                <button class="btn btn-ghost btn-sm" id="btn-import">📂 文件导入</button>
+                <button class="btn btn-ghost btn-sm" id="btn-export">📤 导出</button>
+              </div>
             </div>
           </div>
           <div class="batch-bar" id="batchBar" hidden>
@@ -388,6 +392,6 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <script src="/app.js?v=1.1.1"></script>
+  <script src="/app.js?v=1.1.2"></script>
 </body>
 </html>

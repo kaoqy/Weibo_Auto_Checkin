@@ -747,7 +747,7 @@ def export_accounts(user: dict = Depends(auth.require_admin)):
             "remark": acc.get("remark", ""),
         })
     return {
-        "version": "1.1.1",
+        "version": "1.1.2",
         "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "count": len(export_list),
         "accounts": export_list,
