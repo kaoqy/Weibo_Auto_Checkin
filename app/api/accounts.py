@@ -460,50 +460,50 @@ def _extract_weibo_username(payload: object) -> str:
 
 
 def _fetch_weibo_profile(session: requests.Session) -> dict:
-    """使用扫码登录会话获取微博昵称、头像和 UID。"""
+    """通过 m.weibo.cn 获取当前登录账号的昵称、头像和 UID。"""
     result = {"name": "", "avatar_url": "", "uid": ""}
-    endpoints = (
-        (
-            "https://m.weibo.cn/api/config",
-            {
-                "Referer": "https://m.weibo.cn/",
-                "X-Requested-With": "XMLHttpRequest",
-            },
-        ),
-        (
-            "https://m.weibo.cn/api/container/getIndex?containerid=100505",
-            {
-                "Referer": "https://m.weibo.cn/",
-                "X-Requested-With": "XMLHttpRequest",
-            },
-        ),
-        (
-            "https://weibo.com/ajax/profile/info",
-            {
-                "Referer": "https://weibo.com/",
-                "X-Requested-With": "XMLHttpRequest",
-            },
-        ),
-    )
+    headers = {
+        "Referer": "https://m.weibo.cn/",
+        "X-Requested-With": "XMLHttpRequest",
+    }
 
-    for url, headers in endpoints:
-        try:
-            response = session.get(
-                url,
-                timeout=10,
-                allow_redirects=True,
-                headers=headers,
-            )
-            if response.status_code != 200:
-                continue
-            profile = _extract_weibo_profile(response.json())
+    try:
+        response = session.get(
+            "https://m.weibo.cn/api/config",
+            timeout=15,
+            allow_redirects=True,
+            headers=headers,
+        )
+        if response.status_code == 200:
+            payload = response.json() or {}
+            data = payload.get("data") or {}
+            uid = data.get("uid") or data.get("user_id") or ""
+            if uid:
+                result["uid"] = str(uid).strip()
+
+            profile = _extract_weibo_profile(payload)
             for key in result:
                 if not result[key] and profile.get(key):
                     result[key] = profile[key]
-            if result["name"] and result["avatar_url"]:
-                return result
+    except (requests.RequestException, ValueError, TypeError) as exc:
+        log.info("m.weibo.cn 配置接口未返回账号资料：%s", exc)
+
+    if result["uid"]:
+        try:
+            response = session.get(
+                "https://m.weibo.cn/api/container/getIndex",
+                params={"type": "uid", "value": result["uid"]},
+                timeout=15,
+                allow_redirects=True,
+                headers=headers,
+            )
+            if response.status_code == 200:
+                profile = _extract_weibo_profile(response.json())
+                for key in result:
+                    if not result[key] and profile.get(key):
+                        result[key] = profile[key]
         except (requests.RequestException, ValueError, TypeError) as exc:
-            log.info("微博资料接口不可用，尝试下一接口：%s", exc)
+            log.info("m.weibo.cn 用户资料接口未返回账号资料：%s", exc)
 
     if not result["name"]:
         log.warning("扫码登录成功，但微博资料接口未返回有效昵称")
