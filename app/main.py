@@ -26,6 +26,7 @@ logging.basicConfig(
 log = logging.getLogger("weibo.main")
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+DATA_DIR = database.DB_PATH.parent
 
 # 不需要登录的公开路径
 PUBLIC_API_PREFIXES = (
@@ -117,7 +118,11 @@ async def auth_guard(request: Request, call_next):
     return await call_next(request)
 
 
-# 前端静态资源（构建好的单页）
+# 持久化数据资源。头像保存在 data/avatars，并通过本地地址访问。
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/data", StaticFiles(directory=str(DATA_DIR)), name="data")
+
+# 前端静态资源（构建好的单页）必须最后挂载，避免吞掉其他路由。
 if STATIC_DIR.exists():
     app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
 

@@ -305,6 +305,59 @@ def test_extract_weibo_profile_from_nested_payload():
     }
 
 
+def test_cache_weibo_avatar_downloads_to_data_directory(tmp_path, monkeypatch):
+    png = (
+        b"\x89PNG\r\n\x1a\n"
+        b"\x00\x00\x00\rIHDR"
+        b"\x00\x00\x00\x01\x00\x00\x00\x01"
+        b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+    )
+
+    class Response:
+        content = png
+        headers = {"content-type": "image/png"}
+
+        def raise_for_status(self):
+            pass
+
+    class Session:
+        def get(self, url, **kwargs):
+            assert url == "https://tvax.example.com/avatar.png"
+            assert kwargs["headers"]["Referer"] == "https://m.weibo.cn/"
+            return Response()
+
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "weibo_checkin.db")
+    local_url = accounts_api._cache_weibo_avatar(
+        Session(),
+        "https://tvax.example.com/avatar.png",
+        "9876543210",
+    )
+
+    assert local_url == "/data/avatars/9876543210.png"
+    assert (tmp_path / "avatars" / "9876543210.png").read_bytes() == png
+
+
+def test_cache_weibo_avatar_rejects_non_image(tmp_path, monkeypatch):
+    class Response:
+        content = b"not an image"
+        headers = {"content-type": "text/html"}
+
+        def raise_for_status(self):
+            pass
+
+    class Session:
+        def get(self, url, **kwargs):
+            return Response()
+
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "weibo_checkin.db")
+    assert accounts_api._cache_weibo_avatar(
+        Session(),
+        "https://tvax.example.com/avatar",
+        "10001",
+    ) == ""
+    assert not (tmp_path / "avatars").exists()
+
+
 def test_qr_finish_persists_profile_avatar_and_uid(client, monkeypatch):
     item = _seed_qr_session(session_id="p8")
     item["cookie"] = "SUB=sub-cn; SCF=scf-cn"
@@ -317,6 +370,11 @@ def test_qr_finish_persists_profile_avatar_and_uid(client, monkeypatch):
             "uid": "9876543210",
         },
     )
+    monkeypatch.setattr(
+        accounts_api,
+        "_cache_weibo_avatar",
+        lambda session, avatar_url, uid: f"/data/avatars/{uid}.jpg",
+    )
 
     fr = client.post(
         "/api/accounts/qr/finish",
@@ -327,5 +385,5 @@ def test_qr_finish_persists_profile_avatar_and_uid(client, monkeypatch):
 
     account = db.get_accounts()[0]
     assert account["name"] == "自动昵称"
-    assert account["avatar_url"] == "https://tvax.example.com/avatar.jpg"
+    assert account["avatar_url"] == "/data/avatars/9876543210.jpg"
     assert account["weibo_uid"] == "9876543210"

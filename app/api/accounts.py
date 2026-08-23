@@ -1,12 +1,15 @@
 """账号管理 API。"""
 from __future__ import annotations
 
+import imghdr
 import logging
 import re
 from datetime import datetime
 import json
+from pathlib import Path
 import secrets
 import time
+from urllib.parse import urlparse
 
 import requests
 
@@ -18,6 +21,14 @@ from .. import auth, database
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
 
 log = logging.getLogger("weibo.accounts")
+
+AVATAR_MAX_BYTES = 5 * 1024 * 1024
+AVATAR_CONTENT_TYPES = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+}
 
 
 class AccountIn(BaseModel):
@@ -454,6 +465,57 @@ def _extract_weibo_profile(payload: object) -> dict:
     return profile
 
 
+def _cache_weibo_avatar(session, avatar_url: str, uid: str = "") -> str:
+    """下载微博头像到持久化 data/avatars 目录并返回本地访问地址。"""
+    if not avatar_url or not avatar_url.startswith(("http://", "https://")):
+        return ""
+
+    try:
+        response = session.get(
+            avatar_url,
+            timeout=15,
+            allow_redirects=True,
+            headers={
+                "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                "Referer": "https://m.weibo.cn/",
+            },
+        )
+        response.raise_for_status()
+
+        content = response.content
+        if not content or len(content) > AVATAR_MAX_BYTES:
+            return ""
+
+        content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        extension = AVATAR_CONTENT_TYPES.get(content_type)
+        detected = imghdr.what(None, content)
+        detected_extensions = {
+            "jpeg": ".jpg",
+            "png": ".png",
+            "webp": ".webp",
+            "gif": ".gif",
+        }
+        extension = detected_extensions.get(detected, extension)
+        if not extension:
+            return ""
+
+        safe_uid = re.sub(r"[^0-9A-Za-z_-]", "", uid or "")
+        if not safe_uid:
+            source_name = Path(urlparse(avatar_url).path).stem
+            safe_uid = re.sub(r"[^0-9A-Za-z_-]", "", source_name) or secrets.token_hex(12)
+
+        avatar_dir = database.DB_PATH.parent / "avatars"
+        avatar_dir.mkdir(parents=True, exist_ok=True)
+        target = avatar_dir / f"{safe_uid}{extension}"
+        temporary = target.with_suffix(target.suffix + ".tmp")
+        temporary.write_bytes(content)
+        temporary.replace(target)
+        return f"/data/avatars/{target.name}"
+    except (AttributeError, OSError, requests.RequestException) as exc:
+        log.warning("微博头像下载失败（%s）：%s", avatar_url, exc)
+        return ""
+
+
 def _extract_weibo_username(payload: object) -> str:
     """兼容旧调用，只返回微博昵称。"""
     return _extract_weibo_profile(payload)["name"]
@@ -532,6 +594,13 @@ def finish_qr_login(data: QrLoginFinish, user: dict = Depends(auth.require_admin
     sess = item.get("session")
     if sess is not None:
         profile = _fetch_weibo_profile(sess)
+        remote_avatar = profile.get("avatar_url", "")
+        if remote_avatar:
+            profile["avatar_url"] = _cache_weibo_avatar(
+                sess,
+                remote_avatar,
+                profile.get("uid", ""),
+            )
     if not name:
         name = profile.get("name", "")
 
