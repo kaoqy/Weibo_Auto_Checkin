@@ -101,6 +101,21 @@ def test_merge_refreshed_cookies():
     assert changed == ["SUB"]
 
 
+def test_merge_refreshed_cookies_ignores_new_cookie_for_change_detection():
+    """响应中新出现的无关 Cookie 可以合并，但不应触发数据库回写。"""
+    class FakeCookie:
+        def __init__(self, name, value):
+            self.name = name
+            self.value = value
+
+    class FakeSession:
+        cookies = [FakeCookie("SUB", "same"), FakeCookie("WBTOKEN", "new-token")]
+
+    merged, changed = merge_refreshed_cookies(FakeSession(), {"SUB": "same"})
+    assert merged == {"SUB": "same", "WBTOKEN": "new-token"}
+    assert changed == []
+
+
 # ---------- CheckinOptions ----------
 
 def test_checkin_options_from_settings():

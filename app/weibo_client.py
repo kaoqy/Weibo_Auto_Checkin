@@ -243,15 +243,20 @@ def checkin_topic(session, cookies, scheme, st, channel="auto", proxy=None,
 
 
 def merge_refreshed_cookies(session, cookie_dict: dict) -> tuple[dict, list]:
-    """合并响应中的 Set-Cookie，返回 (新dict, 变化的key列表)。"""
+    """合并响应中的 Set-Cookie，返回 (新dict, 变化的key列表)。
+
+    只有「原 cookie_dict 中已存在、且值实际发生变化」的 key 才计入 changed。
+    响应里新出现的无关 cookie 只并入 merged，但不触发回写，避免每次签到
+    都因无关 cookie 被判为「有变动」而频繁写数据库。
+    """
     merged = dict(cookie_dict)
     changed = []
     for cookie in session.cookies:
         if not cookie.value:
             continue
-        if merged.get(cookie.name) != cookie.value:
-            merged[cookie.name] = cookie.value
+        if cookie.name in cookie_dict and cookie_dict[cookie.name] != cookie.value:
             changed.append(cookie.name)
+        merged[cookie.name] = cookie.value
     return merged, changed
 
 
