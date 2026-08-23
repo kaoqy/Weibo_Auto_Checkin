@@ -407,32 +407,61 @@ def get_qr_login_status(session_id: str, user: dict = Depends(auth.require_admin
     }
 
 
+def _walk_profile_dicts(payload: object):
+    """遍历微博接口响应中的字典节点，兼容不同版本的嵌套结构。"""
+    if isinstance(payload, dict):
+        yield payload
+        for value in payload.values():
+            yield from _walk_profile_dicts(value)
+    elif isinstance(payload, list):
+        for value in payload:
+            yield from _walk_profile_dicts(value)
+
+
+def _extract_weibo_profile(payload: object) -> dict:
+    """从微博接口响应中提取昵称、头像和 UID。"""
+    profile = {"name": "", "avatar_url": "", "uid": ""}
+    avatar_keys = (
+        "avatar_hd", "avatar_large", "profile_image_url",
+        "avatar", "avatar_url", "profileImageUrl",
+    )
+
+    for item in _walk_profile_dicts(payload):
+        if not profile["name"]:
+            for key in ("screen_name", "screenName", "nickname", "name"):
+                value = item.get(key)
+                if isinstance(value, str) and value.strip():
+                    profile["name"] = value.strip()
+                    break
+
+        if not profile["avatar_url"]:
+            for key in avatar_keys:
+                value = item.get(key)
+                if isinstance(value, str) and value.strip().startswith(("http://", "https://")):
+                    profile["avatar_url"] = value.strip().replace("http://", "https://", 1)
+                    break
+
+        if not profile["uid"]:
+            for key in ("idstr", "id", "uid", "user_id"):
+                value = item.get(key)
+                if isinstance(value, (str, int)) and str(value).strip():
+                    profile["uid"] = str(value).strip()
+                    break
+
+        if profile["name"] and profile["avatar_url"] and profile["uid"]:
+            break
+
+    return profile
+
+
 def _extract_weibo_username(payload: object) -> str:
-    """从微博不同接口的响应结构中提取昵称。"""
-    if not isinstance(payload, dict):
-        return ""
-
-    candidates: list[object] = [payload]
-    data = payload.get("data")
-    if isinstance(data, dict):
-        candidates.append(data)
-        for key in ("userInfo", "user", "userinfo"):
-            nested = data.get(key)
-            if isinstance(nested, dict):
-                candidates.append(nested)
-
-    for item in candidates:
-        if not isinstance(item, dict):
-            continue
-        for key in ("screen_name", "screenName", "nickname", "name"):
-            value = item.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-    return ""
+    """兼容旧调用，只返回微博昵称。"""
+    return _extract_weibo_profile(payload)["name"]
 
 
-def _fetch_weibo_username(session: requests.Session) -> str:
-    """扫码成功后使用已登录会话获取微博昵称，并在接口变化时自动回退。"""
+def _fetch_weibo_profile(session: requests.Session) -> dict:
+    """使用扫码登录会话获取微博昵称、头像和 UID。"""
+    result = {"name": "", "avatar_url": "", "uid": ""}
     endpoints = (
         (
             "https://m.weibo.cn/api/config",
@@ -448,6 +477,13 @@ def _fetch_weibo_username(session: requests.Session) -> str:
                 "X-Requested-With": "XMLHttpRequest",
             },
         ),
+        (
+            "https://weibo.com/ajax/profile/info",
+            {
+                "Referer": "https://weibo.com/",
+                "X-Requested-With": "XMLHttpRequest",
+            },
+        ),
     )
 
     for url, headers in endpoints:
@@ -460,14 +496,23 @@ def _fetch_weibo_username(session: requests.Session) -> str:
             )
             if response.status_code != 200:
                 continue
-            name = _extract_weibo_username(response.json())
-            if name:
-                return name
+            profile = _extract_weibo_profile(response.json())
+            for key in result:
+                if not result[key] and profile.get(key):
+                    result[key] = profile[key]
+            if result["name"] and result["avatar_url"]:
+                return result
         except (requests.RequestException, ValueError, TypeError) as exc:
-            log.info("微博昵称接口不可用，尝试下一接口：%s", exc)
+            log.info("微博资料接口不可用，尝试下一接口：%s", exc)
 
-    log.warning("扫码登录成功，但微博昵称接口未返回有效昵称")
-    return ""
+    if not result["name"]:
+        log.warning("扫码登录成功，但微博资料接口未返回有效昵称")
+    return result
+
+
+def _fetch_weibo_username(session: requests.Session) -> str:
+    """兼容旧调用，只返回微博昵称。"""
+    return _fetch_weibo_profile(session)["name"]
 
 
 @router.post("/qr/finish")
@@ -481,14 +526,14 @@ def finish_qr_login(data: QrLoginFinish, user: dict = Depends(auth.require_admin
     if not cookie:
         raise HTTPException(409, "扫码登录尚未完成")
 
-    # 自动获取昵称（仅当用户未手动填写名称）
+    # 获取微博资料。手动名称优先，头像和 UID 始终尝试自动获取。
     name = data.name.strip()
+    profile = {"name": "", "avatar_url": "", "uid": ""}
+    sess = item.get("session")
+    if sess is not None:
+        profile = _fetch_weibo_profile(sess)
     if not name:
-        sess = item.get("session")
-        if sess is not None:
-            fetched = _fetch_weibo_username(sess)
-            if fetched:
-                name = fetched
+        name = profile.get("name", "")
 
     account = {
         "name": name or "扫码登录账号",
@@ -497,6 +542,8 @@ def finish_qr_login(data: QrLoginFinish, user: dict = Depends(auth.require_admin
         "enabled": data.enabled,
         "proxy_index": data.proxy_index,
         "remark": data.remark,
+        "avatar_url": profile.get("avatar_url", ""),
+        "weibo_uid": profile.get("uid", ""),
     }
     account_id = database.add_account(account)
     _qr_sessions.pop(data.session_id, None)

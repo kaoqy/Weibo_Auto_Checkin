@@ -57,6 +57,8 @@ def init_db() -> None:
             proxy        TEXT NOT NULL DEFAULT '',     -- 该账号使用的 socks 链接（归属地由 proxy_geo 识别）
             proxy_index  INTEGER NOT NULL DEFAULT 0,  -- 兼容旧字段（已弃用，改用 proxy）
             remark       TEXT NOT NULL DEFAULT '',
+            avatar_url   TEXT NOT NULL DEFAULT '',    -- 微博头像地址
+            weibo_uid    TEXT NOT NULL DEFAULT '',    -- 微博用户 UID
             last_status  TEXT NOT NULL DEFAULT 'unknown', -- success/failed/partial/unknown
             last_checkin TEXT,                         -- 上次签到时间
             last_message TEXT NOT NULL DEFAULT '',
@@ -155,6 +157,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "proxy" not in account_cols:
         conn.execute("ALTER TABLE accounts ADD COLUMN proxy TEXT NOT NULL DEFAULT ''")
         log.info("accounts 表已迁移：新增 proxy 列")
+    account_additions = {
+        "avatar_url": "TEXT NOT NULL DEFAULT ''",
+        "weibo_uid": "TEXT NOT NULL DEFAULT ''",
+    }
+    for name, definition in account_additions.items():
+        if name not in account_cols:
+            conn.execute(f"ALTER TABLE accounts ADD COLUMN {name} {definition}")
+            log.info("accounts 表已迁移：新增 %s 列", name)
 
     # 代理测试结果需要持久显示，避免前端刷新后延迟/结果消失。
     proxy_cols = [r["name"] for r in conn.execute("PRAGMA table_info(proxies)").fetchall()]
@@ -356,9 +366,9 @@ def add_account(data: dict) -> int:
     cur = conn.execute(
         """
         INSERT INTO accounts
-            (name, cookie, cookie_raw, enabled, proxy, remark,
+            (name, cookie, cookie_raw, enabled, proxy, remark, avatar_url, weibo_uid,
              last_status, last_message, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, 'unknown', '', ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'unknown', '', ?, ?)
         """,
         (
             data.get("name", "未命名账号"),
@@ -367,6 +377,8 @@ def add_account(data: dict) -> int:
             1 if data.get("enabled", True) else 0,
             data.get("proxy", ""),   # socks 链接或标识
             data.get("remark", ""),
+            data.get("avatar_url", ""),
+            data.get("weibo_uid", ""),
             now, now,
         ),
     )
@@ -376,7 +388,7 @@ def add_account(data: dict) -> int:
 
 def update_account(account_id: int, data: dict) -> bool:
     conn = _get_conn()
-    allowed = ("name", "cookie", "cookie_raw", "enabled", "proxy", "proxy_index", "remark")
+    allowed = ("name", "cookie", "cookie_raw", "enabled", "proxy", "proxy_index", "remark", "avatar_url", "weibo_uid")
     fields = {k: v for k, v in data.items() if k in allowed}
     if not fields:
         return False
