@@ -185,7 +185,8 @@ function accountIdentity(a, strong = false) {
   const avatar = esc(a.avatar_url || '/default-avatar.svg');
   const name = esc(a.name || '未命名账号');
   const label = strong ? `<strong>${name}</strong>` : `<span>${name}</span>`;
-  return `<span class="account-identity">"${avatar}"${label}</span>`;
+  const image = '<' + 'img class="account-avatar" src="' + avatar + '" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.onerror=null;this.src=\'/default-avatar.svg\'" />';
+  return `<span class="account-identity">${image}${label}</span>`;
 }
 
 function renderDashAccounts(accounts) {
