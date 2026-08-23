@@ -181,11 +181,18 @@ function renderRecentTasks(tasks) {
       <td>${t.finished_at||'—'}</td>
     </tr>`).join('') : '<tr><td colspan="5" style="color:var(--muted)">暂无任务记录</td></tr>';
 }
+function accountIdentity(a, strong = false) {
+  const avatar = esc(a.avatar_url || '/default-avatar.svg');
+  const name = esc(a.name || '未命名账号');
+  const label = strong ? `<strong>${name}</strong>` : `<span>${name}</span>`;
+  return `<span class="account-identity">"${avatar}"${label}</span>`;
+}
+
 function renderDashAccounts(accounts) {
   const tb = $('#dashAccounts tbody');
   tb.innerHTML = accounts.length ? accounts.map(a=>`
     <tr>
-      <td>${a.name}</td>
+      <td>${accountIdentity(a)}</td>
       <td>${statusBadge(a.last_status)}</td>
       <td>${a.last_checkin||'从未'}</td>
       <td style="white-space:normal;color:var(--muted)">${a.last_message||''}</td>
@@ -213,7 +220,7 @@ async function loadAccounts() {
     tb.innerHTML = accounts.length ? accounts.map(a=>`
       <tr data-id="${a.id}">
         <td><input type="checkbox" class="acc-check" data-id="${a.id}" /></td>
-        <td><strong>${esc(a.name)}</strong></td>
+        <td>${accountIdentity(a, true)}</td>
         <td>${a.enabled?statusBadge('success')+' 启用':'<span class="badge gray">已停用</span>'} <span style="color:var(--muted)">·</span> ${statusBadge(a.last_status)}</td>
         <td style="color:var(--muted)">${a.cookie_length} 字符</td>
         <td>${a.proxy_label ? '<span class="badge">'+esc(a.proxy_label)+'</span>' : (a.proxy ? '<span class="badge">'+esc(a.proxy)+'</span>' : '<span class="badge gray">直连</span>')}</td>
