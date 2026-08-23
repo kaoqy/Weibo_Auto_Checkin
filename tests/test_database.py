@@ -89,6 +89,26 @@ def test_touch_account_result(tmp_db):
     assert acc["last_checkin"] is not None
 
 
+def test_account_profile_fields_are_persisted_and_updated(tmp_db):
+    account_id = tmp_db.add_account({
+        "name": "资料账号",
+        "cookie": "SUB=test",
+        "avatar_url": "https://example.com/old-avatar.jpg",
+        "weibo_uid": "10001",
+    })
+    account = tmp_db.get_account(account_id)
+    assert account["avatar_url"] == "https://example.com/old-avatar.jpg"
+    assert account["weibo_uid"] == "10001"
+
+    assert tmp_db.update_account(account_id, {
+        "avatar_url": "https://example.com/new-avatar.jpg",
+        "weibo_uid": "10002",
+    })
+    account = tmp_db.get_account(account_id)
+    assert account["avatar_url"] == "https://example.com/new-avatar.jpg"
+    assert account["weibo_uid"] == "10002"
+
+
 # ---------- 日志 ----------
 
 def test_logs_and_stats(tmp_db):

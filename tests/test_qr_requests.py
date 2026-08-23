@@ -285,3 +285,47 @@ def test_qr_finish_returns_409_if_not_confirmed(client):
     fr = client.post("/api/accounts/qr/finish",
                      json={"session_id": "p7", "name": "扫码号"})
     assert fr.status_code == 409
+
+
+def test_extract_weibo_profile_from_nested_payload():
+    payload = {
+        "data": {
+            "userInfo": {
+                "screen_name": "测试微博用户",
+                "avatar_hd": "http://tvax.example.com/avatar.jpg",
+                "idstr": "1234567890",
+            }
+        }
+    }
+    profile = accounts_api._extract_weibo_profile(payload)
+    assert profile == {
+        "name": "测试微博用户",
+        "avatar_url": "https://tvax.example.com/avatar.jpg",
+        "uid": "1234567890",
+    }
+
+
+def test_qr_finish_persists_profile_avatar_and_uid(client, monkeypatch):
+    item = _seed_qr_session(session_id="p8")
+    item["cookie"] = "SUB=sub-cn; SCF=scf-cn"
+    monkeypatch.setattr(
+        accounts_api,
+        "_fetch_weibo_profile",
+        lambda session: {
+            "name": "自动昵称",
+            "avatar_url": "https://tvax.example.com/avatar.jpg",
+            "uid": "9876543210",
+        },
+    )
+
+    fr = client.post(
+        "/api/accounts/qr/finish",
+        json={"session_id": "p8", "name": ""},
+    )
+    assert fr.status_code == 200
+    assert fr.json()["name"] == "自动昵称"
+
+    account = db.get_accounts()[0]
+    assert account["name"] == "自动昵称"
+    assert account["avatar_url"] == "https://tvax.example.com/avatar.jpg"
+    assert account["weibo_uid"] == "9876543210"
