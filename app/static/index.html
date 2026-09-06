@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>微博超话签到管理面板</title>
-  <link rel="stylesheet" href="/style.css?v=1.1.2" />
+  <link rel="stylesheet" href="/style.css?v=1.2.0" />
   <script>!function(){try{const t=localStorage.getItem('wcm-theme')||'system';document.documentElement.dataset.theme=t}catch(e){}}()</script>
 </head>
 <body>
@@ -251,11 +251,58 @@
             <select id="m-proxy"><option value="">自动 / 直连</option></select>
           </label>
           <label class="inline"><input type="checkbox" id="m-enabled" checked /> 启用自动签到</label>
+          <div class="topic-selector" id="m-topic-selector" hidden>
+            <hr style="border:0;border-top:1px dashed var(--line);margin:14px 0" />
+            <div class="topic-selector-head">
+              <span class="hint">📋 需要自动签到的超话（v1.2.0）。未拉取列表时默认全选。</span>
+              <div class="topic-selector-actions">
+                <button class="btn btn-ghost btn-sm" type="button" id="m-topics-fetch">🔄 拉取列表</button>
+                <button class="btn btn-ghost btn-sm" type="button" id="m-topics-all">全选</button>
+                <button class="btn btn-ghost btn-sm" type="button" id="m-topics-none">全不选</button>
+              </div>
+            </div>
+            <div class="topic-selector-list" id="m-topics-list">
+              <div class="hint" style="padding:14px;text-align:center;color:var(--muted)">
+                点击「拉取列表」从微博拉取该账号关注的超话
+              </div>
+            </div>
+          </div>
         </div>
       </div>
       <div class="modal-foot">
         <button class="btn btn-ghost" id="accModalCancel">取消</button>
         <button class="btn btn-primary" id="accModalSave">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 弹窗：选超话（v1.2.0） -->
+  <div class="modal-mask" id="topicModal" hidden>
+    <div class="modal modal-wide">
+      <div class="modal-head">
+        <h2 id="topicModalTitle">选超话</h2>
+        <button class="modal-close" id="topicModalClose">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="topic-modal-toolbar">
+          <span class="hint" id="topicModalHint">点击「拉取列表」从微博拉取关注超话。</span>
+          <div class="topic-modal-actions">
+            <button class="btn btn-primary btn-sm" type="button" id="btn-topics-fetch">🔄 拉取列表</button>
+            <button class="btn btn-ghost btn-sm" type="button" id="btn-topics-all">全选</button>
+            <button class="btn btn-ghost btn-sm" type="button" id="btn-topics-none">全不选</button>
+            <input class="log-search" id="topicSearch" placeholder="🔍 搜索超话" style="width:160px" />
+          </div>
+        </div>
+        <div class="topic-modal-list" id="topicList">
+          <div class="hint" style="padding:30px;text-align:center;color:var(--muted)">
+            尚未拉取列表
+          </div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <span class="hint" id="topicModalCount" style="margin-right:auto"></span>
+        <button class="btn btn-ghost" id="topicModalCancel">取消</button>
+        <button class="btn btn-primary" id="topicModalSave">保存选择</button>
       </div>
     </div>
   </div>
@@ -392,6 +439,6 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <script src="/app.js?v=1.1.2"></script>
+  <script src="/app.js?v=1.2.0"></script>
 </body>
 </html>

@@ -229,6 +229,7 @@ async function loadAccounts() {
         <td>
           <button class="btn btn-ghost btn-sm" onclick="toggleAccEnabled(${a.id})">${a.enabled?'停用':'启用'}</button>
           <button class="btn btn-ghost btn-sm" onclick="openAccModal(${a.id})">编辑</button>
+          <button class="btn btn-ghost btn-sm" onclick="openTopicModal(${a.id})" title="选需要自动签到的超话">🎯 选超话</button>
           <button class="btn btn-ghost btn-sm" onclick="verifyAcc(${a.id})">校验</button>
           <button class="btn btn-danger btn-sm" onclick="delAcc(${a.id})">删除</button>
         </td>
@@ -365,6 +366,123 @@ async function verifyAcc(id) {
     toast(r.valid ? '✅ Cookie 有效' : '❌ ' + r.message, r.valid?'good':'err');
   } catch(e){ toast('校验失败','err'); }
 }
+
+/* ===== v1.2.0：账号选超话弹窗 ===== */
+let topicEditingId = 0;
+let topicCache = [];      // 当前账号拉到的全量超话（未保存的选择）
+let topicSaved = [];      // 已保存的选择（用于初始化 checkbox）
+let topicDirty = false;
+
+function openTopicModal(id) {
+  topicEditingId = id;
+  topicCache = [];
+  topicSaved = [];
+  topicDirty = false;
+  $('#topicModalTitle').textContent = `选超话 · 账号 #${id}`;
+  $('#topicSearch').value = '';
+  $('#topicList').innerHTML = '<div class="hint" style="padding:30px;text-align:center;color:var(--muted)">点击「拉取列表」从微博拉取关注超话</div>';
+  $('#topicModalHint').textContent = `账号 #${id} · 点击「拉取列表」开始`;
+  $('#topicModalCount').textContent = '';
+  $('#topicModal').hidden = false;
+}
+
+function closeTopicModal() {
+  if (topicDirty && !confirm('修改未保存，确定关闭？')) return;
+  $('#topicModal').hidden = true;
+}
+
+async function fetchTopics() {
+  if (!topicEditingId) return;
+  toast('拉取中…');
+  try {
+    const r = await api.post(`/api/accounts/${topicEditingId}/topics/refresh`);
+    topicCache = r.topics || [];
+    topicSaved = JSON.parse(JSON.stringify(topicCache)); // 备份作为变更对比
+    renderTopicList();
+    $('#topicModalHint').textContent = `账号 #${topicEditingId} · 共 ${r.total} 个超话（今日已签 ${r.done_count}）`;
+    toast(`拉取到 ${r.total} 个超话`, 'good');
+  } catch(e) {
+    toast(e.message || '拉取失败（检查 Cookie/代理）', 'err');
+  }
+}
+
+function renderTopicList() {
+  const kw = (($('#topicSearch')||{}).value || '').trim().toLowerCase();
+  const list = topicCache.filter(t => !kw || (t.name||'').toLowerCase().includes(kw));
+  if (!list.length) {
+    $('#topicList').innerHTML = '<div class="hint" style="padding:30px;text-align:center;color:var(--muted)">没有匹配的超话</div>';
+    $('#topicModalCount').textContent = '';
+    return;
+  }
+  $('#topicList').innerHTML = list.map((t, i) => {
+    const statusCls = t.last_status === 'ok' ? 'ok' : t.last_status === 'fail' ? 'bad' : 'done';
+    const statusText = t.done ? '今日已签'
+      : t.last_status === 'ok' ? '上次 ✔'
+      : t.last_status === 'fail' ? '上次 ✘'
+      : '新';
+    const cb = `<input type="checkbox" data-idx="${topicCache.indexOf(t)}" ${t.enabled?'checked':''} />`;
+    return `<label class="topic-row">
+      ${cb}
+      <span class="topic-name">${esc(t.name||'未命名')}</span>
+      <span class="topic-meta"><span class="topic-status ${statusCls}">${statusText}</span></span>
+    </label>`;
+  }).join('');
+  const total = topicCache.length;
+  const en = topicCache.filter(t => t.enabled).length;
+  $('#topicModalCount').textContent = `已选 ${en} / ${total}`;
+}
+
+function setAllEnabled(val) {
+  topicCache.forEach(t => { t.enabled = !!val; });
+  renderTopicList();
+  topicDirty = true;
+}
+
+async function saveTopics() {
+  if (!topicEditingId) return;
+  if (!topicCache.length) {
+    toast('请先拉取列表', 'err');
+    return;
+  }
+  try {
+    const r = await api.post(`/api/accounts/${topicEditingId}/topics/save-all`,
+                              { topics: topicCache });
+    toast(`已保存（${r.enabled_count}/${r.count} 启用）`, 'good');
+    topicDirty = false;
+    $('#topicModal').hidden = true;
+  } catch(e) {
+    toast('保存失败：' + (e.message || ''), 'err');
+  }
+}
+
+const btnTopicsFetch = $('#btn-topics-fetch');
+if (btnTopicsFetch) btnTopicsFetch.onclick = fetchTopics;
+const btnTopicsAll = $('#btn-topics-all');
+if (btnTopicsAll) btnTopicsAll.onclick = () => setAllEnabled(true);
+const btnTopicsNone = $('#btn-topics-none');
+if (btnTopicsNone) btnTopicsNone.onclick = () => setAllEnabled(false);
+const btnTopicSave = $('#topicModalSave');
+if (btnTopicSave) btnTopicSave.onclick = saveTopics;
+const btnTopicCancel = $('#topicModalCancel');
+if (btnTopicCancel) btnTopicCancel.onclick = closeTopicModal;
+const btnTopicClose = $('#topicModalClose');
+if (btnTopicClose) btnTopicClose.onclick = closeTopicModal;
+const topicSearchEl = $('#topicSearch');
+if (topicSearchEl) topicSearchEl.addEventListener('input', renderTopicList);
+// 委托：点击 checkbox 同步到 topicCache
+const topicListEl = $('#topicList');
+if (topicListEl) topicListEl.addEventListener('change', e => {
+  const cb = e.target.closest('input[type=checkbox][data-idx]');
+  if (!cb) return;
+  const idx = +cb.dataset.idx;
+  if (topicCache[idx]) {
+    topicCache[idx].enabled = cb.checked;
+    topicDirty = true;
+    const total = topicCache.length;
+    const en = topicCache.filter(t => t.enabled).length;
+    $('#topicModalCount').textContent = `已选 ${en} / ${total}`;
+  }
+});
 
 /* ===== 代理管理 ===== */
 let editingProxyId = null;
@@ -802,7 +920,10 @@ function renderLogs() {
   const rows = (logCache||[]).filter(l => {
     if (st && l.status !== st) return false;
     if (!kw) return true;
-    return ((l.account_name||'') + ' ' + (l.message||'')).toLowerCase().includes(kw);
+    // v1.2.0：允许超话名也参与搜索。
+    const hay = ((l.account_name||'') + ' ' + (l.message||'') + ' ' +
+                 (l.detail||[]).map(d => d.name || '').join(' ')).toLowerCase();
+    return hay.includes(kw);
   });
   const countBox = $('#logCount');
   if (countBox) countBox.textContent = `共 ${logTotal} 条，当前显示 ${rows.length} 条${logOffset < logTotal ? ' · <button class="btn btn-ghost btn-sm" onclick="loadLogs(false)">加载更多</button>' : ''}`;
@@ -818,12 +939,43 @@ function renderLogs() {
     const cnt = (l.success!=null && l.total!=null) ? '<span class="log-count">'+l.success+'/'+l.total+'</span>' : '';
     const ch = l.channel ? '<span class="log-chan">'+esc(l.channel)+'</span>' : '';
     const msg = l.message ? '<span class="log-msg">'+esc(l.message)+'</span>' : '';
-    return '<div class="log-simple">' +
+    // v1.2.0：渲染具体超话名。失败详情才出现（成功项跳过项不展开）。
+    const detail = Array.isArray(l.detail) ? l.detail : [];
+    const hasFails = detail.some(d => !d.success);
+    const expandId = `log-detail-${l.id}`;
+    const detailHtml = detail.length ? (
+      hasFails
+        ? `<div class="log-detail" id="${expandId}">` +
+            detail.map(d => {
+              const cls = d.success ? 'ok' : 'bad';
+              const ico = d.success ? '✔' : '✘';
+              return `<span class="tag ${cls}" title="${esc(d.message||'')}">${ico} <b>${esc(d.name||'未知名')}</b></span>`;
+            }).join('') +
+          `</div>`
+        : `<div class="log-detail" id="${expandId}">` +
+            `<span class="tag ok"><b>${detail.length} 个超话全部签到成功</b></span>` +
+          `</div>`
+    ) : '';
+    const toggle = detail.length
+      ? `<button class="log-toggle" onclick="toggleLogDetail('${expandId}', this)" aria-expanded="${hasFails ? 'true' : 'false'}">${hasFails ? '▼' : '▶'}</button>`
+      : '';
+    return '<div class="log-simple' + (hasFails ? ' has-fail' : '') + '">' +
       '<span class="log-simple-time">'+esc(t)+'</span>' +
+      toggle +
       '<span class="log-simple-name">'+esc(l.account_name||'')+'</span>' +
       badge + cnt + ch + msg +
-    '</div>';
+    '</div>' + detailHtml;
   }).join('');
+}
+
+// v1.2.0：折叠/展开某行超话详情。
+function toggleLogDetail(id, btn) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const hidden = el.style.display === 'none';
+  el.style.display = hidden ? '' : 'none';
+  btn.setAttribute('aria-expanded', hidden ? 'true' : 'false');
+  btn.textContent = hidden ? '▼' : '▶';
 }
 const btnRefreshLogs = $('#btn-refresh-logs');
 if (btnRefreshLogs) btnRefreshLogs.onclick = loadLogs;

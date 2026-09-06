@@ -7,15 +7,17 @@
 - 🖥️ **管理面板**：仪表盘 / 账号 / 日志 / 设置，白天黑夜主题
 - 🔐 **登录保护**：首次部署可视化初始化设置管理员；未登录拦截；改密 / 退出
 - 📱 **微博扫码添加账号**：弹二维码 → 微博 App 扫码确认 → 自动获取 Cookie
+- 🎯 **账号选超话**（v1.2.0）：一个账号下只勾选需要签的超话，未勾的不签
 - 🍪 **Cookie 生成器**：粘贴 Cookie 自动解析，一键导入账号
 - ⏰ **自动定时签到**：Cron 可配（支持 5 段 / 6 段青龙格式）
 - ✅ **已签自动跳过**：不重复签到
+- 📜 **超话粒度日志**（v1.2.0）：日志行可展开查看每个超话的签到结果
 - 🛡️ **防封策略**：凌晨窗口随机等待、SOCKS5 代理池、失败回退、三遍重试
 - 🌍 **智能代理调度**：独立「代理」页管理 Socks5 节点（手动输入或粘贴链接自动识别归属地）；每个账号可指定 socks；**不同 socks 的账号并行签到**，同 socks 依次签到
 - 📲 **Telegram 推送**：签到完成自动推送汇总
 - 📜 **分组日志**：按日期分区，单次执行的所有账号归并一组
 - 🗄️ **SQLite**：账号 / 日志 / 任务 / 用户 / 通知全部持久化
-- 🐳 **Docker 一键部署**
+- 🐳 **Docker 一键部署**（v1.2.0：自动识别国内出口IP并写入 Docker registry-mirrors）
 
 ## 🚀 快速部署
 
@@ -48,7 +50,13 @@ bash install.sh logs       # 跟随查看日志
 bash install.sh start      # 启动
 bash install.sh stop       # 停止
 bash install.sh restart    # 重启
+bash install.sh mirror     # 重写 Docker 国内镜像源（不重启容器，仅改 /etc/docker/daemon.json）
 ```
+
+**国内服务器镜像加速**（v1.2.0）：脚本首次运行时会自动检测服务器出口 IP 所在国家，
+若为 CN/HK/MO 则自动写入 `/etc/docker/daemon.json` 的 `registry-mirrors`（包括
+`docker.1ms.run`、`docker.m.daocloud.io` 等多个镜像源），并触发 dockerd reload。
+绕过检测可用 `WCM_FORCE_MIRROR=1 bash install.sh`；完全跳过可用 `WCM_SKIP_MIRROR=1`。
 
 ## 🐳 手动 Docker（不用脚本）
 
@@ -91,6 +99,13 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python run.py checkin  # 命令行跑一次签到
 ```
 
+## 🛠️ CI：自动构建镜像（v1.2.0）
+
+`.github/workflows/build-docker.yml`：推送 `v*.*.*` tag 后自动构建多架构镜像
+（`linux/amd64` + `linux/arm64`）并推送 `kaoqy666/weibo-checkin:<version>` 与
+`:latest`。需在仓库 Settings → Secrets → Actions 配置 `DOCKERHUB_USERNAME` 与
+`DOCKERHUB_TOKEN`。也可手动触发（workflow_dispatch）。
+
 ## 🎯 使用
 
 1. 初始化/登录面板
@@ -98,8 +113,9 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 3. 添加账号时可为每个账号「指定 socks 节点」（下拉显示归属地）
    - **不同 socks 的账号 → 并行签到**
    - **同 socks / 未指定的账号 → 依次签到**
-4. 「设置」配 TG 通知、定时、防封
-5. 点「立即签到」或等定时任务自动执行
+4. “选超话”：账号列表点 🎯 进入超话选择器，拉取→勾选→保存；不勾的超话不会被自动签到（v1.2.0）
+5. 「设置」配 TG 通知、定时、防封
+6. 点「立即签到」或等定时任务自动执行
 
 ## 🔒 安全
 
@@ -110,7 +126,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ## 🧪 测试
 
 ```bash
-.venv/bin/python -m pytest tests/ -v   # 57 个测试
+.venv/bin/python -m pytest tests/ -v   # 105 个测试
 node tests/frontend-render.test.js      # 前端渲染测试（自动装 jsdom）
 ```
 

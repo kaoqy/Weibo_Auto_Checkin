@@ -747,7 +747,7 @@ def export_accounts(user: dict = Depends(auth.require_admin)):
             "remark": acc.get("remark", ""),
         })
     return {
-        "version": "1.1.2",
+        "version": "1.2.0",
         "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "count": len(export_list),
         "accounts": export_list,
@@ -878,3 +878,125 @@ def verify_one(account_id: int, user: dict = Depends(auth.require_admin)):
     return {"valid": logged_in,
             "message": "Cookie 有效" if logged_in else "Cookie 无效或已过期",
             "channel": channel}
+
+
+# ========================= 超话选（v1.2.0） =========================
+
+class TopicSelectionUpdate(BaseModel):
+    """一次性保存账号超话选状态。未传的 name 会原样保留。"""
+    enabled: dict[str, bool] = Field(default_factory=dict)
+
+
+@router.get("/{account_id}/topics")
+def list_topics(account_id: int, user: dict = Depends(auth.require_admin)):
+    """返回账号的超话选列表。未拉取过 → 空列表（前端提示「请拉取」）。"""
+    acc = database.get_account(account_id)
+    if not acc:
+        raise HTTPException(404, "账号不存在")
+    return database.list_topic_selections(account_id)
+
+
+@router.post("/{account_id}/topics/refresh")
+def refresh_topics(account_id: int, user: dict = Depends(auth.require_admin)):
+    """实时调用微博接口拉取该账号关注超话列表，返回原样的可选项供前端渲染。
+    不自动保存——用户勾选后再 POST /topics。
+    """
+    from ..weibo_client import (
+        CheckinOptions, normalize_cookie, get_followed_topics,
+    )
+
+    acc = database.get_account(account_id)
+    if not acc:
+        raise HTTPException(404, "账号不存在")
+    cookie = normalize_cookie(acc.get("cookie") or acc.get("cookie_raw") or "")
+    if not cookie:
+        raise HTTPException(400, "账号 Cookie 为空，请先登录")
+    opts = CheckinOptions.from_settings(database.get_setting)
+    proxy = (acc.get("proxy") or "").strip() or None
+    channel = "socks" if proxy else "direct"
+    if not proxy and opts.proxies:
+        idx = (acc.get("proxy_index") or 0) % len(opts.proxies)
+        proxy = opts.proxies[idx]
+        channel = "socks"
+
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) "
+                      "AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148",
+        "Referer": "https://m.weibo.cn/",
+        "Accept": "application/json, text/plain, */*",
+        "X-Requested-With": "XMLHttpRequest",
+    })
+    try:
+        topics = get_followed_topics(
+            session, cookie, channel=channel, proxy=proxy,
+            force=opts.proxy_force, allow_fallback=opts.proxy_fallback,
+        )
+    except Exception as exc:
+        raise HTTPException(502, f"拉取超话列表失败：{exc}") from exc
+
+    # 合并现有 last_status，供前端 UI 展示
+    by_name = {s["topic_name"]: s for s in database.list_topic_selections(account_id)}
+    for t in topics:
+        prev = by_name.get(t["name"])
+        t["enabled"] = True if prev is None else bool(prev.get("enabled"))
+        t["last_status"] = prev.get("last_status", "unknown") if prev else "unknown"
+
+    return {
+        "total": len(topics),
+        "done_count": sum(1 for t in topics if t.get("done")),
+        "topics": topics,
+    }
+
+
+@router.put("/{account_id}/topics")
+def update_topic_selections(account_id: int, data: TopicSelectionUpdate,
+                              user: dict = Depends(auth.require_admin)):
+    """根据前端传来的 enabled 字典增量更新选择；未传入的视为已勾选（兼容全选）。"""
+    acc = database.get_account(account_id)
+    if not acc:
+        raise HTTPException(404, "账号不存在")
+    existing = database.list_topic_selections(account_id)
+    if not existing:
+        # 还未拉取过，不能盲目存空
+        raise HTTPException(400, "尚未拉取超话列表，请先「拉取列表」")
+    items = []
+    for s in existing:
+        name = s["topic_name"]
+        enabled = data.enabled.get(name, bool(s.get("enabled")))
+        items.append({
+            "name": name,
+            "topic_id": s.get("topic_id", ""),
+            "enabled": enabled,
+            "last_seen": s.get("last_seen") or "",
+        })
+    database.replace_topic_selections(account_id, items)
+    return {"ok": True, "count": len(items),
+            "enabled_count": sum(1 for x in items if x["enabled"])}
+
+
+@router.post("/{account_id}/topics/save-all")
+def save_all_topics(account_id: int, payload: dict,
+                       user: dict = Depends(auth.require_admin)):
+    """前端拉取后一次性保存原始全列表，默认全选。
+    payload 格式：{"topics": [{"name", "topic_id", "enabled", "done"}, ...]}
+    """
+    acc = database.get_account(account_id)
+    if not acc:
+        raise HTTPException(404, "账号不存在")
+    topics = payload.get("topics") or []
+    if not isinstance(topics, list) or not topics:
+        raise HTTPException(400, "topics 不能为空")
+    items = []
+    for t in topics:
+        name = (t.get("name") or "").strip()
+        if not name:
+            continue
+        items.append({
+            "name": name,
+            "topic_id": t.get("topic_id") or t.get("id") or "",
+            "enabled": bool(t.get("enabled", True)),
+        })
+    database.replace_topic_selections(account_id, items)
+    return {"ok": True, "count": len(items),
+            "enabled_count": sum(1 for x in items if x["enabled"])}

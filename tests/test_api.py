@@ -206,7 +206,7 @@ def test_run_checkin_groups_by_proxy(tmp_path, monkeypatch):
     a3 = db.add_account({"name": "A3", "cookie_raw": "SUB=c", "proxy": "socks5://p2:1080"})
 
     called = []
-    def fake_checkin(cookie, opts, proxy_url=None, proxy_index=0):
+    def fake_checkin(cookie, opts, proxy_url=None, proxy_index=0, account_id=None):
         called.append(proxy_url)
         return _bundle("success", "ok", 1, 1, 0,
                        [{"name": "超话", "success": True, "message": "已签到"}],
@@ -243,7 +243,7 @@ def test_run_checkin_selected_accounts(tmp_path, monkeypatch):
     a3 = db.add_account({"name": "A3", "cookie_raw": "SUB=c", "enabled": 1})
 
     called = []
-    def fake_checkin(cookie, opts, proxy_url=None, proxy_index=0):
+    def fake_checkin(cookie, opts, proxy_url=None, proxy_index=0, account_id=None):
         name = cookie.get("SUB", "?")
         called.append(name)
         return _bundle("success", "ok", 1, 1, 0,
@@ -277,7 +277,7 @@ def test_run_checkin_disabled_excluded(tmp_path, monkeypatch):
     db.add_account({"name": "OFF", "cookie_raw": "SUB=off", "enabled": 0})
 
     called = []
-    def fake_checkin(cookie, opts, proxy_url=None, proxy_index=0):
+    def fake_checkin(cookie, opts, proxy_url=None, proxy_index=0, account_id=None):
         called.append(cookie.get("SUB"))
         return _bundle("success", "ok", 1, 1, 0, [], dict(cookie), [], "direct")
 
@@ -817,3 +817,168 @@ def test_detect_endpoint_accepts_proxy_id(client, no_geo, monkeypatch):
     # 打码链接不应被当成真链接去拨号
     r = client.post("/api/proxies/detect", json={"url": "socks5://***@7.7.7.7:1080"})
     assert r.status_code == 400
+
+
+# ========================= v1.2.0: 账号选超话 =========================
+
+class _FakeResp:
+    def __init__(self, payload, status=200):
+        self._payload = payload
+        self.status_code = status
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+    def json(self):
+        return self._payload
+
+
+def _mock_followed_topics(monkeypatch, topics_payload):
+    """patch weibo_client.get_followed_topics 返回指定超话列表。"""
+    from app import weibo_client as wc
+    monkeypatch.setattr(wc, "get_followed_topics",
+                        lambda *a, **kw: topics_payload)
+
+
+def test_topics_refresh_returns_followed_topics(client, tmp_path, monkeypatch):
+    """GET /api/accounts/{id}/topics/refresh 调用 weibo_client 并返回合并了 last_status 的列表。"""
+    # 准备账号 + 预先写过选择，验证 last_status 合并
+    aid = db.add_account({
+        "name": "选超话账号",
+        "cookie_raw": "SUB=abc; SCF=zzz",
+        "enabled": True,
+    })
+    db.replace_topic_selections(aid, [
+        {"name": "微博热搜", "topic_id": "100101", "enabled": False},
+        {"name": "明星榜", "topic_id": "100102", "enabled": True},
+    ])
+
+    _mock_followed_topics(monkeypatch, [
+        {"name": "微博热搜", "id": "100101", "scheme": None, "done": True},
+        {"name": "明星榜",   "id": "100102", "scheme": "weibocn://xxx", "done": False},
+        {"name": "新出现的超话", "id": "100103", "scheme": "weibocn://yyy", "done": False},
+    ])
+
+    r = client.post(f"/api/accounts/{aid}/topics/refresh")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["total"] == 3
+    by_name = {t["name"]: t for t in body["topics"]}
+    # 已存在的：enabled 来自库；不存在的：默认 enabled=True
+    assert by_name["微博热搜"]["enabled"] is False
+    assert by_name["明星榜"]["enabled"] is True
+    assert by_name["新出现的超话"]["enabled"] is True
+    assert body["done_count"] == 1
+
+
+def test_topics_save_all_replaces_selection(client, tmp_path, monkeypatch):
+    """POST /topics/save-all 用一次性 payload 写入选择库。"""
+    aid = db.add_account({
+        "name": "二号", "cookie_raw": "SUB=x", "enabled": True,
+    })
+    payload = {"topics": [
+        {"name": "A", "topic_id": "1", "enabled": True},
+        {"name": "B", "topic_id": "2", "enabled": False},
+        {"name": "C", "topic_id": "3", "enabled": True},
+    ]}
+    r = client.post(f"/api/accounts/{aid}/topics/save-all", json=payload)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["count"] == 3
+    assert body["enabled_count"] == 2
+
+    listed = {s["topic_name"]: bool(s["enabled"])
+              for s in db.list_topic_selections(aid)}
+    assert listed == {"A": True, "B": False, "C": True}
+
+
+def test_topics_put_rejects_when_never_refreshed(client):
+    """未拉取列表就 PUT /topics 应返回 400（不能盲存空选择）。"""
+    aid = db.add_account({
+        "name": "空账号", "cookie_raw": "SUB=z", "enabled": True,
+    })
+    r = client.put(f"/api/accounts/{aid}/topics",
+                    json={"enabled": {"A": True}})
+    assert r.status_code == 400, r.text
+
+
+def test_topics_put_updates_enabled_only(client, tmp_path):
+    """已拉过列表的账号可以增量更新 enabled 字典。"""
+    aid = db.add_account({
+        "name": "三号", "cookie_raw": "SUB=y", "enabled": True,
+    })
+    db.replace_topic_selections(aid, [
+        {"name": "X", "topic_id": "1", "enabled": True},
+        {"name": "Y", "topic_id": "2", "enabled": True},
+        {"name": "Z", "topic_id": "3", "enabled": True},
+    ])
+    r = client.put(f"/api/accounts/{aid}/topics",
+                    json={"enabled": {"Y": False, "Z": False}})
+    assert r.status_code == 200, r.text
+    by_name = {s["topic_name"]: bool(s["enabled"])
+               for s in db.list_topic_selections(aid)}
+    assert by_name == {"X": True, "Y": False, "Z": False}
+
+
+def test_filter_enabled_topics_when_no_selection_returns_all(tmp_path, monkeypatch):
+    """账号从未拉取列表 → filter_enabled_topics 应原样返回（= 全选默认）。"""
+    import app.database as db
+    db_path = tmp_path / "test_filter_empty.db"
+    monkeypatch.setattr(db, "DB_PATH", db_path)
+    db._local.conn = None
+    db.init_db()
+    aid = db.add_account({
+        "name": "全选默认", "cookie_raw": "SUB=q", "enabled": True,
+    })
+    topics = [
+        {"name": "A", "id": "1", "scheme": None, "done": False},
+        {"name": "B", "id": "2", "scheme": None, "done": False},
+    ]
+    out = db.filter_enabled_topics(aid, topics)
+    assert out == topics
+
+
+def test_filter_enabled_topics_when_selection_exists(tmp_path, monkeypatch):
+    """已拉取过列表的账号 → 只保留 enabled=1 的超话。"""
+    import app.database as db
+    db_path = tmp_path / "test_filter_sel.db"
+    monkeypatch.setattr(db, "DB_PATH", db_path)
+    db._local.conn = None
+    db.init_db()
+    aid = db.add_account({
+        "name": "已选", "cookie_raw": "SUB=w", "enabled": True,
+    })
+    db.replace_topic_selections(aid, [
+        {"name": "A", "topic_id": "1", "enabled": True},
+        {"name": "B", "topic_id": "2", "enabled": False},
+        {"name": "C", "topic_id": "3", "enabled": True},
+    ])
+    topics = [
+        {"name": "A", "id": "1", "scheme": None, "done": False},
+        {"name": "B", "id": "2", "scheme": None, "done": False},
+        {"name": "C", "id": "3", "scheme": None, "done": False},
+        {"name": "D", "id": "4", "scheme": None, "done": False},  # 没在选择里
+    ]
+    out = db.filter_enabled_topics(aid, topics)
+    names = [t["name"] for t in out]
+    # D 被丢弃（B 没勾）；A/C 保留
+    assert sorted(names) == ["A", "C"]
+
+
+def test_delete_account_cascades_topic_selections(tmp_path, monkeypatch):
+    """删账号时 ON DELETE CASCADE 应带走选超话。"""
+    import app.database as db
+    db_path = tmp_path / "test_cascade.db"
+    monkeypatch.setattr(db, "DB_PATH", db_path)
+    db._local.conn = None
+    db.init_db()
+    aid = db.add_account({
+        "name": "待删", "cookie_raw": "SUB=d", "enabled": True,
+    })
+    db.replace_topic_selections(aid, [
+        {"name": "A", "topic_id": "1", "enabled": True},
+    ])
+    assert db.list_topic_selections(aid)
+    db.delete_account(aid)
+    assert db.list_topic_selections(aid) == []

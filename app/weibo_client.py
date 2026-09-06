@@ -14,6 +14,8 @@ from urllib.parse import parse_qs, urlparse
 
 import requests
 
+from . import database  # noqa: E402  (v1.2.0: 按账号选超话过滤)
+
 log = logging.getLogger("weibo.client")
 
 # SOCKS 支持检测（缺失时给出明确提示）
@@ -286,11 +288,13 @@ class CheckinOptions:
 
 def run_account_checkin(cookie_dict: dict, opts: CheckinOptions,
                         proxy_url: str | None = None,
-                        proxy_index: int = 0) -> dict:
+                        proxy_index: int = 0,
+                        account_id: int | None = None) -> dict:
     """
     对单个账号执行一遍签到。
     - proxy_url: 账号指定使用的 socks 链接（优先）
     - proxy_index: 无指定时按 opts.proxies 轮询的序号（兼容旧逻辑）
+    - account_id: 提供则按账号选超话配置过滤（v1.2.0）
     返回 dict：{status, channel, total, success, fail, message, results, cookie, cookie_changed}
     """
     cookie_dict = normalize_cookie(cookie_dict)
@@ -335,9 +339,13 @@ def run_account_checkin(cookie_dict: dict, opts: CheckinOptions,
         return _bundle("failed", f"获取超话列表网络失败：{exc}", 0, 0, 0, [],
                        cookie_dict, [], channel)
 
+    # v1.2.0：账号未拉取选择列表时 = 全选，拉取过则只签用户勾选的。
+    if account_id is not None:
+        topics = database.filter_enabled_topics(account_id, topics)
+
     if not topics:
         merged, changed = merge_refreshed_cookies(session, cookie_dict)
-        return _bundle("success", "没有关注超话", 0, 0, 0, [],
+        return _bundle("success", "没有需要签到的超话", 0, 0, 0, [],
                        merged, changed, channel)
 
     results = []

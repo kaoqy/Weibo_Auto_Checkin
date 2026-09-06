@@ -1,0 +1,102 @@
+name: build-docker
+
+# 自动构建 Docker 镜像并推送到 kaoqy666/weibo-checkin。
+#
+# 触发条件：
+#   - push tag: v*.*.*   → 构建镜像并打 version tag + latest
+#   - workflow_dispatch   → 手动触发（默认 dry-run，需要 secrets 已配置才真推）
+#
+# 所需 GitHub Secrets（在仓库 Settings → Secrets → Actions 配置）：
+#   DOCKERHUB_USERNAME       Docker Hub 用户名
+#   DOCKERHUB_TOKEN          Docker Hub Access Token（推荐用 token 而非密码）
+#
+# 平台：linux/amd64 + linux/arm64（多架构）
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      push_latest:
+        description: "是否同时更新 latest tag"
+        required: true
+        default: "true"
+        type: boolean
+
+env:
+  IMAGE_NAME: kaoqy666/weibo-checkin
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract version
+        id: version
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME}"
+          else
+            VERSION="dev-${GITHUB_SHA::7}"
+          fi
+          echo "VERSION=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Building version: ${VERSION}"
+
+      - name: Determine tags
+        id: tags
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          # 默认行为：tag 触发 → 用版本号 + latest；手动触发 → 仅版本号（除非勾选 push_latest）
+          TAGS="${IMAGE_NAME}:${VERSION}"
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            TAGS="${TAGS},${IMAGE_NAME}:latest"
+          else
+            if [[ "${{ github.event.inputs.push_latest }}" == "true" ]]; then
+              TAGS="${TAGS},${IMAGE_NAME}:latest"
+            fi
+          fi
+          # 把 TAGS 转换成多行，供 build-push-action 的 tags.with 读取
+          echo "tags<<EOF" >> "$GITHUB_OUTPUT"
+          echo -e "${TAGS//,/\n}" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name == 'push' || github.event.inputs.push_latest != '' }}
+          tags: ${{ steps.tags.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+
+      - name: Summary
+        run: |
+          echo "### 🐳 Docker 镜像构建完成" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "镜像名：**${{ env.IMAGE_NAME }}**" >> "$GITHUB_STEP_SUMMARY"
+          echo "版本：**${{ steps.version.outputs.VERSION }}**" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Tags：" >> "$GITHUB_STEP_SUMMARY"
+          for t in ${{ steps.tags.outputs.tags }}; do
+            echo "- \`${t}\`" >> "$GITHUB_STEP_SUMMARY"
+          done

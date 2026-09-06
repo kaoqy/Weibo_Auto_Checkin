@@ -142,6 +142,23 @@ def init_db() -> None:
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         );
 
+        -- 账号关注超话选择（v1.2.0）：
+        --   同一账号关注的超话可能很多，用户可只勾选需要自动签到的几个；
+        --   没勾的超话在签到时被过滤，未拉取列表前视为「全选」。
+        CREATE TABLE IF NOT EXISTS account_topic_selections (
+            account_id   INTEGER NOT NULL,
+            topic_name   TEXT NOT NULL,
+            topic_id     TEXT NOT NULL DEFAULT '',
+            enabled      INTEGER NOT NULL DEFAULT 1,
+            last_status  TEXT NOT NULL DEFAULT 'unknown',  -- ok/fail/unknown
+            last_seen    TEXT NOT NULL DEFAULT '',         -- 上次拉取列表时这个超话还在关注
+            updated_at   TEXT NOT NULL,
+            PRIMARY KEY (account_id, topic_name),
+            FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_topic_sel_account
+            ON account_topic_selections(account_id);
+
         CREATE INDEX IF NOT EXISTS idx_logs_account ON checkin_logs(account_id);
         CREATE INDEX IF NOT EXISTS idx_logs_time   ON checkin_logs(created_at);
         """
@@ -820,3 +837,90 @@ def delete_user_sessions(user_id: int) -> None:
     conn = _get_conn()
     conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
     conn.commit()
+
+
+# ========================= 超话选（v1.2.0） =========================
+
+def list_topic_selections(account_id: int) -> list[dict]:
+    """返回账号的关注超话选择列表。空列表 = 从未拉取过 → 默认全选。"""
+    rows = _get_conn().execute(
+        "SELECT * FROM account_topic_selections WHERE account_id = ? ORDER BY topic_name",
+        (account_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def has_topic_selections(account_id: int) -> bool:
+    """该账号是否曾经拉过超话列表（用于判断「全选」 vs 「按选择」）"""
+    row = _get_conn().execute(
+        "SELECT 1 FROM account_topic_selections WHERE account_id = ? LIMIT 1",
+        (account_id,),
+    ).fetchone()
+    return row is not None
+
+
+def replace_topic_selections(account_id: int, items: list[dict]) -> int:
+    """原子替换某账号的选超话列表。
+
+    items: [{"name": "xxx", "topic_id": "...", "enabled": True/False}, ...]
+    返回写入条数。
+    """
+    conn = _get_conn()
+    now = _now()
+    conn.execute("DELETE FROM account_topic_selections WHERE account_id = ?", (account_id,))
+    for it in items:
+        conn.execute(
+            """
+            INSERT INTO account_topic_selections
+                (account_id, topic_name, topic_id, enabled, last_seen, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                account_id,
+                (it.get("name") or "").strip(),
+                it.get("topic_id") or "",
+                1 if it.get("enabled", True) else 0,
+                it.get("last_seen") or now,
+                now,
+            ),
+        )
+    conn.commit()
+    return len(items)
+
+
+def update_topic_enabled(account_id: int, topic_name: str, enabled: bool) -> bool:
+    conn = _get_conn()
+    cur = conn.execute(
+        """
+        UPDATE account_topic_selections
+        SET enabled = ?, updated_at = ?
+        WHERE account_id = ? AND topic_name = ?
+        """,
+        (1 if enabled else 0, _now(), account_id, topic_name),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def set_topic_last_status(account_id: int, topic_name: str, status: str) -> None:
+    """单个超话最近一次签到结果（ok/fail/unknown），用于面板 UI 徽标。"""
+    _get_conn().execute(
+        """
+        UPDATE account_topic_selections
+        SET last_status = ?, updated_at = ?
+        WHERE account_id = ? AND topic_name = ?
+        """,
+        (status, _now(), account_id, topic_name),
+    )
+
+
+def filter_enabled_topics(account_id: int, topics: list[dict]) -> list[dict]:
+    """根据账号选择过滤超话：未拉过列表则原样返回；拉过则只保留 enabled=1。
+
+    topics: [{name, id, scheme, done}, ...]
+    """
+    selections = list_topic_selections(account_id)
+    if not selections:
+        return topics
+    enabled_names = {s["topic_name"] for s in selections if s.get("enabled")}
+    return [t for t in topics if t.get("name") in enabled_names]
