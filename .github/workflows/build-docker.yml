@@ -61,21 +61,23 @@ jobs:
 
       - name: Determine tags
         id: tags
+        shell: bash
         run: |
           VERSION="${{ steps.version.outputs.VERSION }}"
           # 默认行为：tag 触发 → 用版本号 + latest；手动触发 → 仅版本号（除非勾选 push_latest）
-          TAGS="${IMAGE_NAME}:${VERSION}"
+          TAGS=("${IMAGE_NAME}:${VERSION}")
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            TAGS="${TAGS},${IMAGE_NAME}:latest"
+            TAGS+=("${IMAGE_NAME}:latest")
           else
             if [[ "${{ github.event.inputs.push_latest }}" == "true" ]]; then
-              TAGS="${TAGS},${IMAGE_NAME}:latest"
+              TAGS+=("${IMAGE_NAME}:latest")
             fi
           fi
-          # 把 TAGS 转换成多行，供 build-push-action 的 tags.with 读取
-          echo "tags<<EOF" >> "$GITHUB_OUTPUT"
-          echo -e "${TAGS//,/\n}" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+          {
+            echo "tags<<EOF"
+            printf '%s\n' "${TAGS[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Build and push
         uses: docker/build-push-action@v5
@@ -83,7 +85,7 @@ jobs:
           context: .
           file: ./Dockerfile
           platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name == 'push' || github.event.inputs.push_latest != '' }}
+          push: ${{ github.event_name == 'push' || github.event.inputs.push_latest == 'true' }}
           tags: ${{ steps.tags.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
