@@ -1,41 +1,40 @@
 #!/usr/bin/env bash
 # ============================================================
-# 微博签到管理面板 · 一键安装/更新脚本 (v1.2.0+)
+# 微博签到管理面板 · 一键安装/更新脚本 (v1.2.1+)
+#
+# 这是终端用户唯一需要的脚本。镜像构建与推送已全部交给
+# GitHub Actions（push tag v*.*.* 即自动构建并发布）。
 #
 # 用法：
 #   bash install.sh                # 安装/启动（默认端口 8000）
 #   bash install.sh 8080           # 安装/启动，指定端口
-#   bash install.sh update         # 拉取最新镜像并更新容器（保留数据）
-#   bash install.sh start          # 启动容器
-#   bash install.sh stop           # 停止容器
-#   bash install.sh restart        # 重启容器
-#   bash install.sh status         # 查看容器状态
-#   bash install.sh logs           # 查看日志
+#   bash install.sh update         # 拉最新镜像并更新容器（保留数据）
+#   bash install.sh start|stop|restart|status|logs
 #   bash install.sh mirror         # 仅重写 Docker 国内镜像源配置（已安装 Docker 时也可单独跑）
 #
 # 环境变量：
 #   WCM_IMAGE         镜像名（默认 kaoqy666/weibo-checkin:latest）
 #   WCM_PORT          端口（默认 8000，可用作参数代替）
 #   WCM_DATA          数据目录（默认 <脚本目录>/data）
-#   WCM_SKIP_MIRROR=1 跳过自动写入 Docker 国内镜像源（默认会自动检测）
-#   WCM_FORCE_MIRROR=1 不论地域都写入国内镜像源（绕过网络限制时使用）
+#   WCM_SKIP_MIRROR=1   跳过自动写入 Docker 国内镜像源
+#   WCM_FORCE_MIRROR=1  不论地域都写入国内镜像源（绕过网络限制）
+#   WCM_NO_MIRROR_FALLBACK=1  关闭「镜像拉不动时回退国内 mirror」兜底
 #
-# 功能：
+# 自动行为：
 #   1. 检测并安装 Docker / docker compose
-#   2. **自动识别服务器所在国家，若在国内则写入 Docker 国内 registry-mirrors**
-#      （避免 docker.io 在国内被墙/拉镜像极慢；仅写入 /etc/docker/daemon.json，不影响其他容器）
-#   3. 拉取镜像（kaoqy666/weibo-checkin:latest）
-#   4. docker compose 启动（数据卷持久化）
-#   5. update：拉最新镜像 + 重建容器，数据不丢
+#   2. **检测服务器所在国家**：若 CN/HK/MO 则自动写入 Docker 国内
+#      registry-mirrors（实测连通性，选用能连通的几个），并触发 dockerd reload
+#   3. `docker pull` 失败时，**自动回退到国内 mirror 源**（用 `docker pull
+#      <mirror>/kaoqy666/weibo-checkin:tag`，再 re-tag 成原名）—— 不再因为
+#      跨境网络抖动就装不上
+#   4. compose 启动（数据卷持久化）、健康检查
 # ============================================================
 set -euo pipefail
 
 # ---------- 解析参数 ----------
 CMD="${1:-install}"
 if [[ "$CMD" =~ ^[0-9]+$ ]]; then
-  # 兼容旧用法：bash install.sh 8000
-  PORT="$CMD"
-  CMD="install"
+  PORT="$CMD"; CMD="install"
 else
   PORT="${WCM_PORT:-8000}"
 fi
@@ -52,53 +51,16 @@ warn() { printf "\033[1;33m⚠\033[0m %s\n" "$*"; }
 err()  { printf "\033[1;31m✘\033[0m %s\n" "$*" >&2; exit 1; }
 
 # ---------- root 检查 ----------
-if [ "$(id -u)" -ne 0 ] && [ "$COMMAND" != "status" ] && [ "$COMMAND" != "logs" ] && [ "$COMMAND" != "mirror" ]; then
+NEED_ROOT="install|update|start|stop|restart|mirror"
+if [ "$(id -u)" -ne 0 ] && [[ "|$NEED_ROOT|" == *"|$COMMAND|"* ]]; then
   err "请用 root 运行：sudo bash install.sh"
 fi
 
 # ============================================================
-#  Docker 国内镜像源自动配置
+#  CN 检测 + Docker 国内镜像源
 # ============================================================
 
-# 多个候选公网 IP 检测服务（并行请求，超时短，能跑通即用）。
-# 返回机器出口公网 IP（stdout），失败返回空字符串。
-_detect_public_ip() {
-  local out=""
-  local services=(
-    "https://api.ipify.org"
-    "https://ifconfig.me/ip"
-    "https://checkip.amazonaws.com"
-    "https://ip.sb"
-  )
-  for url in "${services[@]}"; do
-    out="$(curl -fsS --max-time 6 "$url" 2>/dev/null | tr -d '[:space:]' || true)"
-    if [[ "$out" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-      echo "$out"
-      return 0
-    fi
-  done
-  echo ""
-  return 1
-}
-
-# 用 ip-api.com 免费接口查归属地（仅需 IP，不需要 API key；返回 JSON）。
-# 只取 countryCode 字段，避免依赖 JSON 解析器；返回 CN / US / HK 等大写国家码。
-_detect_country() {
-  local ip="$1"
-  local body=""
-  body="$(curl -fsS --max-time 8 "http://ip-api.com/json/${ip}?fields=status,countryCode,query" 2>/dev/null || true)"
-  if [ -z "$body" ]; then
-    echo ""
-    return 1
-  fi
-  # 极简解析：找 "countryCode":"XX"
-  local cc
-  cc="$(printf '%s' "$body" | grep -oE '"countryCode"[[:space:]]*:[[:space:]]*"[A-Z]{2}"' | head -1 | grep -oE '[A-Z]{2}' | tail -1)"
-  echo "${cc:-}"
-}
-
-# 一组国内常用的 registry mirror。优先顺序按实测连通性/速度排。
-# dockerproxy.com / docker.m.daocloud.io 都支持 https，可直接写 daemon.json。
+# 国内常用 mirror（按实测连通性/速度排序）
 _CN_MIRRORS=(
   "https://docker.1ms.run"
   "https://docker.m.daocloud.io"
@@ -108,71 +70,73 @@ _CN_MIRRORS=(
   "https://mirror.baidubce.com"
 )
 
-# 把 mirror 列表写入 /etc/docker/daemon.json；保留用户已有的设置。
-# 仅当用户显式说 WCM_SKIP_MIRROR=1 才跳过。
-configure_docker_mirrors() {
-  if [ "${WCM_SKIP_MIRROR:-0}" = "1" ]; then
-    warn "WCM_SKIP_MIRROR=1，跳过 Docker 国内镜像源配置"
-    return 0
-  fi
-
-  # 已是国内 → 直接写
-  if [ "${WCM_FORCE_MIRROR:-0}" = "1" ]; then
-    warn "WCM_FORCE_MIRROR=1：强制写入国内镜像源"
-    _write_mirrors
-    return 0
-  fi
-
-  log "检测服务器所在国家（判断是否需要 Docker 国内镜像源）..."
-  local ip country=""
-  ip="$(_detect_public_ip)"
-  if [ -z "$ip" ]; then
-    warn "无法获取公网 IP（可能无外网或被防火墙拦），跳过镜像源自动配置"
-    warn "若拉镜像慢，可手动：bash install.sh mirror"
-    return 0
-  fi
-  country="$(_detect_country "$ip")"
-  log "  出口 IP: $ip  归属地: ${country:-?}"
-
-  case "$country" in
-    CN|HK|MO)
-      log "检测到国内/港澳出口，配置 Docker registry-mirrors..."
-      _write_mirrors
-      ;;
-    "")
-      warn "归属地识别失败，跳过（可手动：bash install.sh mirror）"
-      ;;
-    *)
-      log "归属地 $country，跳过 Docker 镜像源配置"
-      ;;
-  esac
+# 取机器的公网 IP（多个候选并行，stdout 为 IP；失败返回空）
+_detect_public_ip() {
+  local ip=""
+  local services=(
+    "https://api.ipify.org"
+    "https://ifconfig.me/ip"
+    "https://checkip.amazonaws.com"
+    "https://ip.sb"
+    "https://ipv4.icanhazip.com"
+  )
+  for url in "${services[@]}"; do
+    ip="$(curl -fsS --max-time 6 "$url" 2>/dev/null | tr -d '[:space:]' || true)"
+    [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && { echo "$ip"; return 0; }
+  done
+  return 1
 }
 
+# 用 ip-api.com 免费接口查归属地（返回大写两字母国家码）
+_detect_country() {
+  local ip="$1"
+  local body=""
+  body="$(curl -fsS --max-time 8 "http://ip-api.com/json/${ip}?fields=status,countryCode" 2>/dev/null || true)"
+  printf '%s' "$body" | grep -oE '"countryCode"[[:space:]]*:[[:space:]]*"[A-Z]{2}"' \
+    | head -1 | grep -oE '[A-Z]{2}' | tail -1
+}
+
+# 测一个 mirror 是否能实际连通（HEAD 注册中心 API）
+_mirror_reachable() {
+  local mirror="$1"
+  # docker.1ms.run 这种 mirror 走 https，探活时直接请求 /v2/
+  curl -fsS --max-time 5 -o /dev/null -w '%{http_code}' \
+    "${mirror%/}/v2/" 2>/dev/null | grep -qE '^(200|401|403)$'
+}
+
+# 测一组 mirror，挑出能用的（保序），写到 daemon.json 的 registry-mirrors
+_pick_mirrors() {
+  local out=()
+  for m in "${_CN_MIRRORS[@]}"; do
+    if _mirror_reachable "$m"; then
+      out+=("$m")
+    fi
+  done
+  printf '%s\n' "${out[@]:-+${_CN_MIRRORS[0]}}" | head -10
+}
+
+# 写入 /etc/docker/daemon.json，浅合并保留用户已有的配置
 _write_mirrors() {
+  [ "${WCM_SKIP_MIRROR:-0}" = "1" ] && { warn "WCM_SKIP_MIRROR=1，跳过"; return 0; }
   mkdir -p /etc/docker
   local daemon_json="/etc/docker/daemon.json"
 
-  # 拼装新 mirror JSON 数组（保留顺序）
-  local mlist=""
-  for m in "${_CN_MIRRORS[@]}"; do
-    if [ -z "$mlist" ]; then mlist="\"$m\""; else mlist="$mlist, \"$m\""; fi
-  done
-
-  # 读已有 daemon.json，浅合并 registry-mirrors 项。
-  local existing="{}"
-  if [ -f "$daemon_json" ]; then
-    if command -v python3 >/dev/null 2>&1; then
-      existing="$(python3 -c 'import json,sys;
-p="/etc/docker/daemon.json"
-try:
-    d=json.load(open(p))
-except Exception:
-    d={}
-d.setdefault("registry-mirrors", [])
-print(json.dumps(d, ensure_ascii=False))
-' 2>/dev/null || echo '{}')"
-    fi
+  log "探测国内 mirror 连通性..."
+  local mirrors
+  mirrors="$(_pick_mirrors | head -5)"
+  if [ -z "$mirrors" ]; then
+    warn "没有可用的 mirror（仍按用户已有 daemon.json 跑）"
+    return 0
   fi
+
+  # 拼成 JSON 数组
+  local mlist=""
+  while IFS= read -r m; do
+    [ -z "$m" ] && continue
+    if [ -z "$mlist" ]; then mlist="\"$m\""
+    else mlist="$mlist, \"$m\""
+    fi
+  done <<< "$mirrors"
 
   if command -v python3 >/dev/null 2>&1; then
     python3 - <<PY
@@ -183,14 +147,17 @@ try:
         cfg = json.load(f)
 except Exception:
     cfg = {}
-cfg["registry-mirrors"] = ${mlist}
+cfg["registry-mirrors"] = [${mlist}]
 with open(p, "w", encoding="utf-8") as f:
     json.dump(cfg, f, ensure_ascii=False, indent=2)
 print("ok")
 PY
-    ok "已写入 /etc/docker/daemon.json（registry-mirrors）"
+    ok "已写入 /etc/docker/daemon.json："
+    while IFS= read -r m; do
+      [ -z "$m" ] && continue
+      printf "    • %s\n" "$m"
+    done <<< "$mirrors"
   else
-    # 没 python3 就用 sed 简单 append（不解析 JSON，仅首次初始化用）
     if [ ! -f "$daemon_json" ]; then
       cat > "$daemon_json" <<JSON
 {
@@ -199,24 +166,58 @@ PY
 JSON
       ok "已生成 /etc/docker/daemon.json"
     else
-      warn "未检测到 python3，跳过 mirror 配置（保留原 daemon.json）"
+      warn "未检测到 python3，无法合并到现有 daemon.json，跳过"
       return 0
     fi
   fi
 
-  # 触发 reload（如果 docker 已启动）
+  # 触发 reload（docker 已在跑时）
   if command -v systemctl >/dev/null 2>&1; then
-    systemctl reload docker 2>/dev/null && ok "dockerd 已 reload" \
-      || warn "dockerd reload 失败（首次安装时正常）"
+    if systemctl is-active docker >/dev/null 2>&1; then
+      systemctl reload docker 2>/dev/null && ok "dockerd 已 reload" \
+        || warn "dockerd reload 失败（如首次安装可忽略）"
+    fi
   fi
+}
+
+configure_docker_mirrors() {
+  # 已显式跳过
+  [ "${WCM_SKIP_MIRROR:-0}" = "1" ] && { warn "WCM_SKIP_MIRROR=1，跳过镜像源配置"; return 0; }
+  # 强制写
+  if [ "${WCM_FORCE_MIRROR:-0}" = "1" ]; then
+    warn "WCM_FORCE_MIRROR=1：强制写入国内镜像源"
+    _write_mirrors
+    return 0
+  fi
+
+  log "检测服务器所在国家（是否需要 Docker 国内镜像源）..."
+  local ip country=""
+  ip="$(_detect_public_ip || true)"
+  if [ -z "$ip" ]; then
+    warn "无法获取公网 IP（可能无外网），跳过自动配置（可手动：bash install.sh mirror）"
+    return 0
+  fi
+  country="$(_detect_country "$ip" || true)"
+  log "  出口 IP: $ip  归属地: ${country:-?}"
+
+  case "$country" in
+    CN|HK|MO)
+      log "检测到国内/港澳出口 → 配置 Docker registry-mirrors"
+      _write_mirrors
+      ;;
+    "")
+      warn "归属地识别失败 → 跳过（可手动：bash install.sh mirror）"
+      ;;
+    *)
+      log "归属地 $country → 跳过 Docker 镜像源配置（国外机器不需要）"
+      ;;
+  esac
 }
 
 do_mirror() {
   # 单独运行镜像源配置：无需 docker 安装
-  if [ "${WCM_FORCE_MIRROR:-0}" = "1" ] || [ "${WCM_SKIP_MIRROR:-0}" = "1" ]; then
-    _write_mirrors
-    return 0
-  fi
+  [ "${WCM_FORCE_MIRROR:-0}" = "1" ] || [ "${WCM_SKIP_MIRROR:-0}" = "1" ] \
+    && { _write_mirrors; return 0; }
   configure_docker_mirrors
 }
 
@@ -254,12 +255,11 @@ YAML
 ensure_docker() {
   if ! command -v docker >/dev/null 2>&1; then
     log "未检测到 Docker，开始安装..."
-    # 先尝试国内镜像安装 get-docker.sh（可选）
     local inst_url="https://get.docker.com"
     if [ "${WCM_FORCE_MIRROR:-0}" = "1" ]; then
-      local alt_url="https://get.daocloud.io/docker-ce"
-      if curl -fsSI --max-time 6 "$alt_url" >/dev/null 2>&1; then
-        inst_url="$alt_url"
+      local alt="https://get.daocloud.io/docker-ce"
+      if curl -fsSI --max-time 6 "$alt" >/dev/null 2>&1; then
+        inst_url="$alt"
       fi
     fi
     curl -fsSL "$inst_url" | sh
@@ -274,7 +274,31 @@ ensure_docker() {
   fi
 }
 
-# 健康等待
+# 智能 pull：失败时回退到国内 mirror，再 re-tag 成原名。
+# 用法：smart_pull <full-image-ref> [ <fallback-mirror> ... ]
+smart_pull() {
+  local target="$1"; shift
+  if docker pull "$target" 2>/dev/null; then return 0; fi
+  [ "${WCM_NO_MIRROR_FALLBACK:-0}" = "1" ] && { err "拉取 $target 失败（已禁用兜底）"; }
+
+  warn "从 $target 直接拉取失败，尝试国内 mirror 兜底..."
+  # 把 kaoqy666/weibo-checkin:v1.2.0 → kaoqy666/weibo-checkin:v1.2.0
+  # mirror 源格式：<mirror>/<original-image>
+  local mirrors=("$@")
+  if [ ${#mirrors[@]} -eq 0 ]; then
+    mirrors=("${_CN_MIRRORS[@]}")
+  fi
+  for m in "${mirrors[@]}"; do
+    log "  尝试 $m/$target ..."
+    if docker pull "$m/$target" 2>/dev/null; then
+      docker tag "$m/$target" "$target"
+      ok "  从 $m 拉取成功并 re-tag 为 $target"
+      return 0
+    fi
+  done
+  err "所有 mirror 都拉不下来 $target，请检查网络或镜像名"
+}
+
 wait_health() {
   log "等待服务启动..."
   for i in $(seq 1 30); do
@@ -287,16 +311,15 @@ wait_health() {
   err "服务启动超时，请查看日志：bash install.sh logs"
 }
 
-# ---------- 安装/启动 ----------
 do_install() {
   log "微博签到管理面板 · 一键部署"
   log "  端口: $PORT | 数据目录: $DATA_DIR | 镜像: $IMAGE"
   ensure_docker
-  configure_docker_mirrors     # 仅在 install/update 时尝试（幂等）
+  configure_docker_mirrors   # 在首次 pull 之前（写入 + reload）
   ensure_compose
 
   log "拉取镜像 ${IMAGE} ..."
-  docker pull "${IMAGE}" 2>/dev/null || err "镜像拉取失败，请检查网络或镜像名（可手动：bash install.sh mirror）"
+  smart_pull "$IMAGE"
 
   log "启动容器 ..."
   docker rm -f weibo-checkin 2>/dev/null || true
@@ -314,17 +337,14 @@ do_install() {
   ok "=================================================="
 }
 
-# ---------- 更新（幂等：能跑就跑，跑不动也能干净恢复）----------
 do_update() {
   log "更新微博签到面板 → $IMAGE"
-  if ! command -v docker >/dev/null 2>&1; then
-    err "未安装 Docker，请先运行 bash install.sh"
-  fi
+  command -v docker >/dev/null 2>&1 || err "未安装 Docker，请先运行 bash install.sh"
   configure_docker_mirrors
   ensure_compose
 
   log "拉取最新镜像 ..."
-  docker pull "${IMAGE}" || err "镜像拉取失败（可手动：bash install.sh mirror）"
+  smart_pull "$IMAGE"
 
   log "停止并删除旧容器 ..."
   docker stop weibo-checkin 2>/dev/null || true
@@ -335,15 +355,17 @@ do_update() {
   wait_health
 
   NEW_VER="$(docker exec weibo-checkin sh -c 'echo ok' >/dev/null 2>&1 && \
-    curl -sf "http://127.0.0.1:${PORT}/api/health" 2>/dev/null | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')"
+    curl -sf "http://127.0.0.1:${PORT}/api/health" 2>/dev/null | \
+    sed -n 's/.*"version":"\([^"]*\)".*/\1/p')"
   ok "更新完成！当前版本: v${NEW_VER:-?}"
   ok "管理面板: http://<服务器IP>:${PORT}"
 }
 
-# ---------- 状态/日志 ----------
 do_status() {
-  docker ps --filter name=weibo-checkin --format '状态: {{.Status}} | 镜像: {{.Image}} | 端口: {{.Ports}}'
-  echo "镜像版本: $(docker exec weibo-checkin cat /app/app/main.py 2>/dev/null | sed -n 's/.*version="\([^"]*\)".*/\1/p' || echo '容器未运行')"
+  docker ps --filter name=weibo-checkin \
+    --format '状态: {{.Status}} | 镜像: {{.Image}} | 端口: {{.Ports}}'
+  echo "镜像版本: $(docker exec weibo-checkin cat /app/app/main.py 2>/dev/null | \
+    sed -n 's/.*version="\([^"]*\)".*/\1/p' || echo '容器未运行')"
 }
 
 # ---------- 主流程 ----------

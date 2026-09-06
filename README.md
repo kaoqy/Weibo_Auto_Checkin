@@ -1,6 +1,10 @@
 # 微博超话签到管理面板
 
-带 **Web 管理面板**的微博超话自动签到系统。FastAPI + SQLite，支持扫码登录、自动定时签到、Telegram 通知、SOCKS5 代理池与防封，可 Docker 一键部署。
+带 **Web 管理面板**的微博超话自动签到系统。FastAPI + SQLite，支持扫码登录、自动定时签到、Telegram 通知、SOCKS5 代理池与防封，Docker 一键部署。
+
+> **终端用户**：你只需要 [`install.sh`](./install.sh) 一个脚本。
+> **维护者**：镜像由 GitHub Actions 在推送 `v*.*.*` tag 后自动构建并发布到 Docker Hub，无需手动构建。
+> 旧版 `deploy.sh` / `push.sh` / `release.sh` 已移除（v1.2.1 起）。
 
 ## ✨ 功能
 
@@ -17,46 +21,58 @@
 - 📲 **Telegram 推送**：签到完成自动推送汇总
 - 📜 **分组日志**：按日期分区，单次执行的所有账号归并一组
 - 🗄️ **SQLite**：账号 / 日志 / 任务 / 用户 / 通知全部持久化
-- 🐳 **Docker 一键部署**（v1.2.0：自动识别国内出口IP并写入 Docker registry-mirrors）
 
-## 🚀 快速部署
-
-方式一：**App 镜像一键部署（推荐，无需源码）**
+## 🚀 终端用户：5 分钟部署
 
 ```bash
-# 下载脚本后运行
-curl -o install.sh https://raw.githubusercontent.com/kaoqy/Weibo_Auto_Checkin/main/install.sh
+curl -O https://raw.githubusercontent.com/kaoqy/Weibo_Auto_Checkin/main/install.sh
 chmod +x install.sh
-bash install.sh            # 默认端口 8000
-bash install.sh 8080       # 指定端口
+sudo bash install.sh            # 默认端口 8000
+sudo bash install.sh 8080       # 指定端口
 ```
 
-脚本会自动：安装 Docker → 拉取镜像 → 启动容器 → 等待健康。完成后访问 `http://<服务器IP>:<端口>`，**首次进入初始化页设置管理员账号密码**。
+脚本会自动：
+1. 安装 Docker + docker compose 插件
+2. **检测服务器是否在国内** → 若是，自动写入 Docker 国内 registry-mirrors
+3. 拉取镜像（v1.2.1+：拉失败时自动回退到国内 mirror 兜底）
+4. compose 启动容器 → 等待健康检查 → 打印访问地址
 
+完成后访问 `http://<服务器IP>:8000`，**首次进入初始化页设置管理员账号密码**。
 
-## 🔄 更新到最新版
-
-数据持久化在 `data/` 卷里，更新不会丢账号/日志/配置：
+### 日常管理
 
 ```bash
-bash install.sh update
+sudo bash install.sh status     # 查看容器状态与版本
+sudo bash install.sh logs       # 跟随查看日志
+sudo bash install.sh start      # 启动
+sudo bash install.sh stop       # 停止
+sudo bash install.sh restart    # 重启
+sudo bash install.sh update     # 拉最新镜像并重建容器（数据不丢）
+sudo bash install.sh mirror     # 单独重写 /etc/docker/daemon.json 的国内 mirror
 ```
 
-## 🧰 日常管理
+### 🌏 国内服务器自动加速
+
+`install.sh` 会通过 `api.ipify.org` + `ip-api.com` 拿到服务器**出口公网 IP** 并查国家代码：
+
+- **CN / HK / MO** → 实测每个候选 mirror 的 `/v2/` 可达性，挑出能连通的几个，写入 `/etc/docker/daemon.json` 的 `registry-mirrors`（多个，按连通性排序），并触发 `systemctl reload docker`。
+- 之后 `docker pull` 走这些 mirror；如果还是不通（跨境网络抖动），**脚本会自动逐个试 `docker pull <mirror>/kaoqy666/weibo-checkin:tag`，拉成功后 re-tag 成原名**，再启动容器。
+- **其他国家** → 跳过 mirror 配置（国外机器走 docker.io 直连就够快）。
+
+环境变量微调：
+- `WCM_FORCE_MIRROR=1 sudo bash install.sh` —— 不论地域都写入国内 mirror
+- `WCM_SKIP_MIRROR=1 sudo bash install.sh` —— 跳过 mirror 配置
+- `WCM_NO_MIRROR_FALLBACK=1 sudo bash install.sh` —— 关闭「拉不动时回退 mirror」兜底
+- `WCM_IMAGE=kaoqy666/weibo-checkin:v1.2.0 sudo bash install.sh` —— 指定镜像 tag
+- `WCM_PORT=9000 sudo bash install.sh` —— 自定义端口
+
+## 🔄 更新
 
 ```bash
-bash install.sh status     # 查看容器状态与版本（无需 root）
-bash install.sh logs       # 跟随查看日志
-bash install.sh start      # 启动
-bash install.sh stop       # 停止
-bash install.sh restart    # 重启
-bash install.sh mirror     # 重写 Docker 国内镜像源（不重启容器，仅改 /etc/docker/daemon.json）
+sudo bash install.sh update
 ```
 
-**国内服务器镜像加速**（v1.2.0）：脚本首次运行时会自动检测服务器出口 IP 所在国家，
-若为 CN/HK/MO 则自动写入 `/etc/docker/daemon.json` 的 `registry-mirrors`（包括
-`docker.1ms.run`、`docker.m.daocloud.io` 等多个镜像源），并触发 dockerd reload。
-绕过检测可用 `WCM_FORCE_MIRROR=1 bash install.sh`；完全跳过可用 `WCM_SKIP_MIRROR=1`。
+数据持久化在 `data/` 卷里，更新不会丢账号/日志/配置；镜像若拉不下来会自动回退到国内 mirror。
 
 ## 🐳 手动 Docker（不用脚本）
 
@@ -77,34 +93,31 @@ docker run -d --name weibo-checkin --restart unless-stopped \
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/api/health  # 期望 200
 ```
 
-> Docker Hub 会同时发布带日期-迭代的版本 tag（如 `kaoqy666/weibo-checkin:20260816-01`），`latest` 永远指向最新。
+## 🛠️ 维护者：发版流程（GitHub Actions）
 
-## 🛠️ 开发者：本地构建 / 发布（deploy.sh）
+镜像构建与发布**完全自动化**，无 156/38 之分：
 
-`deploy.sh` 面向**维护者**：构建镜像 → 推送 Docker Hub →（可选）SSH 远程部署。
+1. 改代码 → commit → 推 main
+2. 推 tag：
+   ```bash
+   git tag -a v1.2.1 -m "..."
+   git push origin main --follow-tags
+   ```
+3. `.github/workflows/build-docker.yml` 监听 tag push，自动：
+   - 多架构构建（`linux/amd64` + `linux/arm64`）
+   - 推 Docker Hub `kaoqy666/weibo-checkin:<version>` + `:latest`
+4. 验证：
+   ```bash
+   curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/api/health
+   ```
 
-```bash
-# 环境变量（或 .env 文件，含 REGISTRY_USER / REGISTRY_TOKEN）
-bash deploy.sh push          # 登录 → 构建 → 推送（latest + 日期tag，保留最近5个）
-bash deploy.sh build         # 仅本地构建
-bash deploy.sh remote        # 仅远程部署（需已推送 + WCM_DEPLOY_HOST）
-bash deploy.sh deploy        # 构建+推送+远程部署
-```
+需要在仓库 Settings → Secrets → Actions 配置：
+- `DOCKERHUB_USERNAME` = `kaoqy666`
+- `DOCKERHUB_TOKEN` = Docker Hub Access Token（https://hub.docker.com/settings/security）
 
-本地源码运行（开发调试）：
+也可在 Actions 页面手动触发 `workflow_dispatch`。
 
-```bash
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-.venv/bin/python run.py          # http://localhost:8000
-.venv/bin/python run.py checkin  # 命令行跑一次签到
-```
-
-## 🛠️ CI：自动构建镜像（v1.2.0）
-
-`.github/workflows/build-docker.yml`：推送 `v*.*.*` tag 后自动构建多架构镜像
-（`linux/amd64` + `linux/arm64`）并推送 `kaoqy666/weibo-checkin:<version>` 与
-`:latest`。需在仓库 Settings → Secrets → Actions 配置 `DOCKERHUB_USERNAME` 与
-`DOCKERHUB_TOKEN`。也可手动触发（workflow_dispatch）。
+> 历史版本：`v1.0.0` / `v1.0.1` / `v1.1.0` / `v1.1.1` / `v1.1.2` / `v1.2.0` 等都在 Docker Hub 上保留可拉取。
 
 ## 🎯 使用
 
@@ -113,7 +126,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 3. 添加账号时可为每个账号「指定 socks 节点」（下拉显示归属地）
    - **不同 socks 的账号 → 并行签到**
    - **同 socks / 未指定的账号 → 依次签到**
-4. “选超话”：账号列表点 🎯 进入超话选择器，拉取→勾选→保存；不勾的超话不会被自动签到（v1.2.0）
+4. **选超话**：账号列表点 🎯 进入超话选择器，拉取→勾选→保存；不勾的超话不会被自动签到（v1.2.0）
 5. 「设置」配 TG 通知、定时、防封
 6. 点「立即签到」或等定时任务自动执行
 
@@ -126,20 +139,24 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ## 🧪 测试
 
 ```bash
-.venv/bin/python -m pytest tests/ -v   # 105 个测试
-node tests/frontend-render.test.js      # 前端渲染测试（自动装 jsdom）
+# 后端测试（需 .venv 已装好依赖）
+.venv/bin/python -m pytest tests/ -v          # 105 个测试
+
+# 前端渲染测试（自动装 jsdom）
+node tests/frontend-render.test.js
 ```
 
 ## 📂 结构
 
 ```
 weibo-checkin-manager/
-├── run.py            # 本地启动
-├── install.sh        # 用户一键安装/更新/管理（推荐）
-├── deploy.sh         # 维护者：构建/推送/远程部署
-├── release.sh        # 创建 GitHub Release
+├── run.py            # 本地启动入口
+├── install.sh        # 终端用户唯一需要的脚本（安装/更新/管理）
 ├── compose.prod.yml  # 生产 compose（仅拉镜像运行）
 ├── Dockerfile
+├── .github/
+│   └── workflows/
+│       └── build-docker.yml   # tag push 自动构建镜像
 ├── app/              # 后端 + 前端
 │   ├── main.py       # FastAPI 入口 + 认证中间件
 │   ├── weibo_client.py
