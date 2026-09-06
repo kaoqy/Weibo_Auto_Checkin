@@ -92,6 +92,7 @@ jobs:
           provenance: false
 
       - name: Summary
+        shell: bash
         run: |
           echo "### 🐳 Docker 镜像构建完成" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
@@ -99,6 +100,7 @@ jobs:
           echo "版本：**${{ steps.version.outputs.VERSION }}**" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "Tags：" >> "$GITHUB_STEP_SUMMARY"
-          for t in ${{ steps.tags.outputs.tags }}; do
-            echo "- \`${t}\`" >> "$GITHUB_STEP_SUMMARY"
-          done
+          # 使用 bash 的 IFS=$'\n' 读取多行输出，避免 \n 被当成字面量。
+          while IFS= read -r t; do
+            [ -n "$t" ] && echo "- \`${t}\`" >> "$GITHUB_STEP_SUMMARY"
+          done <<< "${{ steps.tags.outputs.tags }}"
