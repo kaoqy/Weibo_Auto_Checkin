@@ -67,14 +67,9 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
 
     # 按优先级尝试不同的容器ID格式（最新内容优先）
     cids_to_try = [
-        clean_cid,                    # original (latest/chronological) - try first
-        f"{clean_cid}_-_new",        # new posts
-        f"{clean_cid}_-_latest",     # latest posts
-        f"{clean_cid}_-_main",       # main
-        f"100808{clean_cid}",        # 100808 前缀
-        f"{clean_cid}_-_all",        # all posts
-        f"{clean_cid}_-_hot",        # hot posts
-        f"{clean_cid}_-_feed",       # feed (featured/精华) - try last
+        f"{clean_cid}_-_new",        # new posts (chronological)
+        clean_cid,                    # original format
+        f"100808{clean_cid}",        # 100808 prefix format
     ]
     
     seen = set()
@@ -86,8 +81,11 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
 
     for cid in unique_cids:
         page = 1
+        since_id = ""
         while len(posts) < count:
-            params = {"containerid": cid, "page": page, "count": 25}
+            params = {"containerid": cid, "page": page, "count": 25, "vtype": 12}
+            if since_id:
+                params["since_id"] = since_id
             try:
                 payload = request_json(
                     session, "GET", TOPIC_POSTS_URL, params=params, cookies=cookies,
@@ -145,13 +143,28 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
                     break
             if not found:
                 break
-            page += 1
+            # Get next page cursor
+            cardlist_info = (payload.get("data") or {}).get("cardlistInfo") or {}
+            next_since = cardlist_info.get("since_id", "")
+            if next_since:
+                since_id = next_since
+            else:
+                page += 1
             time.sleep(0.3)
 
         if posts:
             break  # 有数据了
 
-    return {"posts": posts[:count], "error": error_msg}
+    # Deduplicate by mid
+    seen_mids = set()
+    unique_posts = []
+    for p in posts:
+        mid = p.get("mid", "")
+        if mid and mid in seen_mids:
+            continue
+        seen_mids.add(mid)
+        unique_posts.append(p)
+    return {"posts": unique_posts[:count], "error": error_msg}
 
 
 class NetworkError(RuntimeError):
