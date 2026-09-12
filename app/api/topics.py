@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import imghdr
 import logging
+import random
 from pathlib import Path
 from urllib.parse import quote as escape
 
@@ -26,6 +27,29 @@ log = logging.getLogger("weibo.topics")
 
 IMG_CACHE_DIR = database.DB_PATH.parent / "img_cache"
 IMG_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+# 硬编码的 AI 提示词
+AI_TOPIC_PROMPT = """你是一个专业的微博超话内容分析助手。请根据以下超话帖子内容进行深度总结分析。
+
+请按照以下结构输出总结内容（使用 Markdown 格式）：
+
+## 📋 内容概览
+（50字以内）：概括本期超话的核心话题与讨论焦点
+
+## 🔥 热门话题
+（100字以内）：提取2-3个最受关注的具体话题或事件，附带相关数据（如转发量、评论数等）
+
+## 💬 互动分析
+（50字以内）：分析粉丝互动特点，包括转发、评论、点赞的趋势
+
+## 🎭 整体氛围
+（50字以内）：总结超话社区的整体情感倾向和活跃程度
+
+注意事项：
+- 保持客观中立，不要添加个人观点
+- 使用简洁流畅的中文表达
+- 直接输出总结内容，不要任何前缀或格式标记
+- 如果帖子内容较少或质量不高，请如实说明"""
 
 
 def _download_image(url: str) -> Path | None:
@@ -59,15 +83,6 @@ def _download_image(url: str) -> Path | None:
     except Exception as exc:
         log.warning("图片下载失败 %s: %s", url[:80], exc)
         return None
-
-
-def _public(acc_payload: dict) -> dict:
-    """对外输出：不泄露 cookie 全文"""
-    acc = dict(acc_payload)
-    cookie = acc.get("cookie") or acc.get("cookie_raw") or ""
-    acc["cookie_length"] = len(cookie) if cookie else 0
-    acc["cookie_preview"] = (cookie[:20] + "…") if len(cookie) > 20 else cookie
-    return acc
 
 
 # ========================= 单账号关注超话缓存 =========================
@@ -158,12 +173,8 @@ def refresh_topics(data: RefreshIn, user=Depends(auth.require_admin)):
     return {"ok": True, "count": len(topics), "topics": topics}
 
 
-class RefreshAllIn(BaseModel):
-    """刷新所有账号的关注超话"""
-
-
 @router.post("/refresh_all")
-def refresh_all_topics(data: RefreshAllIn, user=Depends(auth.require_admin)):
+def refresh_all_topics(user=Depends(auth.require_admin)):
     """刷新所有账号的关注超话，返回每个账号的结果"""
     accounts = database.get_accounts()
     if not accounts:
@@ -309,14 +320,7 @@ def get_topic_posts(topic_id: str, account_id: int = 0, count: int = 20,
                 break
 
     # 随机打乱（除了第一个如果指定了）
-    import random
-    if not account_id:
-        random.shuffle(candidates)
-    else:
-        first = candidates[0]
-        rest = candidates[1:]
-        random.shuffle(rest)
-        candidates = [first] + rest
+    random.shuffle(candidates)
 
     last_error = ""
     for acc in candidates:
@@ -435,30 +439,6 @@ def proxy_image(url: str):
 class AISummaryIn(BaseModel):
     text: str
     topic_name: str = "超话"
-
-
-# 硬编码的 AI 提示词
-AI_TOPIC_PROMPT = """你是一个专业的微博超话内容分析助手。请根据以下超话帖子内容进行深度总结分析。
-
-请按照以下结构输出总结内容（使用 Markdown 格式）：
-
-## 📋 内容概览
-（50字以内）：概括本期超话的核心话题与讨论焦点
-
-## 🔥 热门话题
-（100字以内）：提取2-3个最受关注的具体话题或事件，附带相关数据（如转发量、评论数等）
-
-## 💬 互动分析
-（50字以内）：分析粉丝互动特点，包括转发、评论、点赞的趋势
-
-## 🎭 整体氛围
-（50字以内）：总结超话社区的整体情感倾向和活跃程度
-
-注意事项：
-- 保持客观中立，不要添加个人观点
-- 使用简洁流畅的中文表达
-- 直接输出总结内容，不要任何前缀或格式标记
-- 如果帖子内容较少或质量不高，请如实说明"""
 
 
 @router.post("/ai_summary")

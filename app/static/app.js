@@ -1026,13 +1026,13 @@ $('#btn-change-pwd').onclick = async () => {
   }
 };
 
-/* ===== 超话管理（v1.3.0 三列布局） ===== */
-topicsCache = [];
-currentTopicId = null;
-currentTopicName = '';
-currentPosts = [];
-isLoadingPosts = false;
-isLoadingList = false;
+/* ===== 超话管理（v1.3.0 修复版） ===== */
+var topicsCache = [];
+var currentTopicId = null;
+var currentTopicName = '';
+var currentPosts = [];
+var isLoadingPosts = false;
+var isLoadingList = false;
 
 async function loadTopics(reset = true) {
   if (reset) {
