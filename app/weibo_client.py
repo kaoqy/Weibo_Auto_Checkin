@@ -48,6 +48,69 @@ _RETRYABLE = (
     requests.exceptions.SSLError,
 )
 
+# ========================= 超话页面（v1.3.0） =========================
+
+TOPIC_POSTS_URL = BASE + "/api/container/getIndex"
+
+
+def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
+                      proxy=None, force=False, allow_fallback=True, count: int = 20):
+    """拉取指定超话的最新帖子列表（默认前 count 条）。
+
+    返回 list[dict]，每条含 {text, created_at, reposts, comments, likes, pics, user, ...}。
+    """
+    posts = []
+    page = 1
+    while len(posts) < count:
+        params = {"containerid": containerid, "page": page, "count": 25}
+        payload = request_json(
+            session, "GET", TOPIC_POSTS_URL, params=params, cookies=cookies,
+            channel=channel, proxy=proxy, force=force,
+            allow_fallback=allow_fallback,
+        )
+        if payload.get("ok") != 1:
+            break
+        cards = (payload.get("data") or {}).get("cards", [])
+        if not cards:
+            break
+        found = False
+        for card in cards:
+            card_group = card.get("card_group") or []
+            for item in card_group:
+                if item.get("card_type") != "9":
+                    continue
+                mblog = item.get("mblog") or {}
+                if not mblog:
+                    continue
+                found = True
+                user = mblog.get("user") or {}
+                text = mblog.get("text", "")
+                import re as _re
+                text = _re.sub(r'<[^>]+>', '', text).strip()
+                posts.append({
+                    "mid": mblog.get("idstr") or str(mblog.get("id", "")),
+                    "text": text,
+                    "created_at": mblog.get("created_at", ""),
+                    "source": mblog.get("source", ""),
+                    "reposts_count": mblog.get("reposts_count", 0),
+                    "comments_count": mblog.get("comments_count", 0),
+                    "attitudes_count": mblog.get("attitudes_count", 0),
+                    "pics": [p.get("url", "") for p in (mblog.get("pics") or [])],
+                    "user": {
+                        "id": user.get("idstr") or str(user.get("id", "")),
+                        "screen_name": user.get("screen_name", ""),
+                        "profile_image_url": user.get("profile_image_url", "").replace("http://", "https://"),
+                    },
+                })
+                if len(posts) >= count:
+                    break
+            if len(posts) >= count:
+                break
+        if not found:
+            break
+        page += 1
+    return posts[:count]
+
 
 class NetworkError(RuntimeError):
     """整遍网络层失败。"""

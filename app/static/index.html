@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>微博超话签到管理面板</title>
-  <link rel="stylesheet" href="/style.css?v=1.1.2" />
+  <link rel="stylesheet" href="/style.css?v=1.3.0" />
   <script>!function(){try{const t=localStorage.getItem('wcm-theme')||'system';document.documentElement.dataset.theme=t}catch(e){}}()</script>
 </head>
 <body>
@@ -24,6 +24,9 @@
         </button>
         <button class="nav-item" data-view="accounts">
           <span class="nav-ico">👥</span>账号管理
+        </button>
+        <button class="nav-item" data-view="topics">
+          <span class="nav-ico">💬</span>超话
         </button>
         <button class="nav-item" data-view="proxies">
           <span class="nav-ico">🌐</span>代理
@@ -114,6 +117,35 @@
             <button class="btn btn-ghost btn-sm" id="btn-sel-clear">清空选择</button>
           </div>
           <div class="table-wrap"><table id="accTable"><thead><tr><th style="width:34px"><input type="checkbox" id="accCheckAll" title="全选" /></th><th>名称</th><th>状态</th><th>Cookie</th><th>代理</th><th>上次签到</th><th>操作</th></tr></thead><tbody></tbody></table></div>
+        </div>
+      </section>
+
+      <!-- 超话管理 -->
+      <section class="view" id="view-topics" hidden>
+        <div class="card">
+          <div class="card-head">
+            <h2>全部超话</h2>
+            <div>
+              <button class="btn btn-ghost btn-sm" id="btn-topics-refresh">↻ 刷新</button>
+              <button class="btn btn-ghost btn-sm" id="btn-topics-fetch">📥 全部获取</button>
+              <button class="btn btn-danger btn-sm" id="btn-topics-clear">🗑 清空</button>
+            </div>
+          </div>
+          <p class="hint" style="margin:0 0 12px">记录所有账号关注过的去重超话列表。点击可查看最新内容。</p>
+          <div id="topicsList" class="topics-grid"></div>
+          <div class="hint" id="topicsHint" style="margin-top:10px"></div>
+        </div>
+      </section>
+
+      <!-- 超话详情 -->
+      <section class="view" id="view-topic-detail" hidden>
+        <div class="card">
+          <div class="card-head">
+            <h2 id="topicDetailTitle">超话详情</h2>
+            <button class="btn btn-ghost" id="btn-topic-back">← 返回列表</button>
+          </div>
+          <div class="topic-detail-header" id="topicDetailHeader"></div>
+          <div class="topic-posts" id="topicPosts"></div>
         </div>
       </section>
 
@@ -251,6 +283,14 @@
             <select id="m-proxy"><option value="">自动 / 直连</option></select>
           </label>
           <label class="inline"><input type="checkbox" id="m-enabled" checked /> 启用自动签到</label>
+        </div>
+        <div class="form topic-select-section" id="topicSelectSection">
+          <label>
+            💬 选择要签到的超话
+            <button type="button" class="btn btn-ghost btn-sm" id="m-topic-refresh" title="刷新超话列表">↻ 刷新</button>
+          </label>
+          <p class="hint" id="m-topic-status">加载中…</p>
+          <div class="topic-checkboxes" id="m-topic-checkboxes"></div>
         </div>
       </div>
       <div class="modal-foot">
@@ -392,6 +432,6 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <script src="/app.js?v=1.1.2"></script>
+  <script src="/app.js?v=1.3.0"></script>
 </body>
 </html>

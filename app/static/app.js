@@ -40,7 +40,7 @@ themeSel.onchange = () => {
 };
 
 /* ===== 导航 ===== */
-const VIEW_TITLES = {dashboard:'仪表盘', accounts:'账号管理', proxies:'代理', logs:'签到日志', settings:'设置'};
+const VIEW_TITLES = {dashboard:'仪表盘', accounts:'账号管理', topics:'超话', proxies:'代理', logs:'签到日志', settings:'设置'};
 $$('.nav-item').forEach(btn => {
   btn.onclick = () => {
     $$('.nav-item').forEach(b=>b.classList.remove('active'));
@@ -50,6 +50,7 @@ $$('.nav-item').forEach(btn => {
     $('#view-title').textContent = VIEW_TITLES[btn.dataset.view];
     if (btn.dataset.view === 'dashboard') loadDashboard();
     if (btn.dataset.view === 'accounts') loadAccounts();
+    if (btn.dataset.view === 'topics') loadTopics();
     if (btn.dataset.view === 'proxies') loadProxies();
     if (btn.dataset.view === 'logs') loadLogs();
     if (btn.dataset.view === 'settings') loadSettings();
@@ -324,6 +325,11 @@ function openAccModal(id=null) {
   $('#m-name').value = ''; $('#m-cookie').value = ''; $('#m-remark').value='';
   $('#m-enabled').checked = true;
   populateProxySelect($('#m-proxy'), null);
+  // 重置超话选择模块
+  accountTopicsCache = [];
+  $('#m-topic-checkboxes').innerHTML = '';
+  $('#m-topic-status').textContent = '加载中…';
+  $('#m-topic-status').className = '';
   if (id) {
     api.get('/api/accounts/'+id).then(a=>{
       $('#m-name').value = a.name;
@@ -331,6 +337,8 @@ function openAccModal(id=null) {
       $('#m-remark').value = a.remark||'';
       $('#m-enabled').checked = !!a.enabled;
       populateProxySelect($('#m-proxy'), a.proxy_id ?? null);
+      // 加载缓存的超话
+      loadAccountTopicsForEdit(id);
     });
   }
   $('#accModal').hidden = false;
@@ -1007,6 +1015,219 @@ $('#btn-change-pwd').onclick = async () => {
     st.textContent = e.message || '修改失败';
   }
 };
+
+/* ===== 超话管理（v1.3.0） ===== */
+let topicsCache = [];
+
+async function loadTopics(reset = true) {
+  if (reset) {
+    $('#topicsList').innerHTML = '<div style="color:var(--muted);padding:16px">加载中…</div>';
+  }
+  try {
+    const data = await api.get('/api/topics/all?limit=100');
+    topicsCache = data.items || [];
+    const hint = $('#topicsHint');
+    if (hint) hint.textContent = `共 ${data.total} 个去重超话`;
+    if (!topicsCache.length) {
+      $('#topicsList').innerHTML = '<div style="color:var(--muted);padding:20px;text-align:center">暂无超话记录。<br>点击「📥 全部获取」从账号关注列表拉取。</div>';
+      return;
+    }
+    renderTopics(topicsCache);
+  } catch(e) { toast('加载超话失败','err'); }
+}
+
+function renderTopics(topics) {
+  const box = $('#topicsList');
+  if (!box) return;
+  box.innerHTML = topics.map(t => {
+    const avatar = esc(t.avatar_url || '');
+    const avatarHtml = avatar
+      ? '<' + 'img src="' + avatar + '" class="topic-card-thumb" alt="" onerror="this.style.display=\'none\'" />'
+      : '<div class="topic-card-thumb">💬</div>';
+    const name = esc(t.name || t.topic_id);
+    const members = t.member_count ? `<span>👥 ${t.member_count}</span>` : '';
+    const posts = t.post_count ? `<span>📝 ${t.post_count}</span>` : '';
+    const updated = t.updated_at ? `<span>更新于 ${esc(t.updated_at.slice(5,16))}</span>` : '';
+    return `<div class="topic-card" onclick="openTopicDetail('${esc(t.topic_id)}')">
+      ${avatarHtml}
+      <div class="topic-card-name" title="${name}">${name}</div>
+      <div class="topic-card-meta">${[members, posts, updated].filter(Boolean).join(' · ')}</div>
+    </div>`;
+  }).join('');
+}
+
+async function openTopicDetail(topicId) {
+  $$('.view').forEach(v => v.hidden = true);
+  $('#view-topic-detail').hidden = false;
+  $('#view-title').textContent = '超话详情';
+  const topic = (topicsCache || []).find(t => t.topic_id === topicId) || { topic_id: topicId, name: topicId };
+  $('#topicDetailTitle').textContent = topic.name || topicId;
+  $('#topicDetailHeader').innerHTML = `
+    <h3>${esc(topic.name || topicId)}</h3>
+    <div class="meta">${esc(topic.description || '')}</div>
+    <div class="meta" style="margin-top:6px">ID: ${esc(topic.topic_id)} · <a href="${esc(topic.topic_url || 'https://weibo.com/page/' + topicId)}" target="_blank" rel="noopener">在微博打开 ↗</a></div>
+  `;
+  $('#topicPosts').innerHTML = '<div style="color:var(--muted);padding:16px">正在拉取最新帖子…</div>';
+  try {
+    const data = await api.get('/api/topics/posts/' + encodeURIComponent(topicId) + '?count=20');
+    if (!data.posts || !data.posts.length) {
+      $('#topicPosts').innerHTML = '<div style="color:var(--muted);padding:20px;text-align:center">暂无帖子数据</div>';
+      return;
+    }
+    $('#topicPosts').innerHTML = data.posts.map(p => {
+      const avatar = esc(p.user?.profile_image_url || '/default-avatar.svg');
+      const userName = esc(p.user?.screen_name || '未知');
+      const time = esc(p.created_at || '');
+      const text = esc(p.text || '');
+      const pics = (p.pics || []).map(url => '<' + 'img src="' + esc(url) + '" alt="" loading="lazy" referrerpolicy="no-referrer" />').join('');
+      const picsHtml = pics ? `<div class="topic-post-pics">${pics}</div>` : '';
+      return `<div class="topic-post">
+        <div class="topic-post-header">
+          <img class="topic-post-avatar" src="${avatar}" alt="" onerror="this.onerror=null;this.src=\'/default-avatar.svg\'" />
+          <span class="topic-post-user">${userName}</span>
+          <span class="topic-post-time">${time}</span>
+        </div>
+        <div class="topic-post-text">${text}</div>
+        ${picsHtml}
+        <div class="topic-post-actions">
+          <span>🔁 ${p.reposts_count || 0}</span>
+          <span>💬 ${p.comments_count || 0}</span>
+          <span>❤️ ${p.attitudes_count || 0}</span>
+        </div>
+      </div>`;
+    }).join('');
+  } catch(e) {
+    $('#topicPosts').innerHTML = '<div style="color:var(--danger);padding:20px;text-align:center">拉取失败：' + esc(e.message || '') + '</div>';
+  }
+}
+
+$('#btn-topic-back').onclick = () => {
+  $$('.nav-item').forEach(b => b.classList.remove('active'));
+  document.querySelector('.nav-item[data-view="topics"]').classList.add('active');
+  $$('.view').forEach(v => v.hidden = true);
+  $('#view-topics').hidden = false;
+  $('#view-title').textContent = '超话';
+};
+
+$('#btn-topics-refresh').onclick = async () => {
+  toast('刷新中…');
+  loadTopics();
+};
+
+$('#btn-topics-clear').onclick = async () => {
+  if (!confirm('确定清空全部超话记录？此操作不可恢复。')) return;
+  try {
+    const r = await api.del('/api/topics/all');
+    toast('已清空 ' + (r.removed||0) + ' 条超话记录', 'good');
+    loadTopics();
+  } catch(e) { toast('清空失败','err'); }
+};
+
+$('#btn-topics-fetch').onclick = async () => {
+  try {
+    const accounts = await api.get('/api/accounts');
+    if (!accounts.length) { toast('没有账号，请先添加', 'err'); return; }
+    let totalFetched = 0;
+    let errors = [];
+    for (const acc of accounts) {
+      if (!acc.cookie_length) continue;
+      try {
+        const r = await api.post('/api/topics/refresh', { account_id: acc.id });
+        totalFetched += r.count || 0;
+      } catch(e) {
+        errors.push(acc.name + ': ' + e.message);
+      }
+    }
+    if (errors.length) {
+      toast(`完成，获取 ${totalFetched} 个超话，${errors.length} 个账号失败`, 'warn');
+    } else {
+      toast(`完成，共获取 ${totalFetched} 个超话`, 'good');
+    }
+    loadTopics();
+  } catch(e) { toast('获取失败','err'); }
+};
+
+// 账号管理弹窗里的超话选择模块
+let accountTopicsCache = [];
+
+async function loadAccountTopicsForEdit(accountId) {
+  const statusEl = $('#m-topic-status');
+  const cbBox = $('#m-topic-checkboxes');
+  if (!statusEl || !cbBox) return;
+  statusEl.textContent = '加载中…';
+  statusEl.className = '';
+  cbBox.innerHTML = '';
+  try {
+    const r = await api.get('/api/topics/cache/' + accountId);
+    if (r.cached && r.topics && r.topics.length) {
+      accountTopicsCache = r.topics;
+      statusEl.textContent = `缓存于 ${r.cached_at ? r.cached_at.slice(5,16) : '未知'}，共 ${r.topics.length} 个超话`;
+      statusEl.className = 'ok';
+      renderTopicCheckboxes();
+    } else {
+      statusEl.textContent = '尚未缓存，点击「刷新」获取';
+      statusEl.className = '';
+      accountTopicsCache = [];
+    }
+  } catch(e) {
+    statusEl.textContent = '加载失败：' + e.message;
+    statusEl.className = 'err';
+  }
+}
+
+function renderTopicCheckboxes() {
+  const cbBox = $('#m-topic-checkboxes');
+  if (!cbBox) return;
+  cbBox.innerHTML = accountTopicsCache.map((t, i) => {
+    const name = esc(t.name || t.id);
+    const id = esc(t.id || '');
+    const done = t.done ? '<span class="tc-status">✓ 已签</span>' : '';
+    return `<label class="topic-checkbox-item" data-idx="${i}">
+      <input type="checkbox" value="${id}" checked />
+      <span class="tc-name" title="${name}">${name}</span>
+      ${done}
+    </label>`;
+  }).join('');
+  cbBox.querySelectorAll('.topic-checkbox-item').forEach(label => {
+    label.addEventListener('click', e => {
+      if (e.target.tagName === 'INPUT') return;
+      const cb = label.querySelector('input[type=checkbox]');
+      cb.checked = !cb.checked;
+      label.classList.toggle('checked', cb.checked);
+    });
+    const cb = label.querySelector('input[type=checkbox]');
+    label.classList.toggle('checked', cb.checked);
+    cb.addEventListener('change', () => label.classList.toggle('checked', cb.checked));
+  });
+}
+
+$('#m-topic-refresh').onclick = async () => {
+  if (!editingId) {
+    toast('请先保存账号后再刷新超话', 'warn');
+    return;
+  }
+  const btn = $('#m-topic-refresh');
+  btn.disabled = true; btn.textContent = '刷新中…';
+  try {
+    const r = await api.post('/api/topics/refresh', { account_id: editingId });
+    accountTopicsCache = r.topics || [];
+    $('#m-topic-status').textContent = `已刷新，共 ${r.count} 个超话`;
+    $('#m-topic-status').className = 'ok';
+    renderTopicCheckboxes();
+    toast('刷新完成', 'good');
+  } catch(e) {
+    toast('刷新失败：' + e.message, 'err');
+    $('#m-topic-status').textContent = '刷新失败：' + e.message;
+    $('#m-topic-status').className = 'err';
+  } finally {
+    btn.disabled = false; btn.textContent = '↻ 刷新';
+  }
+};
+
+function collectSelectedTopics() {
+  const checked = $('#m-topic-checkboxes').querySelectorAll('input[type=checkbox]:checked');
+  return Array.from(checked).map(cb => cb.value);
+}
 
 /* ===== 初始化 ===== */
 loadVersion();
