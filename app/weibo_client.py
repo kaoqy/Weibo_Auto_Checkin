@@ -72,6 +72,10 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
         f"{clean_cid}_-_latest",     # latest posts
         clean_cid,                    # original
         f"{clean_cid}_-_main",       # main
+        # 补充更多格式
+        f"100808{clean_cid}",        # 100808 前缀
+        f"{clean_cid}_-_hot",        # hot posts
+        f"{clean_cid}_-_all",        # all posts
     ]
     
     seen = set()

@@ -1,4 +1,4 @@
-"""超话管理 API（v1.3.0）。"""
+"""超话管理 API（v1.3.0 - 修复版）。"""
 
 from __future__ import annotations
 
@@ -175,7 +175,7 @@ def refresh_topics(data: RefreshIn, user=Depends(auth.require_admin)):
 
 @router.post("/refresh_all")
 def refresh_all_topics(user=Depends(auth.require_admin)):
-    """刷新所有账号的关注超话，返回每个账号的结果"""
+    """刷新所有账号的关注超话"""
     accounts = database.get_accounts()
     if not accounts:
         return {"ok": True, "results": [], "message": "没有账号"}
@@ -225,7 +225,6 @@ def refresh_all_topics(user=Depends(auth.require_admin)):
 
             database.set_topic_cache(acc["id"], topics)
 
-            # 合并进全量去重表
             for t in topics:
                 cid = t.get("id", "")
                 if not cid:
@@ -319,7 +318,7 @@ def get_topic_posts(topic_id: str, account_id: int = 0, count: int = 20,
                 candidates.insert(0, candidates.pop(i))
                 break
 
-    # 随机打乱（除了第一个如果指定了）
+    # 随机打乱
     random.shuffle(candidates)
 
     last_error = ""

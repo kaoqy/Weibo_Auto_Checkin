@@ -172,6 +172,16 @@ def init_db() -> None:
 
         CREATE INDEX IF NOT EXISTS idx_topic_cache_account ON topic_cache(account_id);
         CREATE INDEX IF NOT EXISTS idx_all_topics_topic_id ON all_topics(topic_id);
+        -- v1.3.0：超话帖子缓存
+        CREATE TABLE IF NOT EXISTS topic_posts_cache (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            topic_id     TEXT NOT NULL UNIQUE,
+            posts        TEXT NOT NULL DEFAULT '[]',
+            fetched_at   TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_topic_posts_cache_topic_id ON topic_posts_cache(topic_id);
+
         """
     )
     conn.commit()
@@ -963,3 +973,39 @@ def clear_all_topics() -> int:
     cur = conn.execute("DELETE FROM all_topics")
     conn.commit()
     return cur.rowcount or 0
+
+
+# ---------- topic_posts_cache 表（超话帖子缓存） ----------
+
+def get_topic_posts_cache(topic_id: str) -> dict | None:
+    """获取超话帖子缓存。返回 dict 或 None。"""
+    row = _get_conn().execute(
+        "SELECT * FROM topic_posts_cache WHERE topic_id = ?", (topic_id,)
+    ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    try:
+        d["posts"] = json.loads(d["posts"]) if d["posts"] else []
+    except json.JSONDecodeError:
+        d["posts"] = []
+    return d
+
+
+def set_topic_posts_cache(topic_id: str, posts: list) -> None:
+    """写入/更新超话帖子缓存。posts 是 list[dict]。"""
+    conn = _get_conn()
+    now = _now()
+    conn.execute(
+        "INSERT INTO topic_posts_cache (topic_id, posts, fetched_at) VALUES (?, ?, ?) "
+        "ON CONFLICT(topic_id) DO UPDATE SET posts=excluded.posts, fetched_at=excluded.fetched_at",
+        (topic_id, json.dumps(posts, ensure_ascii=False), now),
+    )
+    conn.commit()
+
+
+def delete_topic_posts_cache(topic_id: str) -> None:
+    """清除超话帖子缓存。"""
+    conn = _get_conn()
+    conn.execute("DELETE FROM topic_posts_cache WHERE topic_id = ?", (topic_id,))
+    conn.commit()

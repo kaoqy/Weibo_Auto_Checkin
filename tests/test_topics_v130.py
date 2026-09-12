@@ -168,7 +168,7 @@ def test_topics_api_posts_endpoint(client):
             },
         }
     ]
-    with patch("app.weibo_client.fetch_topic_posts", return_value={"posts": fake_posts, "error": ""}):
+    with patch("app.api.topics.fetch_topic_posts", return_value={"posts": fake_posts, "error": ""}):
         r = client.get(f"/api/topics/posts/100808abc?count=20")
     assert r.status_code == 200
     body = r.json()
