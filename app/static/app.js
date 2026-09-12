@@ -1026,15 +1026,17 @@ $('#btn-change-pwd').onclick = async () => {
   }
 };
 
-/* ===== 超话管理（v130 三列布局） ===== */
+/* ===== 超话管理（v1.3.0 三列布局） ===== */
 let topicsCache = [];
 let currentTopicId = null;
 let currentTopicName = '';
 let currentPosts = [];
+let isLoadingPosts = false;
+let isLoadingList = false;
 
 async function loadTopics(reset = true) {
   if (reset) {
-    $('#topicsList').innerHTML = '<div style="color:var(--muted);padding:16px">加载中…</div>';
+    $('#topicsList').innerHTML = '<div class="loading-progress"><div class="loading-bar"><div class="loading-bar-inner" style="width:30%"></div></div><div class="loading-text">正在加载超话列表...</div></div>';
   }
   try {
     const data = await api.get('/api/topics/all?limit=200');
@@ -1070,9 +1072,14 @@ function renderTopicList(topics) {
   }).join('');
 }
 
-async function openTopicDetail(topicId, topicName) {
+async function openTopicDetail(topicId, el) {
   currentTopicId = topicId;
-  currentTopicName = topicName || topicId;
+  
+  // 优先从 topicsCache 获取名称，确保名称不会被覆盖
+  const cached = (topicsCache || []).find(t => t.topic_id === topicId);
+  const nameFromAttr = el ? el.getAttribute('data-name') : '';
+  currentTopicName = nameFromAttr || (cached ? cached.name : topicId);
+
   // 高亮当前选中
   document.querySelectorAll('.topic-list-item').forEach(el => {
     el.classList.toggle('active', el.getAttribute('onclick') && el.getAttribute('onclick').includes(topicId));
@@ -1157,7 +1164,37 @@ $('#btn-topic-refresh').onclick = async () => {
 };
 
 $('#btn-topics-refresh').onclick = async () => {
-  toast('刷新中…');
+  if (isLoadingList) return;
+  isLoadingList = true;
+  const list = $('#topicsList');
+  if (list) list.innerHTML = '<div class="loading-progress"><div class="loading-bar"><div class="loading-bar-inner" style="width:20%"></div></div><div class="loading-text">正在获取账号列表...</div></div>';
+  try {
+    const accounts = await api.get('/api/accounts');
+    if (!accounts.length) { toast('没有账号，请先添加', 'err'); return; }
+    const totalAcc = accounts.length;
+    let totalFetched = 0;
+    let errors = [];
+    let processed = 0;
+    for (const acc of accounts) {
+      processed++;
+      if (list) {
+        list.innerHTML = `<div class="loading-progress"><div class="loading-bar"><div class="loading-bar-inner" style="width:${Math.round(processed/totalAcc*100)}%"></div></div><div class="loading-text">正在处理: ${esc(acc.name)}... (${processed}/${totalAcc})</div></div>`;
+      }
+      if (!acc.cookie_length) continue;
+      try {
+        const r = await api.post('/api/topics/refresh', { account_id: acc.id });
+        totalFetched += r.count || 0;
+      } catch(e) {
+        errors.push(acc.name + ': ' + e.message);
+      }
+    }
+    if (errors.length) toast(`完成，获取 ${totalFetched} 个超话，${errors.length} 个账号失败`, 'warn');
+    else toast(`完成，共获取 ${totalFetched} 个超话`, 'good');
+  } catch(e) {
+    toast('获取失败', 'err');
+  } finally {
+    isLoadingList = false;
+  }
   loadTopics();
 };
 
@@ -1173,12 +1210,22 @@ $('#btn-topics-clear').onclick = async () => {
 };
 
 $('#btn-topics-fetch').onclick = async () => {
+  if (isLoadingList) return;
+  isLoadingList = true;
+  const list = $('#topicsList');
+  if (list) list.innerHTML = '<div class="loading-progress"><div class="loading-bar"><div class="loading-bar-inner" style="width:20%"></div></div><div class="loading-text">正在获取账号列表...</div></div>';
   try {
     const accounts = await api.get('/api/accounts');
     if (!accounts.length) { toast('没有账号，请先添加', 'err'); return; }
+    const totalAcc = accounts.length;
     let totalFetched = 0;
     let errors = [];
+    let processed = 0;
     for (const acc of accounts) {
+      processed++;
+      if (list) {
+        list.innerHTML = `<div class="loading-progress"><div class="loading-bar"><div class="loading-bar-inner" style="width:${Math.round(processed/totalAcc*100)}%"></div></div><div class="loading-text">正在处理: ${esc(acc.name)}... (${processed}/${totalAcc})</div></div>`;
+      }
       if (!acc.cookie_length) continue;
       try {
         const r = await api.post('/api/topics/refresh', { account_id: acc.id });
@@ -1187,13 +1234,14 @@ $('#btn-topics-fetch').onclick = async () => {
         errors.push(acc.name + ': ' + e.message);
       }
     }
-    if (errors.length) {
-      toast(`完成，获取 ${totalFetched} 个超话，${errors.length} 个账号失败`, 'warn');
-    } else {
-      toast(`完成，共获取 ${totalFetched} 个超话`, 'good');
-    }
-    loadTopics();
-  } catch(e) { toast('获取失败','err'); }
+    if (errors.length) toast(`完成，获取 ${totalFetched} 个超话，${errors.length} 个账号失败`, 'warn');
+    else toast(`完成，共获取 ${totalFetched} 个超话`, 'good');
+  } catch(e) {
+    toast('获取失败', 'err');
+  } finally {
+    isLoadingList = false;
+  }
+  loadTopics();
 };
 
 // 设置页 AI 配置

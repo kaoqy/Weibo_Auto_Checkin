@@ -57,59 +57,98 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
                       proxy=None, force=False, allow_fallback=True, count: int = 20):
     """拉取指定超话的最新帖子列表（默认前 count 条）。
 
-    返回 list[dict]，每条含 {text, created_at, reposts, comments, likes, pics, user, ...}。
+    返回 dict: {"posts": [...], "error": ""} 或 {"posts": [], "error": "具体错误原因"}。
     """
     posts = []
-    page = 1
-    while len(posts) < count:
-        params = {"containerid": containerid, "page": page, "count": 25}
-        payload = request_json(
-            session, "GET", TOPIC_POSTS_URL, params=params, cookies=cookies,
-            channel=channel, proxy=proxy, force=force,
-            allow_fallback=allow_fallback,
-        )
-        if payload.get("ok") != 1:
-            break
-        cards = (payload.get("data") or {}).get("cards", [])
-        if not cards:
-            break
-        found = False
-        for card in cards:
-            card_group = card.get("card_group") or []
-            for item in card_group:
-                if item.get("card_type") != "9":
-                    continue
-                mblog = item.get("mblog") or {}
-                if not mblog:
-                    continue
-                found = True
-                user = mblog.get("user") or {}
-                text = mblog.get("text", "")
-                import re as _re
-                text = _re.sub(r'<[^>]+>', '', text).strip()
-                posts.append({
-                    "mid": mblog.get("idstr") or str(mblog.get("id", "")),
-                    "text": text,
-                    "created_at": mblog.get("created_at", ""),
-                    "source": mblog.get("source", ""),
-                    "reposts_count": mblog.get("reposts_count", 0),
-                    "comments_count": mblog.get("comments_count", 0),
-                    "attitudes_count": mblog.get("attitudes_count", 0),
-                    "pics": [p.get("url", "") for p in (mblog.get("pics") or [])],
-                    "user": {
-                        "id": user.get("idstr") or str(user.get("id", "")),
-                        "screen_name": user.get("screen_name", ""),
-                        "profile_image_url": user.get("profile_image_url", "").replace("http://", "https://"),
-                    },
-                })
+    error_msg = ""
+
+    # 清理 containerid，去掉可能的后缀
+    clean_cid = containerid.split("_-_")[0] if "_-_" in containerid else containerid
+
+    # 尝试不同的容器ID格式（最新内容优先）
+    cids_to_try = [
+        clean_cid,                    # 原始
+        f"{clean_cid}_-_feed",       # feed
+        f"{clean_cid}_-_main",       # main
+        f"{clean_cid}_-_new",        # 最新
+        f"{clean_cid}_-_latest",     # 最新（另一种写法）
+    ]
+    
+    seen = set()
+    unique_cids = []
+    for c in cids_to_try:
+        if c not in seen:
+            seen.add(c)
+            unique_cids.append(c)
+
+    for cid in unique_cids:
+        page = 1
+        while len(posts) < count:
+            params = {"containerid": cid, "page": page, "count": 25}
+            try:
+                payload = request_json(
+                    session, "GET", TOPIC_POSTS_URL, params=params, cookies=cookies,
+                    channel=channel, proxy=proxy, force=force,
+                    allow_fallback=allow_fallback,
+                )
+            except NetworkError as exc:
+                return {"posts": posts, "error": f"网络错误：{exc}"}
+            except RuntimeError as exc:
+                return {"posts": posts, "error": f"请求失败：{exc}"}
+            except Exception as exc:
+                return {"posts": posts, "error": f"未知错误：{exc}"}
+
+            if payload.get("ok") == -100:
+                break  # Cookie 过期，换下一个
+            if payload.get("ok") != 1:
+                break  # 换下一个 cid
+
+            cards = (payload.get("data") or {}).get("cards", [])
+            if not cards:
+                break
+
+            found = False
+            for card in cards:
+                card_group = card.get("card_group") or []
+                for item in card_group:
+                    if item.get("card_type") != "9":
+                        continue
+                    mblog = item.get("mblog") or {}
+                    if not mblog:
+                        continue
+                    found = True
+                    user = mblog.get("user") or {}
+                    text = mblog.get("text", "")
+                    import re as _re
+                    text = _re.sub(r'<[^>]+>', '', text).strip()
+                    posts.append({
+                        "mid": mblog.get("idstr") or str(mblog.get("id", "")),
+                        "text": text,
+                        "created_at": mblog.get("created_at", ""),
+                        "source": mblog.get("source", ""),
+                        "reposts_count": mblog.get("reposts_count", 0),
+                        "comments_count": mblog.get("comments_count", 0),
+                        "attitudes_count": mblog.get("attitudes_count", 0),
+                        "pics": [p.get("url", "") for p in (mblog.get("pics") or [])],
+                        "user": {
+                            "id": user.get("idstr") or str(user.get("id", "")),
+                            "screen_name": user.get("screen_name", ""),
+                            "profile_image_url": user.get("profile_image_url", "").replace("http://", "https://"),
+                        },
+                    })
+                    if len(posts) >= count:
+                        break
                 if len(posts) >= count:
                     break
-            if len(posts) >= count:
+            if not found:
                 break
-        if not found:
-            break
-        page += 1
-    return posts[:count]
+            page += 1
+            time.sleep(0.3)
+
+        if posts:
+            break  # 有数据了
+
+    return {"posts": posts[:count], "error": error_msg}
 
 
 class NetworkError(RuntimeError):

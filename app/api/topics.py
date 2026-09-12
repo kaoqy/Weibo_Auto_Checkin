@@ -152,11 +152,22 @@ def refresh_topics(data: RefreshIn, user: dict = Depends(auth.require_admin)):
         cid = t.get("id", "")
         if not cid:
             continue
-        database.upsert_all_topic(
-            topic_id=cid,
-            name=t.get("name", ""),
-            topic_url=f"https://weibo.com/page/{cid}",
-        )
+        new_name = t.get("name", "").strip()
+        existing = database.get_all_topic(cid)
+        # 只有获取到非空名称时才更新，避免覆盖已有名称
+        if new_name:
+            database.upsert_all_topic(
+                topic_id=cid,
+                name=new_name,
+                topic_url=f"https://weibo.com/page/{cid}",
+            )
+        elif existing:
+            # 只更新 URL，不覆盖名称
+            database.upsert_all_topic(
+                topic_id=cid,
+                name=existing.get("name", ""),
+                topic_url=f"https://weibo.com/page/{cid}",
+            )
 
     return {"ok": True, "count": len(topics), "topics": topics}
 
@@ -224,7 +235,7 @@ def get_topic_posts(topic_id: str, account_id: int = 0, count: int = 20,
     opts = CheckinOptions.from_settings(database.get_setting)
 
     try:
-        posts = fetch_topic_posts(
+        result = fetch_topic_posts(
             session, cookie, containerid=topic_id,
             channel=channel, proxy=proxy,
             force=opts.proxy_force, allow_fallback=opts.proxy_fallback,
@@ -233,6 +244,9 @@ def get_topic_posts(topic_id: str, account_id: int = 0, count: int = 20,
     except Exception as exc:
         raise HTTPException(502, f"拉取超话帖子失败：{exc}") from exc
 
+    posts = result.get("posts", [])
+    error = result.get("error", "")
+
     # 替换图片 URL 为本地代理
     for p in posts:
         if p.get("pics"):
@@ -240,7 +254,6 @@ def get_topic_posts(topic_id: str, account_id: int = 0, count: int = 20,
                 f"/api/topics/img?url={escape(url)}" if url.startswith(("http://", "https://")) else url
                 for url in p["pics"]
             ]
-        # 头像也走代理
         user = p.get("user", {})
         avatar = user.get("profile_image_url", "")
         if avatar.startswith(("http://", "https://")):
@@ -255,6 +268,7 @@ def get_topic_posts(topic_id: str, account_id: int = 0, count: int = 20,
         "account_name": acc.get("name", ""),
         "posts": posts,
         "count": len(posts),
+        "error": error,
     }
 
 
