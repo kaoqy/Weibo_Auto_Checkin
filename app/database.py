@@ -233,6 +233,11 @@ def _seed_defaults(conn: sqlite3.Connection) -> None:
         "tg_only_on_change": "0",     # 仅在有失败/异常时推送
         "tg_silent": "0",             # 静默推送（不震动提示）
         "log_retention_days": "30",   # 日志保留天数（0=不清理）
+        # ---- v1.3.0 超话 AI 总结 ----
+        "ai_base_url": "",          # OpenAI 兼容 API base_url
+        "ai_api_key": "",           # API Key
+        "ai_model": "gpt-4o-mini",  # 模型名
+        "ai_topic_prompt": "你是一个超话内容总结助手。请对以下超话帖子内容进行简洁总结（200字以内），包括：1. 主要讨论话题 2. 热门帖子要点 3. 整体氛围。只输出总结文字，不要任何前缀或格式标记。",
     }
     for key, value in defaults.items():
         conn.execute(

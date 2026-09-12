@@ -872,6 +872,11 @@ async function loadSettings() {
     setVal('s-tg_silent', settingsCache.tg_silent==='1');
     const retEl = $('#s-log_retention_days');
     if (retEl) retEl.value = settingsCache.log_retention_days||'30';
+    // v1.3.0 AI
+    $('#s-ai_base_url').value = settingsCache.ai_base_url||'';
+    $('#s-ai_api_key').value = settingsCache.ai_api_key||'';
+    $('#s-ai_model').value = settingsCache.ai_model||'gpt-4o-mini';
+    $('#s-ai_topic_prompt').value = settingsCache.ai_topic_prompt||'你是一个超话内容总结助手。请对以下超话帖子内容进行简洁总结（200字以内），包括：1. 主要讨论话题 2. 热门帖子要点 3. 整体氛围。只输出总结文字，不要任何前缀或格式标记。';
   } catch(e){ toast('加载设置失败','err'); }
 }
 
@@ -897,6 +902,11 @@ function collectSettings() {
     checkin_delay_min: val('s-checkin_delay_min'),
     checkin_delay_max: val('s-checkin_delay_max'),
     log_retention_days: val('s-log_retention_days','30'),
+    // v1.3.0 AI 总结
+    ai_base_url: val('s-ai_base_url').trim(),
+    ai_api_key: val('s-ai_api_key').trim(),
+    ai_model: val('s-ai_model').trim() || 'gpt-4o-mini',
+    ai_topic_prompt: val('s-ai_topic_prompt').trim(),
   };
 }
 $('#btn-save-all').onclick = async () => {
@@ -1016,15 +1026,18 @@ $('#btn-change-pwd').onclick = async () => {
   }
 };
 
-/* ===== 超话管理（v1.3.0） ===== */
+/* ===== 超话管理（v130 三列布局） ===== */
 let topicsCache = [];
+let currentTopicId = null;
+let currentTopicName = '';
+let currentPosts = [];
 
 async function loadTopics(reset = true) {
   if (reset) {
     $('#topicsList').innerHTML = '<div style="color:var(--muted);padding:16px">加载中…</div>';
   }
   try {
-    const data = await api.get('/api/topics/all?limit=100');
+    const data = await api.get('/api/topics/all?limit=200');
     topicsCache = data.items || [];
     const hint = $('#topicsHint');
     if (hint) hint.textContent = `共 ${data.total} 个去重超话`;
@@ -1032,81 +1045,115 @@ async function loadTopics(reset = true) {
       $('#topicsList').innerHTML = '<div style="color:var(--muted);padding:20px;text-align:center">暂无超话记录。<br>点击「📥 全部获取」从账号关注列表拉取。</div>';
       return;
     }
-    renderTopics(topicsCache);
+    renderTopicList(topicsCache);
   } catch(e) { toast('加载超话失败','err'); }
 }
 
-function renderTopics(topics) {
+function renderTopicList(topics) {
   const box = $('#topicsList');
   if (!box) return;
   box.innerHTML = topics.map(t => {
     const avatar = esc(t.avatar_url || '');
     const avatarHtml = avatar
-      ? '<' + 'img src="' + avatar + '" class="topic-card-thumb" alt="" onerror="this.style.display=\'none\'" />'
-      : '<div class="topic-card-thumb">💬</div>';
+      ? '<' + 'img src="' + avatar + '" class="topic-list-avatar" alt="" onerror="this.onerror=null;this.src=\'/default-avatar.svg\'" />'
+      : '<div class="topic-list-avatar">💬</div>';
     const name = esc(t.name || t.topic_id);
     const members = t.member_count ? `<span>👥 ${t.member_count}</span>` : '';
-    const posts = t.post_count ? `<span>📝 ${t.post_count}</span>` : '';
-    const updated = t.updated_at ? `<span>更新于 ${esc(t.updated_at.slice(5,16))}</span>` : '';
-    return `<div class="topic-card" onclick="openTopicDetail('${esc(t.topic_id)}')">
+    const updated = t.updated_at ? `<span>${esc(t.updated_at.slice(5,16))}</span>` : '';
+    return `<div class="topic-list-item${t.topic_id === currentTopicId ? ' active' : ''}" onclick="openTopicDetail('${esc(t.topic_id)}', '${name}')">
       ${avatarHtml}
-      <div class="topic-card-name" title="${name}">${name}</div>
-      <div class="topic-card-meta">${[members, posts, updated].filter(Boolean).join(' · ')}</div>
+      <div class="topic-list-info">
+        <div class="topic-list-name" title="${name}">${name}</div>
+        <div class="topic-list-meta">${[members, updated].filter(Boolean).join(' · ')}</div>
+      </div>
     </div>`;
   }).join('');
 }
 
-async function openTopicDetail(topicId) {
-  $$('.view').forEach(v => v.hidden = true);
-  $('#view-topic-detail').hidden = false;
-  $('#view-title').textContent = '超话详情';
-  const topic = (topicsCache || []).find(t => t.topic_id === topicId) || { topic_id: topicId, name: topicId };
-  $('#topicDetailTitle').textContent = topic.name || topicId;
+async function openTopicDetail(topicId, topicName) {
+  currentTopicId = topicId;
+  currentTopicName = topicName || topicId;
+  // 高亮当前选中
+  document.querySelectorAll('.topic-list-item').forEach(el => {
+    el.classList.toggle('active', el.getAttribute('onclick') && el.getAttribute('onclick').includes(topicId));
+  });
+  $('#topicDetailTitle').textContent = currentTopicName;
   $('#topicDetailHeader').innerHTML = `
-    <h3>${esc(topic.name || topicId)}</h3>
-    <div class="meta">${esc(topic.description || '')}</div>
-    <div class="meta" style="margin-top:6px">ID: ${esc(topic.topic_id)} · <a href="${esc(topic.topic_url || 'https://weibo.com/page/' + topicId)}" target="_blank" rel="noopener">在微博打开 ↗</a></div>
+    <h3>${esc(currentTopicName)}</h3>
+    <div class="meta">ID: ${esc(topicId)} · <a href="https://weibo.com/page/${esc(topicId)}" target="_blank" rel="noopener">在微博打开 ↗</a></div>
   `;
   $('#topicPosts').innerHTML = '<div style="color:var(--muted);padding:16px">正在拉取最新帖子…</div>';
+  // 清空 AI 总结
+  $('#aiSummaryContent').innerHTML = '<p class="hint">点击「✨ 生成」按钮，AI 将自动总结超话帖子内容。</p><p class="hint" style="margin-top:8px;font-size:11px">提示：需在「设置」中配置 API Base URL 和 API Key。</p>';
+  currentPosts = [];
   try {
     const data = await api.get('/api/topics/posts/' + encodeURIComponent(topicId) + '?count=20');
-    if (!data.posts || !data.posts.length) {
+    currentPosts = data.posts || [];
+    if (!currentPosts.length) {
       $('#topicPosts').innerHTML = '<div style="color:var(--muted);padding:20px;text-align:center">暂无帖子数据</div>';
       return;
     }
-    $('#topicPosts').innerHTML = data.posts.map(p => {
-      const avatar = esc(p.user?.profile_image_url || '/default-avatar.svg');
-      const userName = esc(p.user?.screen_name || '未知');
-      const time = esc(p.created_at || '');
-      const text = esc(p.text || '');
-      const pics = (p.pics || []).map(url => '<' + 'img src="' + esc(url) + '" alt="" loading="lazy" referrerpolicy="no-referrer" />').join('');
-      const picsHtml = pics ? `<div class="topic-post-pics">${pics}</div>` : '';
-      return `<div class="topic-post">
-        <div class="topic-post-header">
-          <img class="topic-post-avatar" src="${avatar}" alt="" onerror="this.onerror=null;this.src=\'/default-avatar.svg\'" />
-          <span class="topic-post-user">${userName}</span>
-          <span class="topic-post-time">${time}</span>
-        </div>
-        <div class="topic-post-text">${text}</div>
-        ${picsHtml}
-        <div class="topic-post-actions">
-          <span>🔁 ${p.reposts_count || 0}</span>
-          <span>💬 ${p.comments_count || 0}</span>
-          <span>❤️ ${p.attitudes_count || 0}</span>
-        </div>
-      </div>`;
-    }).join('');
+    renderPosts(currentPosts);
   } catch(e) {
     $('#topicPosts').innerHTML = '<div style="color:var(--danger);padding:20px;text-align:center">拉取失败：' + esc(e.message || '') + '</div>';
   }
 }
 
-$('#btn-topic-back').onclick = () => {
-  $$('.nav-item').forEach(b => b.classList.remove('active'));
-  document.querySelector('.nav-item[data-view="topics"]').classList.add('active');
-  $$('.view').forEach(v => v.hidden = true);
-  $('#view-topics').hidden = false;
-  $('#view-title').textContent = '超话';
+function renderPosts(posts) {
+  const box = $('#topicPosts');
+  if (!box) return;
+  box.innerHTML = posts.map(p => {
+    const avatar = esc(p.user?.profile_image_url || '/default-avatar.svg');
+    const userName = esc(p.user?.screen_name || '未知');
+    const time = esc(p.created_at || '');
+    const text = esc(p.text || '');
+    const pics = (p.pics || []).map(url => '<' + 'img src="' + esc(url) + '" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display=\'none\'" />').join('');
+    const picsHtml = pics ? `<div class="topic-post-pics">${pics}</div>` : '';
+    return `<div class="topic-post">
+      <div class="topic-post-header">
+        <img class="topic-post-avatar" src="${avatar}" alt="" onerror="this.onerror=null;this.src=\'/default-avatar.svg\'" />
+        <span class="topic-post-user">${userName}</span>
+        <span class="topic-post-time">${time}</span>
+      </div>
+      <div class="topic-post-text">${text}</div>
+      ${picsHtml}
+      <div class="topic-post-actions">
+        <span>🔁 ${p.reposts_count || 0}</span>
+        <span>💬 ${p.comments_count || 0}</span>
+        <span>❤️ ${p.attitudes_count || 0}</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// AI 总结
+$('#btn-ai-summary').onclick = async () => {
+  if (!currentPosts || !currentPosts.length) {
+    toast('请先选择超话并拉取帖子', 'warn');
+    return;
+  }
+  const box = $('#aiSummaryContent');
+  box.innerHTML = '<div class="ai-summary-loading"><span class="qr-spinner" style="width:16px;height:16px;border-width:2px"></span> AI 正在总结…</div>';
+  try {
+    // 只传文字
+    const text = currentPosts.map((p, i) => {
+      return `[${i+1}] ${p.user?.screen_name || '未知'}: ${p.text || ''}`;
+    }).join('\n');
+    const r = await api.post('/api/topics/ai_summary', { text, topic_name: currentTopicName });
+    if (r.ok) {
+      box.innerHTML = `<div class="ai-summary-text">${esc(r.summary)}</div><div class="hint" style="margin-top:8px;font-size:11px">模型: ${esc(r.model || '')}</div>`;
+    } else {
+      box.innerHTML = `<div class="ai-summary-error">❌ ${esc(r.error || '总结失败')}</div>`;
+    }
+  } catch(e) {
+    box.innerHTML = `<div class="ai-summary-error">❌ ${esc(e.message || '请求失败')}</div>`;
+  }
+};
+
+$('#btn-topic-refresh').onclick = async () => {
+  if (!currentTopicId) { toast('请先选择超话', 'warn'); return; }
+  await openTopicDetail(currentTopicId, currentTopicName);
+  toast('已刷新', 'good');
 };
 
 $('#btn-topics-refresh').onclick = async () => {
@@ -1119,6 +1166,8 @@ $('#btn-topics-clear').onclick = async () => {
   try {
     const r = await api.del('/api/topics/all');
     toast('已清空 ' + (r.removed||0) + ' 条超话记录', 'good');
+    currentTopicId = null;
+    currentPosts = [];
     loadTopics();
   } catch(e) { toast('清空失败','err'); }
 };
@@ -1145,6 +1194,25 @@ $('#btn-topics-fetch').onclick = async () => {
     }
     loadTopics();
   } catch(e) { toast('获取失败','err'); }
+};
+
+// 设置页 AI 配置
+$('#btn-test-ai').onclick = async () => {
+  const st = $('#ai-test-status');
+  st.textContent = '测试中…';
+  try {
+    const r = await api.post('/api/topics/ai_summary', { text: '测试连接', topic_name: '测试' });
+    if (r.ok) {
+      st.textContent = '✅ 连接正常';
+      st.style.color = 'var(--success)';
+    } else {
+      st.textContent = '❌ ' + (r.error || '失败');
+      st.style.color = 'var(--danger)';
+    }
+  } catch(e) {
+    st.textContent = '❌ ' + e.message;
+    st.style.color = 'var(--danger)';
+  }
 };
 
 // 账号管理弹窗里的超话选择模块

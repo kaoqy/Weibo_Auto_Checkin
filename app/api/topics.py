@@ -3,13 +3,20 @@
 提供：
 - 单账号关注超话列表（带缓存，刷新按钮）
 - 全部去重超话列表（独立侧栏页）
-- 超话详情页内容拉取
+- 超话详情页内容拉取（含图片代理）
+- AI 总结（OpenAI 兼容 API）
 """
 from __future__ import annotations
 
+import hashlib
+import imghdr
 import logging
+from pathlib import Path
+from urllib.parse import quote as escape
 
+import requests
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from .. import auth, database
@@ -22,6 +29,53 @@ from ..weibo_client import (
 router = APIRouter(prefix="/api/topics", tags=["topics"])
 
 log = logging.getLogger("weibo.topics")
+
+# 图片缓存目录
+IMG_CACHE_DIR = database.DB_PATH.parent / "img_cache"
+IMG_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _download_image(url: str) -> Path | None:
+    """下载图片到本地缓存，返回本地路径。"""
+    if not url or not url.startswith(("http://", "https://")):
+        return None
+    # 用 URL hash 做文件名
+    url_hash = hashlib.md5(url.encode()).hexdigest()
+    ext = ".jpg"  # 默认
+    # 尝试从 URL 取 ext
+    lower = url.lower()
+    for e in (".png", ".webp", ".gif", ".bmp"):
+        if e in lower:
+            ext = e
+            break
+    local_path = IMG_CACHE_DIR / f"{url_hash}{ext}"
+    if local_path.exists() and local_path.stat().st_size > 0:
+        return local_path
+    try:
+        resp = requests.get(url, timeout=15, headers={
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15",
+            "Referer": "https://m.weibo.cn/",
+        })
+        resp.raise_for_status()
+        content = resp.content
+        if len(content) < 100:
+            return None
+        # 检测真实格式
+        detected = imghdr.what(None, content)
+        if detected == "png":
+            ext = ".png"
+        elif detected == "webp":
+            ext = ".webp"
+        elif detected == "gif":
+            ext = ".gif"
+        elif detected == "jpeg":
+            ext = ".jpg"
+        local_path = IMG_CACHE_DIR / f"{url_hash}{ext}"
+        local_path.write_bytes(content)
+        return local_path
+    except Exception as exc:
+        log.warning("图片下载失败 %s: %s", url[:80], exc)
+        return None
 
 
 # ========================= 单账号关注超话缓存 =========================
@@ -179,7 +233,19 @@ def get_topic_posts(topic_id: str, account_id: int = 0, count: int = 20,
     except Exception as exc:
         raise HTTPException(502, f"拉取超话帖子失败：{exc}") from exc
 
-    # 顺便更新 all_topics 里的 fetched_at
+    # 替换图片 URL 为本地代理
+    for p in posts:
+        if p.get("pics"):
+            p["pics"] = [
+                f"/api/topics/img?url={escape(url)}" if url.startswith(("http://", "https://")) else url
+                for url in p["pics"]
+            ]
+        # 头像也走代理
+        user = p.get("user", {})
+        avatar = user.get("profile_image_url", "")
+        if avatar.startswith(("http://", "https://")):
+            user["profile_image_url"] = f"/api/topics/img?url={escape(avatar)}"
+
     database.upsert_all_topic(topic_id=topic_id, fetched_at=database._now())
 
     return {
@@ -190,3 +256,90 @@ def get_topic_posts(topic_id: str, account_id: int = 0, count: int = 20,
         "posts": posts,
         "count": len(posts),
     }
+
+
+# ========================= 图片代理 =========================
+
+@router.get("/img")
+def proxy_image(url: str):
+    """代理下载图片（绕过防盗链，缓存到本地）。"""
+    if not url:
+        raise HTTPException(400, "url 为空")
+    try:
+        from urllib.parse import unquote
+        url = unquote(url)
+    except Exception:
+        pass
+    local_path = _download_image(url)
+    if not local_path or not local_path.exists():
+        raise HTTPException(404, "图片获取失败")
+    # 根据扩展名返回正确的 Content-Type
+    ext = local_path.suffix.lower()
+    content_type_map = {
+        ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+        ".png": "image/png", ".webp": "image/webp",
+        ".gif": "image/gif", ".bmp": "image/bmp",
+    }
+    media_type = content_type_map.get(ext, "application/octet-stream")
+    return FileResponse(local_path, media_type=media_type)
+
+
+# ========================= AI 总结 =========================
+
+class AISummaryIn(BaseModel):
+    text: str
+    topic_name: str = "超话"
+
+
+@router.post("/ai_summary")
+def ai_summary(data: AISummaryIn, user: dict = Depends(auth.require_admin)):
+    """调用 OpenAI 兼容 API 对超话内容进行总结。
+
+    配置项（settings）：ai_base_url / ai_api_key / ai_model / ai_topic_prompt
+    """
+    base_url = (database.get_setting("ai_base_url", "") or "").strip().rstrip("/")
+    api_key = (database.get_setting("ai_api_key", "") or "").strip()
+    model = (database.get_setting("ai_model", "") or "gpt-4o-mini").strip()
+    prompt_template = (database.get_setting("ai_topic_prompt", "") or
+                       "你是一个超话内容总结助手。请对以下超话帖子内容进行简洁总结（200字以内），包括：1. 主要讨论话题 2. 热门帖子要点 3. 整体氛围。只输出总结文字，不要任何前缀或格式标记。")
+
+    if not base_url or not api_key:
+        return {
+            "ok": False,
+            "summary": "",
+            "error": "未配置 AI 总结功能。请在设置中填写 API Base URL 和 API Key。",
+        }
+
+    # 构建提示词
+    system_prompt = prompt_template.replace("{topic_name}", data.topic_name)
+    # 截断文本避免超出上下文
+    truncated_text = data.text[:8000] if len(data.text) > 8000 else data.text
+    user_content = f"以下是「{data.topic_name}」超话的最新帖子内容：\n\n{truncated_text}"
+
+    try:
+        resp = requests.post(
+            f"{base_url}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content},
+                ],
+                "max_tokens": 500,
+                "temperature": 0.7,
+            },
+            timeout=60,
+        )
+        resp.raise_for_status()
+        result = resp.json()
+        summary = result["choices"][0]["message"]["content"].strip()
+        return {"ok": True, "summary": summary, "model": model}
+    except requests.exceptions.Timeout:
+        return {"ok": False, "summary": "", "error": "请求超时，请稍后重试"}
+    except Exception as exc:
+        log.error("AI 总结失败: %s", exc)
+        return {"ok": False, "summary": "", "error": f"调用失败：{exc}"}

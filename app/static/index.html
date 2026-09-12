@@ -122,30 +122,47 @@
 
       <!-- 超话管理 -->
       <section class="view" id="view-topics" hidden>
-        <div class="card">
-          <div class="card-head">
-            <h2>全部超话</h2>
-            <div>
-              <button class="btn btn-ghost btn-sm" id="btn-topics-refresh">↻ 刷新</button>
-              <button class="btn btn-ghost btn-sm" id="btn-topics-fetch">📥 全部获取</button>
-              <button class="btn btn-danger btn-sm" id="btn-topics-clear">🗑 清空</button>
+        <div class="topics-3col">
+          <!-- 左列：超话列表 -->
+          <div class="topics-col topics-col-left">
+            <div class="card">
+              <div class="card-head">
+                <h2>全部超话</h2>
+                <div>
+                  <button class="btn btn-ghost btn-sm" id="btn-topics-refresh">↻ 刷新</button>
+                  <button class="btn btn-ghost btn-sm" id="btn-topics-fetch">📥 全部获取</button>
+                  <button class="btn btn-danger btn-sm" id="btn-topics-clear">🗑 清空</button>
+                </div>
+              </div>
+              <p class="hint" style="margin:0 0 12px">记录所有账号关注过的去重超话列表。点击可查看最新内容。</p>
+              <div id="topicsList" class="topics-list"></div>
+              <div class="hint" id="topicsHint" style="margin-top:10px"></div>
             </div>
           </div>
-          <p class="hint" style="margin:0 0 12px">记录所有账号关注过的去重超话列表。点击可查看最新内容。</p>
-          <div id="topicsList" class="topics-grid"></div>
-          <div class="hint" id="topicsHint" style="margin-top:10px"></div>
-        </div>
-      </section>
-
-      <!-- 超话详情 -->
-      <section class="view" id="view-topic-detail" hidden>
-        <div class="card">
-          <div class="card-head">
-            <h2 id="topicDetailTitle">超话详情</h2>
-            <button class="btn btn-ghost" id="btn-topic-back">← 返回列表</button>
+          <!-- 中列：帖子内容 -->
+          <div class="topics-col topics-col-mid">
+            <div class="card">
+              <div class="card-head">
+                <h2 id="topicDetailTitle">帖子详情</h2>
+                <button class="btn btn-ghost btn-sm" id="btn-topic-refresh">↻ 刷新</button>
+              </div>
+              <div class="topic-detail-header" id="topicDetailHeader"></div>
+              <div class="topic-posts" id="topicPosts"></div>
+            </div>
           </div>
-          <div class="topic-detail-header" id="topicDetailHeader"></div>
-          <div class="topic-posts" id="topicPosts"></div>
+          <!-- 右列：AI 总结 -->
+          <div class="topics-col topics-col-right">
+            <div class="card">
+              <div class="card-head">
+                <h2>AI 总结</h2>
+                <button class="btn btn-ghost btn-sm" id="btn-ai-summary">✨ 生成</button>
+              </div>
+              <div class="ai-summary-content" id="aiSummaryContent">
+                <p class="hint">点击「✨ 生成」按钮，AI 将自动总结超话帖子内容。</p>
+                <p class="hint" style="margin-top:8px;font-size:11px">提示：需在「设置」中配置 API Base URL 和 API Key。</p>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -242,6 +259,16 @@
                 <label>超话最大延时(s)<input type="number" id="s-checkin_delay_max" /></label>
               </div>
               <label>日志保留天数<input type="number" id="s-log_retention_days" min="0" /><small>0 = 不自动清理</small></label>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>AI 总结（v1.3.0）</h2></div>
+            <div class="form">
+              <label>API Base URL <input id="s-ai_base_url" placeholder="https://api.openai.com/v1" autocomplete="off" /><small>OpenAI 兼容 API，如 https://api.openai.com/v1</small></label>
+              <label>API Key <input id="s-ai_api_key" placeholder="sk-..." type="password" autocomplete="off" /></label>
+              <label>模型 <input id="s-ai_model" placeholder="gpt-4o-mini" /><small>默认 gpt-4o-mini</small></label>
+              <label>总结提示词（可选）<textarea id="s-ai_topic_prompt" rows="4" placeholder="留空则使用默认提示词">你是一个超话内容总结助手。请对以下超话帖子内容进行简洁总结（200字以内），包括：1. 主要讨论话题 2. 热门帖子要点 3. 整体氛围。只输出总结文字，不要任何前缀或格式标记。</textarea></label>
+              <div class="form-actions"><button class="btn btn-ghost" id="btn-test-ai">测试连接</button><span class="hint" id="ai-test-status"></span></div>
             </div>
           </div>
           <div class="card">

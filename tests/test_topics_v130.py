@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import requests  # noqa: F401  (用于 mock)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -175,3 +176,41 @@ def test_topics_api_posts_endpoint(client):
     assert body["count"] == 1
     assert body["posts"][0]["text"] == "测试帖子内容"
     assert body["account_used"] == acc["id"]
+    # 图片 URL 应被替换为代理地址
+    assert "/api/topics/img?url=" in body["posts"][0]["pics"][0]
+    assert "/api/topics/img?url=" in body["posts"][0]["user"]["profile_image_url"]
+
+
+def test_ai_summary_without_config(client):
+    """未配置 AI 时应返回错误提示。"""
+    r = client.post("/api/topics/ai_summary", json={"text": "测试", "topic_name": "测试"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is False
+    assert "未配置" in body["error"]
+
+
+def test_ai_summary_with_mock(client, monkeypatch):
+    """配置 AI 后应调用 API。"""
+    db.set_settings({
+        "ai_base_url": "https://api.openai.com/v1",
+        "ai_api_key": "sk-test",
+        "ai_model": "gpt-4o-mini",
+        "ai_topic_prompt": "总结以下内容：",
+    })
+
+    class FakeResp:
+        status_code = 200
+        def json(self):
+            return {"choices": [{"message": {"content": "这是 AI 总结内容"}}]}
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setattr(requests, "post", lambda *a, **kw: FakeResp())
+    r = client.post("/api/topics/ai_summary", json={"text": "帖子内容", "topic_name": "测试超话"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body["summary"] == "这是 AI 总结内容"
+    assert body["model"] == "gpt-4o-mini"
+    db._local.conn = None
