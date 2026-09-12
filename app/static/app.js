@@ -1027,12 +1027,12 @@ $('#btn-change-pwd').onclick = async () => {
 };
 
 /* ===== 超话管理（v1.3.0 三列布局） ===== */
-let topicsCache = [];
-let currentTopicId = null;
-let currentTopicName = '';
-let currentPosts = [];
-let isLoadingPosts = false;
-let isLoadingList = false;
+topicsCache = [];
+currentTopicId = null;
+currentTopicName = '';
+currentPosts = [];
+isLoadingPosts = false;
+isLoadingList = false;
 
 async function loadTopics(reset = true) {
   if (reset) {
@@ -1048,7 +1048,9 @@ async function loadTopics(reset = true) {
       return;
     }
     renderTopicList(topicsCache);
-  } catch(e) { toast('加载超话失败','err'); }
+  } catch(e) {
+    toast('加载超话失败', 'err');
+  }
 }
 
 function renderTopicList(topics) {
@@ -1057,15 +1059,17 @@ function renderTopicList(topics) {
   box.innerHTML = topics.map(t => {
     const avatar = esc(t.avatar_url || '');
     const avatarHtml = avatar
-      ? '<' + 'img src="' + avatar + '" class="topic-list-avatar" alt="" onerror="this.onerror=null;this.src=\'/default-avatar.svg\'" />'
+      ? '<img src="' + avatar + '" class="topic-list-avatar" alt="" onerror="this.onerror=null;this.src=\'/default-avatar.svg\'" />'
       : '<div class="topic-list-avatar">💬</div>';
-    const name = esc(t.name || t.topic_id);
+    const name = t.name || t.topic_id;
+    const safeName = esc(name).replace(/'/g, "\\'");
     const members = t.member_count ? `<span>👥 ${t.member_count}</span>` : '';
     const updated = t.updated_at ? `<span>${esc(t.updated_at.slice(5,16))}</span>` : '';
-    return `<div class="topic-list-item${t.topic_id === currentTopicId ? ' active' : ''}" onclick="openTopicDetail('${esc(t.topic_id)}', '${name}')">
+    const isActive = t.topic_id === currentTopicId ? ' active' : '';
+    return `<div class="topic-list-item${isActive}" data-id="${esc(t.topic_id)}" data-name="${esc(name)}" onclick="openTopicDetail('${esc(t.topic_id)}', this)">
       ${avatarHtml}
       <div class="topic-list-info">
-        <div class="topic-list-name" title="${name}">${name}</div>
+        <div class="topic-list-name" title="${esc(name)}">${esc(name)}</div>
         <div class="topic-list-meta">${[members, updated].filter(Boolean).join(' · ')}</div>
       </div>
     </div>`;
@@ -1075,23 +1079,23 @@ function renderTopicList(topics) {
 async function openTopicDetail(topicId, el) {
   currentTopicId = topicId;
   
-  // 优先从 topicsCache 获取名称，确保名称不会被覆盖
-  const cached = (topicsCache || []).find(t => t.topic_id === topicId);
+  // 从 data-name 属性获取名称
   const nameFromAttr = el ? el.getAttribute('data-name') : '';
+  const cached = (topicsCache || []).find(t => t.topic_id === topicId);
   currentTopicName = nameFromAttr || (cached ? cached.name : topicId);
 
   // 高亮当前选中
-  document.querySelectorAll('.topic-list-item').forEach(el => {
-    el.classList.toggle('active', el.getAttribute('onclick') && el.getAttribute('onclick').includes(topicId));
+  document.querySelectorAll('.topic-list-item').forEach(item => {
+    item.classList.toggle('active', item.getAttribute('data-id') === topicId);
   });
+
   $('#topicDetailTitle').textContent = currentTopicName;
   $('#topicDetailHeader').innerHTML = `
     <h3>${esc(currentTopicName)}</h3>
     <div class="meta">ID: ${esc(topicId)} · <a href="https://weibo.com/page/${esc(topicId)}" target="_blank" rel="noopener">在微博打开 ↗</a></div>
   `;
   $('#topicPosts').innerHTML = '<div style="color:var(--muted);padding:16px">正在拉取最新帖子…</div>';
-  // 清空 AI 总结
-  $('#aiSummaryContent').innerHTML = '<p class="hint">点击「✨ 生成」按钮，AI 将自动总结超话帖子内容。</p><p class="hint" style="margin-top:8px;font-size:11px">提示：需在「设置」中配置 API Base URL 和 API Key。</p>';
+  $('#aiSummaryContent').innerHTML = '<p class="hint">点击「✨ 生成」按钮，AI 将自动总结超话帖子内容。</p>';
   currentPosts = [];
   try {
     const data = await api.get('/api/topics/posts/' + encodeURIComponent(topicId) + '?count=20');
@@ -1114,7 +1118,7 @@ function renderPosts(posts) {
     const userName = esc(p.user?.screen_name || '未知');
     const time = esc(p.created_at || '');
     const text = esc(p.text || '');
-    const pics = (p.pics || []).map(url => '<' + 'img src="' + esc(url) + '" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display=\'none\'" />').join('');
+    const pics = (p.pics || []).map(url => '<img src="' + esc(url) + '" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display=\'none\'" />').join('');
     const picsHtml = pics ? `<div class="topic-post-pics">${pics}</div>` : '';
     return `<div class="topic-post">
       <div class="topic-post-header">
@@ -1142,10 +1146,7 @@ $('#btn-ai-summary').onclick = async () => {
   const box = $('#aiSummaryContent');
   box.innerHTML = '<div class="ai-summary-loading"><span class="qr-spinner" style="width:16px;height:16px;border-width:2px"></span> AI 正在总结…</div>';
   try {
-    // 只传文字
-    const text = currentPosts.map((p, i) => {
-      return `[${i+1}] ${p.user?.screen_name || '未知'}: ${p.text || ''}`;
-    }).join('\n');
+    const text = currentPosts.map((p, i) => `[${i+1}] ${p.user?.screen_name || '未知'}: ${p.text || ''}`).join('\n');
     const r = await api.post('/api/topics/ai_summary', { text, topic_name: currentTopicName });
     if (r.ok) {
       box.innerHTML = `<div class="ai-summary-text">${esc(r.summary)}</div><div class="hint" style="margin-top:8px;font-size:11px">模型: ${esc(r.model || '')}</div>`;
@@ -1157,12 +1158,17 @@ $('#btn-ai-summary').onclick = async () => {
   }
 };
 
+// 刷新帖子
 $('#btn-topic-refresh').onclick = async () => {
   if (!currentTopicId) { toast('请先选择超话', 'warn'); return; }
-  await openTopicDetail(currentTopicId, currentTopicName);
+  if (isLoadingPosts) return;
+  // 从 topicsCache 获取元素引用
+  const el = document.querySelector(`.topic-list-item[data-id="${currentTopicId}"]`);
+  await openTopicDetail(currentTopicId, el);
   toast('已刷新', 'good');
 };
 
+// 更新超话列表
 $('#btn-topics-refresh').onclick = async () => {
   if (isLoadingList) return;
   isLoadingList = true;
@@ -1206,7 +1212,7 @@ $('#btn-topics-clear').onclick = async () => {
     currentTopicId = null;
     currentPosts = [];
     loadTopics();
-  } catch(e) { toast('清空失败','err'); }
+  } catch(e) { toast('清空失败', 'err'); }
 };
 
 $('#btn-topics-fetch').onclick = async () => {

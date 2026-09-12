@@ -65,13 +65,13 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
     # 清理 containerid，去掉可能的后缀
     clean_cid = containerid.split("_-_")[0] if "_-_" in containerid else containerid
 
-    # 尝试不同的容器ID格式（最新内容优先）
+    # 按优先级尝试不同的容器ID格式（最新内容优先）
     cids_to_try = [
-        clean_cid,                    # 原始
-        f"{clean_cid}_-_feed",       # feed
+        f"{clean_cid}_-_feed",       # feed (latest)
+        f"{clean_cid}_-_new",        # new posts
+        f"{clean_cid}_-_latest",     # latest posts
+        clean_cid,                    # original
         f"{clean_cid}_-_main",       # main
-        f"{clean_cid}_-_new",        # 最新
-        f"{clean_cid}_-_latest",     # 最新（另一种写法）
     ]
     
     seen = set()

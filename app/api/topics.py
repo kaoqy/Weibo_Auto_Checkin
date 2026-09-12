@@ -192,11 +192,8 @@ def clear_all_topics(user: dict = Depends(auth.require_admin)):
 
 @router.get("/posts/{topic_id}")
 def get_topic_posts(topic_id: str, account_id: int = 0, count: int = 20,
-                    user: dict = Depends(auth.require_admin)):
-    """拉取指定超话的最新帖子（需要至少一个有效账号的 Cookie）。
-
-    account_id 指定使用哪个账号拉取；如果为 0，取第一个有 Cookie 的启用账号。
-    """
+                    user=Depends(auth.require_admin)):
+    """拉取指定超话的最新帖子"""
     acc = None
     if account_id:
         acc = database.get_account(account_id)
