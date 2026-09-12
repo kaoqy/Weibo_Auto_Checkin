@@ -1168,36 +1168,21 @@ $('#btn-topic-refresh').onclick = async () => {
   toast('已刷新', 'good');
 };
 
-// 更新超话列表
+// 更新超话列表 - 使用 /refresh_all 接口
 $('#btn-topics-refresh').onclick = async () => {
   if (isLoadingList) return;
   isLoadingList = true;
   const list = $('#topicsList');
   if (list) list.innerHTML = '<div class="loading-progress"><div class="loading-bar"><div class="loading-bar-inner" style="width:20%"></div></div><div class="loading-text">正在获取账号列表...</div></div>';
   try {
-    const accounts = await api.get('/api/accounts');
-    if (!accounts.length) { toast('没有账号，请先添加', 'err'); return; }
-    const totalAcc = accounts.length;
-    let totalFetched = 0;
-    let errors = [];
-    let processed = 0;
-    for (const acc of accounts) {
-      processed++;
-      if (list) {
-        list.innerHTML = `<div class="loading-progress"><div class="loading-bar"><div class="loading-bar-inner" style="width:${Math.round(processed/totalAcc*100)}%"></div></div><div class="loading-text">正在处理: ${esc(acc.name)}... (${processed}/${totalAcc})</div></div>`;
-      }
-      if (!acc.cookie_length) continue;
-      try {
-        const r = await api.post('/api/topics/refresh', { account_id: acc.id });
-        totalFetched += r.count || 0;
-      } catch(e) {
-        errors.push(acc.name + ': ' + e.message);
-      }
+    const r = await api.post('/api/topics/refresh_all', {});
+    if (r.ok) {
+      toast(r.message || '更新完成', 'good');
+    } else {
+      toast(r.error || '更新失败', 'err');
     }
-    if (errors.length) toast(`完成，获取 ${totalFetched} 个超话，${errors.length} 个账号失败`, 'warn');
-    else toast(`完成，共获取 ${totalFetched} 个超话`, 'good');
   } catch(e) {
-    toast('获取失败', 'err');
+    toast('获取失败: ' + e.message, 'err');
   } finally {
     isLoadingList = false;
   }
@@ -1215,35 +1200,21 @@ $('#btn-topics-clear').onclick = async () => {
   } catch(e) { toast('清空失败', 'err'); }
 };
 
+// 全部获取 - 使用 /refresh_all 接口
 $('#btn-topics-fetch').onclick = async () => {
   if (isLoadingList) return;
   isLoadingList = true;
   const list = $('#topicsList');
   if (list) list.innerHTML = '<div class="loading-progress"><div class="loading-bar"><div class="loading-bar-inner" style="width:20%"></div></div><div class="loading-text">正在获取账号列表...</div></div>';
   try {
-    const accounts = await api.get('/api/accounts');
-    if (!accounts.length) { toast('没有账号，请先添加', 'err'); return; }
-    const totalAcc = accounts.length;
-    let totalFetched = 0;
-    let errors = [];
-    let processed = 0;
-    for (const acc of accounts) {
-      processed++;
-      if (list) {
-        list.innerHTML = `<div class="loading-progress"><div class="loading-bar"><div class="loading-bar-inner" style="width:${Math.round(processed/totalAcc*100)}%"></div></div><div class="loading-text">正在处理: ${esc(acc.name)}... (${processed}/${totalAcc})</div></div>`;
-      }
-      if (!acc.cookie_length) continue;
-      try {
-        const r = await api.post('/api/topics/refresh', { account_id: acc.id });
-        totalFetched += r.count || 0;
-      } catch(e) {
-        errors.push(acc.name + ': ' + e.message);
-      }
+    const r = await api.post('/api/topics/refresh_all', {});
+    if (r.ok) {
+      toast(r.message || '获取完成', 'good');
+    } else {
+      toast(r.error || '获取失败', 'err');
     }
-    if (errors.length) toast(`完成，获取 ${totalFetched} 个超话，${errors.length} 个账号失败`, 'warn');
-    else toast(`完成，共获取 ${totalFetched} 个超话`, 'good');
   } catch(e) {
-    toast('获取失败', 'err');
+    toast('获取失败: ' + e.message, 'err');
   } finally {
     isLoadingList = false;
   }

@@ -1,11 +1,5 @@
-"""超话管理 API（v1.3.0）。
+"""超话管理 API（v1.3.0）。"""
 
-提供：
-- 单账号关注超话列表（带缓存，刷新按钮）
-- 全部去重超话列表（独立侧栏页）
-- 超话详情页内容拉取（含图片代理）
-- AI 总结（OpenAI 兼容 API）
-"""
 from __future__ import annotations
 
 import hashlib
@@ -16,7 +10,7 @@ from urllib.parse import quote as escape
 
 import requests
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from .. import auth, database
@@ -30,19 +24,15 @@ router = APIRouter(prefix="/api/topics", tags=["topics"])
 
 log = logging.getLogger("weibo.topics")
 
-# 图片缓存目录
 IMG_CACHE_DIR = database.DB_PATH.parent / "img_cache"
 IMG_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _download_image(url: str) -> Path | None:
-    """下载图片到本地缓存，返回本地路径。"""
     if not url or not url.startswith(("http://", "https://")):
         return None
-    # 用 URL hash 做文件名
     url_hash = hashlib.md5(url.encode()).hexdigest()
-    ext = ".jpg"  # 默认
-    # 尝试从 URL 取 ext
+    ext = ".jpg"
     lower = url.lower()
     for e in (".png", ".webp", ".gif", ".bmp"):
         if e in lower:
@@ -60,16 +50,9 @@ def _download_image(url: str) -> Path | None:
         content = resp.content
         if len(content) < 100:
             return None
-        # 检测真实格式
         detected = imghdr.what(None, content)
-        if detected == "png":
-            ext = ".png"
-        elif detected == "webp":
-            ext = ".webp"
-        elif detected == "gif":
-            ext = ".gif"
-        elif detected == "jpeg":
-            ext = ".jpg"
+        ext_map = {"png": ".png", "webp": ".webp", "gif": ".gif", "jpeg": ".jpg"}
+        ext = ext_map.get(detected, ext)
         local_path = IMG_CACHE_DIR / f"{url_hash}{ext}"
         local_path.write_bytes(content)
         return local_path
@@ -78,11 +61,19 @@ def _download_image(url: str) -> Path | None:
         return None
 
 
+def _public(acc_payload: dict) -> dict:
+    """对外输出：不泄露 cookie 全文"""
+    acc = dict(acc_payload)
+    cookie = acc.get("cookie") or acc.get("cookie_raw") or ""
+    acc["cookie_length"] = len(cookie) if cookie else 0
+    acc["cookie_preview"] = (cookie[:20] + "…") if len(cookie) > 20 else cookie
+    return acc
+
+
 # ========================= 单账号关注超话缓存 =========================
 
 @router.get("/cache/{account_id}")
-def get_cached_topics(account_id: int, user: dict = Depends(auth.require_admin)):
-    """读取单账号的关注超话缓存（不触发网络请求）。"""
+def get_cached_topics(account_id: int, user=Depends(auth.require_admin)):
     acc = database.get_account(account_id)
     if not acc:
         raise HTTPException(404, "账号不存在")
@@ -98,116 +89,14 @@ def get_cached_topics(account_id: int, user: dict = Depends(auth.require_admin))
 
 class RefreshIn(BaseModel):
     account_id: int
-    force: bool = False
 
 
 @router.post("/refresh")
-def refresh_topics(data: RefreshIn, user: dict = Depends(auth.require_admin)):
-    """手动刷新指定账号的关注超话（并写入缓存）。"""
+def refresh_topics(data: RefreshIn, user=Depends(auth.require_admin)):
+    """刷新指定账号的关注超话"""
     acc = database.get_account(data.account_id)
     if not acc:
         raise HTTPException(404, "账号不存在")
-    cookie = normalize_cookie(acc.get("cookie") or acc.get("cookie_raw") or "")
-    if not cookie:
-        raise HTTPException(400, "账号 Cookie 为空")
-
-    import requests as _req
-    session = _req.Session()
-    session.headers.update({
-        "User-Agent": (
-            "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) "
-            "AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148"
-        ),
-        "Referer": "https://m.weibo.cn/",
-        "Accept": "application/json, text/plain, */*",
-        "X-Requested-With": "XMLHttpRequest",
-        "MWeibo-Pwa": "1",
-    })
-
-    proxy = (acc.get("proxy") or "").strip() or None
-    channel = "socks" if proxy else "direct"
-    opts_db = database.get_setting
-
-    from ..weibo_client import CheckinOptions
-    opts = CheckinOptions.from_settings(opts_db)
-
-    try:
-        topics = get_followed_topics(
-            session, cookie, channel=channel, proxy=proxy,
-            force=opts.proxy_force, allow_fallback=opts.proxy_fallback,
-        )
-    except Exception as exc:
-        raise HTTPException(502, f"获取超话列表失败：{exc}") from exc
-
-    # 构建超话 URL（page 格式，前端直接可跳转）
-    for t in topics:
-        cid = t.get("id", "")
-        if cid:
-            t["url"] = f"https://weibo.com/page/{cid}"
-
-    database.set_topic_cache(data.account_id, topics)
-
-    # 合并进全量去重表
-    for t in topics:
-        cid = t.get("id", "")
-        if not cid:
-            continue
-        new_name = t.get("name", "").strip()
-        existing = database.get_all_topic(cid)
-        # 只有获取到非空名称时才更新，避免覆盖已有名称
-        if new_name:
-            database.upsert_all_topic(
-                topic_id=cid,
-                name=new_name,
-                topic_url=f"https://weibo.com/page/{cid}",
-            )
-        elif existing:
-            # 只更新 URL，不覆盖名称
-            database.upsert_all_topic(
-                topic_id=cid,
-                name=existing.get("name", ""),
-                topic_url=f"https://weibo.com/page/{cid}",
-            )
-
-    return {"ok": True, "count": len(topics), "topics": topics}
-
-
-# ========================= 全部去重超话 =========================
-
-@router.get("/all")
-def list_all_topics(limit: int = 50, offset: int = 0,
-                    user: dict = Depends(auth.require_admin)):
-    """全量去重超话列表（分页）。"""
-    return database.get_all_topics(limit=limit, offset=offset)
-
-
-@router.delete("/all")
-def clear_all_topics(user: dict = Depends(auth.require_admin)):
-    """清空全量超话列表。"""
-    n = database.clear_all_topics()
-    return {"ok": True, "removed": n}
-
-
-# ========================= 超话内容拉取 =========================
-
-@router.get("/posts/{topic_id}")
-def get_topic_posts(topic_id: str, account_id: int = 0, count: int = 20,
-                    user=Depends(auth.require_admin)):
-    """拉取指定超话的最新帖子"""
-    acc = None
-    if account_id:
-        acc = database.get_account(account_id)
-        if not acc:
-            raise HTTPException(404, "指定账号不存在")
-    else:
-        for a in database.get_accounts():
-            cookie = a.get("cookie") or a.get("cookie_raw") or ""
-            if cookie.strip():
-                acc = a
-                break
-        if not acc:
-            raise HTTPException(400, "没有可用账号，请先添加 Cookie")
-
     cookie = normalize_cookie(acc.get("cookie") or acc.get("cookie_raw") or "")
     if not cookie:
         raise HTTPException(400, "账号 Cookie 为空")
@@ -232,48 +121,295 @@ def get_topic_posts(topic_id: str, account_id: int = 0, count: int = 20,
     opts = CheckinOptions.from_settings(database.get_setting)
 
     try:
-        result = fetch_topic_posts(
-            session, cookie, containerid=topic_id,
-            channel=channel, proxy=proxy,
+        topics = get_followed_topics(
+            session, cookie, channel=channel, proxy=proxy,
             force=opts.proxy_force, allow_fallback=opts.proxy_fallback,
-            count=min(count, 50),
         )
     except Exception as exc:
-        raise HTTPException(502, f"拉取超话帖子失败：{exc}") from exc
+        raise HTTPException(502, f"获取超话列表失败：{exc}") from exc
 
-    posts = result.get("posts", [])
-    error = result.get("error", "")
+    for t in topics:
+        cid = t.get("id", "")
+        if cid:
+            t["url"] = f"https://weibo.com/page/{cid}"
 
-    # 替换图片 URL 为本地代理
-    for p in posts:
-        if p.get("pics"):
-            p["pics"] = [
-                f"/api/topics/img?url={escape(url)}" if url.startswith(("http://", "https://")) else url
-                for url in p["pics"]
-            ]
-        user = p.get("user", {})
-        avatar = user.get("profile_image_url", "")
-        if avatar.startswith(("http://", "https://")):
-            user["profile_image_url"] = f"/api/topics/img?url={escape(avatar)}"
+    database.set_topic_cache(data.account_id, topics)
 
-    database.upsert_all_topic(topic_id=topic_id, fetched_at=database._now())
+    # 合并进全量去重表，但不覆盖已有名称
+    for t in topics:
+        cid = t.get("id", "")
+        if not cid:
+            continue
+        new_name = t.get("name", "").strip()
+        existing = database.get_all_topic(cid)
+        if new_name:
+            database.upsert_all_topic(
+                topic_id=cid,
+                name=new_name,
+                topic_url=f"https://weibo.com/page/{cid}",
+            )
+        elif existing:
+            database.upsert_all_topic(
+                topic_id=cid,
+                name=existing.get("name", ""),
+                topic_url=f"https://weibo.com/page/{cid}",
+            )
+
+    return {"ok": True, "count": len(topics), "topics": topics}
+
+
+class RefreshAllIn(BaseModel):
+    """刷新所有账号的关注超话"""
+
+
+@router.post("/refresh_all")
+def refresh_all_topics(data: RefreshAllIn, user=Depends(auth.require_admin)):
+    """刷新所有账号的关注超话，返回每个账号的结果"""
+    accounts = database.get_accounts()
+    if not accounts:
+        return {"ok": True, "results": [], "message": "没有账号"}
+
+    results = []
+    for acc in accounts:
+        cookie = normalize_cookie(acc.get("cookie") or acc.get("cookie_raw") or "")
+        if not cookie:
+            results.append({
+                "account_id": acc["id"],
+                "account_name": acc.get("name", ""),
+                "ok": False,
+                "error": "Cookie 为空",
+                "count": 0,
+            })
+            continue
+
+        try:
+            import requests as _req
+            session = _req.Session()
+            session.headers.update({
+                "User-Agent": (
+                    "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) "
+                    "AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148"
+                ),
+                "Referer": "https://m.weibo.cn/",
+                "Accept": "application/json, text/plain, */*",
+                "X-Requested-With": "XMLHttpRequest",
+                "MWeibo-Pwa": "1",
+            })
+
+            proxy = (acc.get("proxy") or "").strip() or None
+            channel = "socks" if proxy else "direct"
+
+            from ..weibo_client import CheckinOptions
+            opts = CheckinOptions.from_settings(database.get_setting)
+
+            topics = get_followed_topics(
+                session, cookie, channel=channel, proxy=proxy,
+                force=opts.proxy_force, allow_fallback=opts.proxy_fallback,
+            )
+
+            for t in topics:
+                cid = t.get("id", "")
+                if cid:
+                    t["url"] = f"https://weibo.com/page/{cid}"
+
+            database.set_topic_cache(acc["id"], topics)
+
+            # 合并进全量去重表
+            for t in topics:
+                cid = t.get("id", "")
+                if not cid:
+                    continue
+                new_name = t.get("name", "").strip()
+                existing = database.get_all_topic(cid)
+                if new_name:
+                    database.upsert_all_topic(
+                        topic_id=cid,
+                        name=new_name,
+                        topic_url=f"https://weibo.com/page/{cid}",
+                    )
+                elif existing:
+                    database.upsert_all_topic(
+                        topic_id=cid,
+                        name=existing.get("name", ""),
+                        topic_url=f"https://weibo.com/page/{cid}",
+                    )
+
+            results.append({
+                "account_id": acc["id"],
+                "account_name": acc.get("name", ""),
+                "ok": True,
+                "count": len(topics),
+            })
+        except Exception as exc:
+            results.append({
+                "account_id": acc["id"],
+                "account_name": acc.get("name", ""),
+                "ok": False,
+                "error": str(exc),
+                "count": 0,
+            })
+
+    total = sum(r.get("count", 0) for r in results)
+    errors = [r for r in results if not r.get("ok")]
+
+    return {
+        "ok": True,
+        "results": results,
+        "total": total,
+        "errors": len(errors),
+        "message": f"共获取 {total} 个超话" + (f"，{len(errors)} 个账号失败" if errors else ""),
+    }
+
+
+# ========================= 全部去重超话 =========================
+
+@router.get("/all")
+def list_all_topics(limit: int = 50, offset: int = 0,
+                    user=Depends(auth.require_admin)):
+    return database.get_all_topics(limit=limit, offset=offset)
+
+
+@router.delete("/all")
+def clear_all_topics(user=Depends(auth.require_admin)):
+    n = database.clear_all_topics()
+    return {"ok": True, "removed": n}
+
+
+# ========================= 超话帖子缓存 =========================
+
+@router.get("/posts_cache/{topic_id}")
+def get_cached_posts(topic_id: str, user=Depends(auth.require_admin)):
+    """获取超话帖子缓存"""
+    cache = database.get_topic_posts_cache(topic_id)
+    if cache is None:
+        return {"cached": False, "posts": [], "fetched_at": None}
+    return {
+        "cached": True,
+        "posts": cache["posts"],
+        "fetched_at": cache["fetched_at"],
+    }
+
+
+# ========================= 超话内容拉取 =========================
+
+@router.get("/posts/{topic_id}")
+def get_topic_posts(topic_id: str, account_id: int = 0, count: int = 20,
+                    user=Depends(auth.require_admin)):
+    """拉取指定超话的最新帖子，自动尝试多个账号"""
+    accounts = database.get_accounts()
+    candidates = [a for a in accounts if (a.get("cookie") or a.get("cookie_raw") or "").strip()]
+    if not candidates:
+        raise HTTPException(400, "没有可用账号，请先添加 Cookie")
+
+    # 如果指定了 account_id，优先使用
+    if account_id:
+        for i, a in enumerate(candidates):
+            if a["id"] == account_id:
+                candidates.insert(0, candidates.pop(i))
+                break
+
+    # 随机打乱（除了第一个如果指定了）
+    import random
+    if not account_id:
+        random.shuffle(candidates)
+    else:
+        first = candidates[0]
+        rest = candidates[1:]
+        random.shuffle(rest)
+        candidates = [first] + rest
+
+    last_error = ""
+    for acc in candidates:
+        cookie = normalize_cookie(acc.get("cookie") or acc.get("cookie_raw") or "")
+        if not cookie:
+            continue
+
+        import requests as _req
+        session = _req.Session()
+        session.headers.update({
+            "User-Agent": (
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) "
+                "AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148"
+            ),
+            "Referer": "https://m.weibo.cn/",
+            "Accept": "application/json, text/plain, */*",
+            "X-Requested-With": "XMLHttpRequest",
+            "MWeibo-Pwa": "1",
+        })
+
+        proxy = (acc.get("proxy") or "").strip() or None
+        channel = "socks" if proxy else "direct"
+
+        from ..weibo_client import CheckinOptions
+        opts = CheckinOptions.from_settings(database.get_setting)
+
+        try:
+            result = fetch_topic_posts(
+                session, cookie, containerid=topic_id,
+                channel=channel, proxy=proxy,
+                force=opts.proxy_force, allow_fallback=opts.proxy_fallback,
+                count=min(count, 50),
+            )
+            if result.get("posts"):
+                posts = result["posts"]
+                for p in posts:
+                    if p.get("pics"):
+                        p["pics"] = [
+                            f"/api/topics/img?url={escape(url)}" if url.startswith(("http://", "https://")) else url
+                            for url in p["pics"]
+                        ]
+                    user_obj = p.get("user", {})
+                    avatar = user_obj.get("profile_image_url", "")
+                    if avatar.startswith(("http://", "https://")):
+                        user_obj["profile_image_url"] = f"/api/topics/img?url={escape(avatar)}"
+
+                database.set_topic_posts_cache(topic_id, posts)
+                database.upsert_all_topic(topic_id=topic_id, fetched_at=database._now())
+
+                return {
+                    "ok": True,
+                    "topic_id": topic_id,
+                    "account_used": acc["id"],
+                    "account_name": acc.get("name", ""),
+                    "posts": posts,
+                    "count": len(posts),
+                    "error": "",
+                }
+            else:
+                last_error = result.get("error", "")
+        except Exception as exc:
+            last_error = str(exc)
+            continue
 
     return {
         "ok": True,
         "topic_id": topic_id,
-        "account_used": acc["id"],
-        "account_name": acc.get("name", ""),
-        "posts": posts,
-        "count": len(posts),
-        "error": error,
+        "account_used": 0,
+        "account_name": "",
+        "posts": [],
+        "count": 0,
+        "error": last_error or "所有账号都无法获取，请检查 Cookie 是否有效",
     }
+
+
+class RefreshPostsIn(BaseModel):
+    account_id: int = 0
+    count: int = 20
+
+
+@router.post("/refresh_posts/{topic_id}")
+def refresh_posts(topic_id: str, data: RefreshPostsIn,
+                  user=Depends(auth.require_admin)):
+    """手动刷新超话帖子"""
+    database.delete_topic_posts_cache(topic_id)
+    return get_topic_posts(topic_id, account_id=data.account_id, count=data.count, user=user)
 
 
 # ========================= 图片代理 =========================
 
 @router.get("/img")
 def proxy_image(url: str):
-    """代理下载图片（绕过防盗链，缓存到本地）。"""
+    """代理下载图片"""
     if not url:
         raise HTTPException(400, "url 为空")
     try:
@@ -284,7 +420,6 @@ def proxy_image(url: str):
     local_path = _download_image(url)
     if not local_path or not local_path.exists():
         raise HTTPException(404, "图片获取失败")
-    # 根据扩展名返回正确的 Content-Type
     ext = local_path.suffix.lower()
     content_type_map = {
         ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
@@ -302,17 +437,36 @@ class AISummaryIn(BaseModel):
     topic_name: str = "超话"
 
 
-@router.post("/ai_summary")
-def ai_summary(data: AISummaryIn, user: dict = Depends(auth.require_admin)):
-    """调用 OpenAI 兼容 API 对超话内容进行总结。
+# 硬编码的 AI 提示词
+AI_TOPIC_PROMPT = """你是一个专业的微博超话内容分析助手。请根据以下超话帖子内容进行深度总结分析。
 
-    配置项（settings）：ai_base_url / ai_api_key / ai_model / ai_topic_prompt
-    """
+请按照以下结构输出总结内容（使用 Markdown 格式）：
+
+## 📋 内容概览
+（50字以内）：概括本期超话的核心话题与讨论焦点
+
+## 🔥 热门话题
+（100字以内）：提取2-3个最受关注的具体话题或事件，附带相关数据（如转发量、评论数等）
+
+## 💬 互动分析
+（50字以内）：分析粉丝互动特点，包括转发、评论、点赞的趋势
+
+## 🎭 整体氛围
+（50字以内）：总结超话社区的整体情感倾向和活跃程度
+
+注意事项：
+- 保持客观中立，不要添加个人观点
+- 使用简洁流畅的中文表达
+- 直接输出总结内容，不要任何前缀或格式标记
+- 如果帖子内容较少或质量不高，请如实说明"""
+
+
+@router.post("/ai_summary")
+def ai_summary(data: AISummaryIn, user=Depends(auth.require_admin)):
+    """调用 OpenAI 兼容 API 对超话内容进行总结"""
     base_url = (database.get_setting("ai_base_url", "") or "").strip().rstrip("/")
     api_key = (database.get_setting("ai_api_key", "") or "").strip()
     model = (database.get_setting("ai_model", "") or "gpt-4o-mini").strip()
-    prompt_template = (database.get_setting("ai_topic_prompt", "") or
-                       "你是一个超话内容总结助手。请对以下超话帖子内容进行简洁总结（200字以内），包括：1. 主要讨论话题 2. 热门帖子要点 3. 整体氛围。只输出总结文字，不要任何前缀或格式标记。")
 
     if not base_url or not api_key:
         return {
@@ -321,9 +475,7 @@ def ai_summary(data: AISummaryIn, user: dict = Depends(auth.require_admin)):
             "error": "未配置 AI 总结功能。请在设置中填写 API Base URL 和 API Key。",
         }
 
-    # 构建提示词
-    system_prompt = prompt_template.replace("{topic_name}", data.topic_name)
-    # 截断文本避免超出上下文
+    system_prompt = AI_TOPIC_PROMPT.replace("{topic_name}", data.topic_name)
     truncated_text = data.text[:8000] if len(data.text) > 8000 else data.text
     user_content = f"以下是「{data.topic_name}」超话的最新帖子内容：\n\n{truncated_text}"
 
@@ -340,7 +492,7 @@ def ai_summary(data: AISummaryIn, user: dict = Depends(auth.require_admin)):
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_content},
                 ],
-                "max_tokens": 500,
+                "max_tokens": 800,
                 "temperature": 0.7,
             },
             timeout=60,
