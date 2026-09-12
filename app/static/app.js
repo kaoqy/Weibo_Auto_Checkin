@@ -1076,7 +1076,7 @@ function renderTopicList(topics) {
   }).join('');
 }
 
-async function openTopicDetail(topicId, el) {
+async function openTopicDetail(topicId, el, forceRefresh = false) {
   currentTopicId = topicId;
   
   // 从 data-name 属性获取名称
@@ -1094,17 +1094,27 @@ async function openTopicDetail(topicId, el) {
     <h3>${esc(currentTopicName)}</h3>
     <div class="meta">ID: ${esc(topicId)} · <a href="https://weibo.com/page/${esc(topicId)}" target="_blank" rel="noopener">在微博打开 ↗</a></div>
   `;
-  $('#topicPosts').innerHTML = '<div style="color:var(--muted);padding:16px">正在拉取最新帖子…</div>';
+  $('#topicPosts').innerHTML = '<div style="color:var(--muted);padding:16px">正在加载帖子…</div>';
   $('#aiSummaryContent').innerHTML = '<p class="hint">点击「✨ 生成」按钮，AI 将自动总结超话帖子内容。</p>';
   currentPosts = [];
   try {
-    const data = await api.get('/api/topics/posts/' + encodeURIComponent(topicId) + '?count=20');
+    const url = '/api/topics/posts/' + encodeURIComponent(topicId) + '?count=20' + (forceRefresh ? '&force=true' : '');
+    const data = await api.get(url);
     currentPosts = data.posts || [];
     if (!currentPosts.length) {
       $('#topicPosts').innerHTML = '<div style="color:var(--muted);padding:20px;text-align:center">暂无帖子数据</div>';
       return;
     }
     renderPosts(currentPosts);
+    // 显示缓存状态
+    if (data.cached) {
+      const header = $('#topicDetailHeader');
+      const cacheHint = document.createElement('span');
+      cacheHint.className = 'badge gray';
+      cacheHint.style.marginLeft = '8px';
+      cacheHint.textContent = '缓存: ' + (data.fetched_at ? data.fetched_at.slice(5,16) : '未知');
+      header.appendChild(cacheHint);
+    }
   } catch(e) {
     $('#topicPosts').innerHTML = '<div style="color:var(--danger);padding:20px;text-align:center">拉取失败：' + esc(e.message || '') + '</div>';
   }
@@ -1137,19 +1147,26 @@ function renderPosts(posts) {
   }).join('');
 }
 
-// AI 总结
+// AI 总结 / Q&A
 $('#btn-ai-summary').onclick = async () => {
   if (!currentPosts || !currentPosts.length) {
     toast('请先选择超话并拉取帖子', 'warn');
     return;
   }
   const box = $('#aiSummaryContent');
-  box.innerHTML = '<div class="ai-summary-loading"><span class="qr-spinner" style="width:16px;height:16px;border-width:2px"></span> AI 正在总结…</div>';
+  const question = $('#ai-question')?.value?.trim() || '';
+  const reasoning = $('#ai-reasoning')?.checked || false;
+  box.innerHTML = '<div class="ai-summary-loading"><span class="qr-spinner" style="width:16px;height:16px;border-width:2px"></span> AI 正在思考…</div>';
   try {
     const text = currentPosts.map((p, i) => `[${i+1}] ${p.user?.screen_name || '未知'}: ${p.text || ''}`).join('\n');
-    const r = await api.post('/api/topics/ai_summary', { text, topic_name: currentTopicName });
+    const r = await api.post('/api/topics/ai_summary', { text, topic_name: currentTopicName, question, reasoning });
     if (r.ok) {
-      box.innerHTML = `<div class="ai-summary-text">${esc(r.summary)}</div><div class="hint" style="margin-top:8px;font-size:11px">模型: ${esc(r.model || '')}</div>`;
+      let html = '';
+      if (r.reasoning) {
+        html += `<details class="ai-reasoning"><summary>💭 推理过程</summary><pre>${esc(r.reasoning)}</pre></details>`;
+      }
+      html += `<div class="ai-summary-text">${esc(r.summary)}</div><div class="hint" style="margin-top:8px;font-size:11px">模型: ${esc(r.model || '')}</div>`;
+      box.innerHTML = html;
     } else {
       box.innerHTML = `<div class="ai-summary-error">❌ ${esc(r.error || '总结失败')}</div>`;
     }
@@ -1158,31 +1175,35 @@ $('#btn-ai-summary').onclick = async () => {
   }
 };
 
-// 刷新帖子
+// 刷新帖子（手动强制刷新）
 $('#btn-topic-refresh').onclick = async () => {
   if (!currentTopicId) { toast('请先选择超话', 'warn'); return; }
   if (isLoadingPosts) return;
-  // 从 topicsCache 获取元素引用
-  const el = document.querySelector(`.topic-list-item[data-id="${currentTopicId}"]`);
-  await openTopicDetail(currentTopicId, el);
-  toast('已刷新', 'good');
+  isLoadingPosts = true;
+  try {
+    const el = document.querySelector(`.topic-list-item[data-id="${currentTopicId}"]`);
+    await openTopicDetail(currentTopicId, el, true);
+    toast('已刷新', 'good');
+  } finally {
+    isLoadingPosts = false;
+  }
 };
 
-// 更新超话列表 - 使用 /refresh_all 接口
+// 更新超话列表 - 刷新按钮（获取最新数据）
 $('#btn-topics-refresh').onclick = async () => {
   if (isLoadingList) return;
   isLoadingList = true;
   const list = $('#topicsList');
-  if (list) list.innerHTML = '<div class="loading-progress"><div class="loading-bar"><div class="loading-bar-inner" style="width:20%"></div></div><div class="loading-text">正在获取账号列表...</div></div>';
+  if (list) list.innerHTML = '<div class="loading-progress"><div class="loading-bar"><div class="loading-bar-inner" style="width:20%"></div></div><div class="loading-text">正在刷新超话列表...</div></div>';
   try {
     const r = await api.post('/api/topics/refresh_all', {});
     if (r.ok) {
-      toast(r.message || '更新完成', 'good');
+      toast(r.message || '刷新完成', 'good');
     } else {
-      toast(r.error || '更新失败', 'err');
+      toast(r.error || '刷新失败', 'err');
     }
   } catch(e) {
-    toast('获取失败: ' + e.message, 'err');
+    toast('刷新失败: ' + e.message, 'err');
   } finally {
     isLoadingList = false;
   }
@@ -1198,27 +1219,6 @@ $('#btn-topics-clear').onclick = async () => {
     currentPosts = [];
     loadTopics();
   } catch(e) { toast('清空失败', 'err'); }
-};
-
-// 全部获取 - 使用 /refresh_all 接口
-$('#btn-topics-fetch').onclick = async () => {
-  if (isLoadingList) return;
-  isLoadingList = true;
-  const list = $('#topicsList');
-  if (list) list.innerHTML = '<div class="loading-progress"><div class="loading-bar"><div class="loading-bar-inner" style="width:20%"></div></div><div class="loading-text">正在获取账号列表...</div></div>';
-  try {
-    const r = await api.post('/api/topics/refresh_all', {});
-    if (r.ok) {
-      toast(r.message || '获取完成', 'good');
-    } else {
-      toast(r.error || '获取失败', 'err');
-    }
-  } catch(e) {
-    toast('获取失败: ' + e.message, 'err');
-  } finally {
-    isLoadingList = false;
-  }
-  loadTopics();
 };
 
 // 设置页 AI 配置

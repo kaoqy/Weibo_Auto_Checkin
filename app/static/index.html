@@ -130,7 +130,6 @@
                 <h2>全部超话</h2>
                 <div>
                   <button class="btn btn-ghost btn-sm" id="btn-topics-refresh">↻ 刷新</button>
-                  <button class="btn btn-ghost btn-sm" id="btn-topics-fetch">📥 全部获取</button>
                   <button class="btn btn-danger btn-sm" id="btn-topics-clear">🗑 清空</button>
                 </div>
               </div>
@@ -157,9 +156,13 @@
                 <h2>AI 总结</h2>
                 <button class="btn btn-ghost btn-sm" id="btn-ai-summary">✨ 生成</button>
               </div>
+              <div class="ai-summary-toolbar">
+                <input type="text" id="ai-question" class="ai-question-input" placeholder="💬 输入问题让 AI 分析..." />
+                <label class="ai-reasoning-label"><input type="checkbox" id="ai-reasoning" /> 推理</label>
+              </div>
               <div class="ai-summary-content" id="aiSummaryContent">
                 <p class="hint">点击「✨ 生成」按钮，AI 将自动总结超话帖子内容。</p>
-                <p class="hint" style="margin-top:8px;font-size:11px">提示：需在「设置」中配置 API Base URL 和 API Key。</p>
+                <p class="hint" style="margin-top:8px;font-size:11px">提示：需在「设置」中配置 API Base URL 和 API Key。支持提问和推理。</p>
               </div>
             </div>
           </div>

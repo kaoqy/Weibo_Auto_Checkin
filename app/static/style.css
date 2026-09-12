@@ -564,3 +564,60 @@ input[type="checkbox"]{accent-color:var(--accent);width:15px;height:15px;cursor:
 
 @media (max-width: 1200px) { .topics-3col { grid-template-columns: 200px 1fr 240px; } }
 @media (max-width: 900px) { .topics-3col { grid-template-columns: 1fr; height: auto; } .topics-col { max-height: 50vh; } }
+
+
+/* AI 总结工具栏 */
+.ai-summary-toolbar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+  align-items: center;
+}
+.ai-question-input {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 13px;
+  background: var(--surface);
+  color: var(--ink);
+}
+.ai-question-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.ai-reasoning-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.ai-reasoning-label input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+/* AI 推理过程 */
+.ai-reasoning {
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  background: var(--surface-2);
+  border-radius: 8px;
+  border: 1px solid var(--line);
+}
+.ai-reasoning summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.ai-reasoning pre {
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--muted);
+  margin: 0;
+  max-height: 200px;
+  overflow-y: auto;
+}

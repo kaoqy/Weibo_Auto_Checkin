@@ -304,8 +304,26 @@ def get_cached_posts(topic_id: str, user=Depends(auth.require_admin)):
 
 @router.get("/posts/{topic_id}")
 def get_topic_posts(topic_id: str, account_id: int = 0, count: int = 20,
-                    user=Depends(auth.require_admin)):
-    """拉取指定超话的最新帖子，自动尝试多个账号"""
+                    force: bool = False, user=Depends(auth.require_admin)):
+    """拉取指定超话的最新帖子。
+    默认使用缓存（cache-first），force=true 时强制刷新。
+    """
+    # Cache-first: return cached data unless force=true
+    if not force:
+        cached = database.get_topic_posts_cache(topic_id)
+        if cached and cached.get("posts"):
+            return {
+                "ok": True,
+                "topic_id": topic_id,
+                "account_used": 0,
+                "account_name": "",
+                "posts": cached["posts"],
+                "count": len(cached["posts"]),
+                "error": "",
+                "cached": True,
+                "fetched_at": cached.get("fetched_at", ""),
+            }
+
     accounts = database.get_accounts()
     candidates = [a for a in accounts if (a.get("cookie") or a.get("cookie_raw") or "").strip()]
     if not candidates:
@@ -377,6 +395,7 @@ def get_topic_posts(topic_id: str, account_id: int = 0, count: int = 20,
                     "posts": posts,
                     "count": len(posts),
                     "error": "",
+                    "cached": False,
                 }
             else:
                 last_error = result.get("error", "")
