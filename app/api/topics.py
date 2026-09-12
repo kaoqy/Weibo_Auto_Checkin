@@ -385,7 +385,12 @@ def get_topic_posts(topic_id: str, account_id: int = 0, count: int = 20,
                         user_obj["profile_image_url"] = f"/api/topics/img?url={escape(avatar)}"
 
                 database.set_topic_posts_cache(topic_id, posts)
-                database.upsert_all_topic(topic_id=topic_id, fetched_at=database._now())
+                # Preserve existing name when updating fetched_at
+                existing_topic = database.get_all_topic(topic_id)
+                if existing_topic and existing_topic.get("name"):
+                    database.upsert_all_topic(topic_id=topic_id, name=existing_topic["name"], fetched_at=database._now())
+                else:
+                    database.upsert_all_topic(topic_id=topic_id, fetched_at=database._now())
 
                 return {
                     "ok": True,

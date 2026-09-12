@@ -67,15 +67,14 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
 
     # 按优先级尝试不同的容器ID格式（最新内容优先）
     cids_to_try = [
-        f"{clean_cid}_-_feed",       # feed (latest)
+        clean_cid,                    # original (latest/chronological) - try first
         f"{clean_cid}_-_new",        # new posts
         f"{clean_cid}_-_latest",     # latest posts
-        clean_cid,                    # original
         f"{clean_cid}_-_main",       # main
-        # 补充更多格式
         f"100808{clean_cid}",        # 100808 前缀
-        f"{clean_cid}_-_hot",        # hot posts
         f"{clean_cid}_-_all",        # all posts
+        f"{clean_cid}_-_hot",        # hot posts
+        f"{clean_cid}_-_feed",       # feed (featured/精华) - try last
     ]
     
     seen = set()
