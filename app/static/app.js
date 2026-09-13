@@ -1100,7 +1100,9 @@ async function openTopicDetail(topicId, el, forceRefresh = false) {
     const data = await api.get(url);
     currentPosts = data.posts || [];
     if (!currentPosts.length) {
-      $('#topicPosts').innerHTML = '<div style="color:var(--muted);padding:20px;text-align:center">暂无帖子数据</div>';
+      const err = data.error || '未知错误';
+      const tried = data.tried ? `（已尝试 ${data.tried} 个端点）` : '';
+      $('#topicPosts').innerHTML = '<div style="color:var(--muted);padding:20px;text-align:center">暂无帖子数据<br><span style="font-size:11px">' + esc(err) + tried + '</span></div>';
       return;
     }
     renderPosts(currentPosts);

@@ -211,6 +211,7 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
     """
     posts = []
     errors = []
+    tried = 0
 
     # 清理 containerid，去掉可能的后缀
     clean_cid = containerid.split("_-_")[0] if "_-_" in containerid else containerid
@@ -261,6 +262,7 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
     for ep in endpoints:
         page = 1
         since_id = ""
+        tried += 1
         while len(posts) < count:
             params = dict(ep["params"])
             if page > 1:
@@ -278,13 +280,13 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
                 )
                 session.headers = old_headers
             except NetworkError as exc:
-                errors.append(f"{ep['url']} p{page}: 网络错误 {exc}")
+                errors.append(f"[{tried}] {ep['url']} p{page}: 网络错误 {exc}")
                 break
             except RuntimeError as exc:
-                errors.append(f"{ep['url']} p{page}: 请求失败 {exc}")
+                errors.append(f"[{tried}] {ep['url']} p{page}: 请求失败 {exc}")
                 break
             except Exception as exc:
-                errors.append(f"{ep['url']} p{page}: 未知错误 {exc}")
+                errors.append(f"[{tried}] {ep['url']} p{page}: 未知错误 {exc}")
                 break
 
             # 检查响应状态（PC 端没有 ok 字段，直接有 items）
@@ -295,7 +297,7 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
                 # 移动端格式，检查 ok
                 ok_val = payload.get("ok")
                 if ok_val == -100:
-                    errors.append(f"{ep['url']} p{page}: Cookie 过期")
+                    errors.append(f"[{tried}] {ep['url']} p{page}: Cookie 过期")
                     break
                 if ok_val != 1 and ok_val != "1":
                     log.warning(f"fetch_topic_posts: ok={ok_val!r}, url={ep['url']}, page={page}")
@@ -303,7 +305,7 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
 
             extracted = _extract_posts_from_payload(payload)
             if not extracted:
-                errors.append(f"{ep['url']} p{page}: 无帖子数据")
+                errors.append(f"[{tried}] {ep['url']} p{page}: 无帖子数据")
                 break
 
             posts.extend(extracted)
@@ -340,7 +342,7 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
         p["created_at"] = _format_weibo_time(p.get("created_at", ""))
 
     error_msg = "; ".join(errors) if errors else ""
-    return {"posts": unique_posts[:count], "error": error_msg}
+    return {"posts": unique_posts[:count], "error": error_msg, "tried": tried}
 
 
 class NetworkError(RuntimeError):
