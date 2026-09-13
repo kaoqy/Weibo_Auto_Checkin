@@ -1092,7 +1092,7 @@ async function openTopicDetail(topicId, el, forceRefresh = false) {
     <h3>${esc(currentTopicName)}</h3>
     <div class="meta">ID: ${esc(topicId)} · <a href="https://weibo.com/page/${esc(topicId)}" target="_blank" rel="noopener">在微博打开 ↗</a></div>
   `;
-  $('#topicPosts').innerHTML = '<div style="color:var(--muted);padding:16px">正在加载帖子…</div>';
+  $('#topicPosts').innerHTML = '<div class="loading-progress"><div class="loading-bar"><div class="loading-bar-inner" style="width:60%"></div></div><div class="loading-text">正在加载帖子…</div></div>';
   $('#aiSummaryContent').innerHTML = '<div class="ai-placeholder"><span class="ai-placeholder-icon">✨</span><p>点击「生成总结」按钮，AI 将自动分析超话帖子内容</p><p class="hint">也可输入问题进行个性化问答</p></div>';
   currentPosts = [];
   try {
@@ -1129,6 +1129,11 @@ async function openTopicDetail(topicId, el, forceRefresh = false) {
   }
 }
 
+function linkifyText(text) {
+  if (!text) return '';
+  return text.replace(/(https?:\/\/[^\s<>"]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer" style="color:var(--accent);text-decoration:none">$1</a>');
+}
+
 function renderPosts(posts) {
   const box = $('#topicPosts');
   if (!box) return;
@@ -1136,7 +1141,7 @@ function renderPosts(posts) {
     const avatar = esc(p.user?.profile_image_url || '/default-avatar.svg');
     const userName = esc(p.user?.screen_name || '未知');
     const time = esc(p.created_at || '');
-    const text = esc(p.text || '');
+    const text = linkifyText(esc(p.text || ''));
     const pics = (p.pics || []).map(url => '<img src="' + esc(url) + '" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display=\'none\'" />').join('');
     const picsHtml = pics ? `<div class="topic-post-pics">${pics}</div>` : '';
     return `<div class="topic-post">
