@@ -51,8 +51,6 @@ _RETRYABLE = (
 # ========================= 超话页面（v1.3.0） =========================
 
 TOPIC_POSTS_URL = BASE + "/api/container/getIndex"
-# 时序排序走微博 PC 端代理接口（注意域名是 weibo.com 不是 m.weibo.cn）
-TOPIC_PAGE_URL = "https://weibo.com/ajax_proxy/chaohua/page"
 
 
 def _parse_mblog_card(item):
@@ -84,7 +82,7 @@ def _parse_mblog_card(item):
 
 
 def _extract_posts_from_payload(payload):
-    """从 API 响应中提取帖子列表，兼容两种端点格式。"""
+    """从 API 响应中提取帖子列表，兼容多种响应格式。"""
     data = payload.get("data") or {}
     # 格式 1: cards[].card_group[].mblog (标准 container 接口)
     cards = data.get("cards") or []
@@ -95,7 +93,7 @@ def _extract_posts_from_payload(payload):
             parsed = _parse_mblog_card(item)
             if parsed:
                 results.append(parsed)
-    # 格式 2: data.list[] 直接是 mblog 列表（chaohua/page 接口）
+    # 格式 2: data.list[] / data.items[] 直接是 mblog 列表
     if not results:
         direct_list = data.get("list") or data.get("items") or []
         for entry in direct_list:
@@ -105,6 +103,14 @@ def _extract_posts_from_payload(payload):
             parsed = _parse_mblog_card({"card_type": "9", "mblog": mblog})
             if parsed:
                 results.append(parsed)
+    # 格式 3: data.cards 直接是 mblog 列表（无 card_group 包装）
+    if not results:
+        for card in cards:
+            mblog = card.get("mblog") or card
+            if mblog.get("id"):
+                parsed = _parse_mblog_card({"card_type": "9", "mblog": mblog})
+                if parsed:
+                    results.append(parsed)
     return results
 
 
@@ -112,6 +118,7 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
                       proxy=None, force=False, allow_fallback=True, count: int = 20):
     """拉取指定超话的最新帖子列表（默认前 count 条）。
 
+    微博超话帖子接口是公开的，不需要登录态。
     返回 dict: {"posts": [...], "error": ""} 或 {"posts": [], "error": "具体错误原因"}。
     """
     posts = []
@@ -120,16 +127,14 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
     # 清理 containerid，去掉可能的后缀
     clean_cid = containerid.split("_-_")[0] if "_-_" in containerid else containerid
 
-    # 按优先级尝试不同的容器ID格式（最新内容优先）
+    # 按优先级尝试不同的容器ID格式
     cids_to_try = [
-        f"{clean_cid}_-_sort_time",  # 时序排序（用户指定）
-        clean_cid,                    # 原始格式，最常用
-        f"{clean_cid}_-_new",        # new posts (chronological)
+        f"100808{clean_cid}",       # 100808 前缀（最常见）
+        clean_cid,                    # 原始格式
+        f"{clean_cid}_-_new",        # new posts
         f"{clean_cid}_-_all",        # all posts
-        f"100808{clean_cid}",       # 100808 前缀
-        f"100808{clean_cid}_-_all", # 100808 前缀 + _all
-        f"100808{clean_cid}_-_hot", # 100808 前缀 + _hot
-        f"100808{clean_cid}_-_sort_time", # 100808 前缀 + 时序排序
+        f"100808{clean_cid}_-_all", # 100808 + all
+        f"100808{clean_cid}_-_hot", # 100808 + hot
     ]
 
     seen = set()
@@ -142,39 +147,38 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
     for cid in unique_cids:
         page = 1
         since_id = ""
-        # _sort_time 用 /ajax_proxy/chaohua/page?flowId=... 端点
-        use_flow = cid.endswith("_-_sort_time")
-        req_url = TOPIC_PAGE_URL if use_flow else TOPIC_POSTS_URL
         while len(posts) < count:
-            if use_flow:
-                params = {"flowId": cid}
-                if page > 1 and since_id:
-                    params["since_id"] = since_id
-            else:
-                params = {"containerid": cid, "page": page, "count": 25}
-                if since_id:
-                    params["since_id"] = since_id
+            params = {"containerid": cid, "page": page, "count": 25}
+            if since_id:
+                params["since_id"] = since_id
             try:
                 payload = request_json(
-                    session, "GET", req_url, params=params, cookies=cookies,
+                    session, "GET", TOPIC_POSTS_URL, params=params, cookies=cookies,
                     channel=channel, proxy=proxy, force=force,
                     allow_fallback=allow_fallback,
                 )
             except NetworkError as exc:
-                return {"posts": posts, "error": f"网络错误：{exc}"}
+                error_msg = f"网络错误：{exc}"
+                break  # 换下一个 cid
             except RuntimeError as exc:
-                return {"posts": posts, "error": f"请求失败：{exc}"}
+                error_msg = f"请求失败：{exc}"
+                break  # 换下一个 cid
             except Exception as exc:
-                return {"posts": posts, "error": f"未知错误：{exc}"}
+                error_msg = f"未知错误：{exc}"
+                break  # 换下一个 cid
 
-            if payload.get("ok") == -100:
-                break  # Cookie 过期，换下一个
-            if payload.get("ok") != 1:
+            # 检查响应状态
+            ok_val = payload.get("ok")
+            if ok_val == -100:
+                error_msg = "Cookie 过期"
+                break  # 换下一个 cid
+            if ok_val != 1 and ok_val != "1":
+                # 有些接口返回 ok: "1" 字符串
                 break  # 换下一个 cid
 
             extracted = _extract_posts_from_payload(payload)
             if not extracted:
-                break
+                break  # 换下一个 cid
 
             posts.extend(extracted)
             if len(posts) >= count:
@@ -188,8 +192,7 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
                 since_id = next_since
             else:
                 page += 1
-                # chaohua/page 可能用 page 参数翻页
-                if use_flow and page > 3:
+                if page > 3:
                     break  # 最多翻 3 页
             time.sleep(0.3)
 

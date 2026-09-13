@@ -175,7 +175,8 @@ def test_topics_api_posts_endpoint(client):
     assert body["ok"] is True
     assert body["count"] == 1
     assert body["posts"][0]["text"] == "测试帖子内容"
-    assert body["account_used"] == acc["id"]
+    assert body["account_used"] == 0  # 公开访问，不需要账号
+    assert body["account_name"] == "公开访问"
     # 图片 URL 应被替换为代理地址
     assert "/api/topics/img?url=" in body["posts"][0]["pics"][0]
     assert "/api/topics/img?url=" in body["posts"][0]["user"]["profile_image_url"]

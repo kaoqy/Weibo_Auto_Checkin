@@ -1093,7 +1093,7 @@ async function openTopicDetail(topicId, el, forceRefresh = false) {
     <div class="meta">ID: ${esc(topicId)} · <a href="https://weibo.com/page/${esc(topicId)}" target="_blank" rel="noopener">在微博打开 ↗</a></div>
   `;
   $('#topicPosts').innerHTML = '<div style="color:var(--muted);padding:16px">正在加载帖子…</div>';
-  $('#aiSummaryContent').innerHTML = '<p class="hint">点击「✨ 生成」按钮，AI 将自动总结超话帖子内容。</p>';
+  $('#aiSummaryContent').innerHTML = '<div class="ai-placeholder"><span class="ai-placeholder-icon">✨</span><p>点击「生成总结」按钮，AI 将自动分析超话帖子内容</p><p class="hint">也可输入问题进行个性化问答</p></div>';
   currentPosts = [];
   try {
     const url = '/api/topics/posts/' + encodeURIComponent(topicId) + '?count=20' + (forceRefresh ? '&force=true' : '');
@@ -1112,6 +1112,15 @@ async function openTopicDetail(topicId, el, forceRefresh = false) {
       cacheHint.style.marginLeft = '8px';
       cacheHint.textContent = '缓存: ' + (data.fetched_at ? data.fetched_at.slice(5,16) : '未知');
       header.appendChild(cacheHint);
+    }
+    // 显示来源（公开访问 or 账号）
+    if (data.account_name) {
+      const header = $('#topicDetailHeader');
+      const srcHint = document.createElement('span');
+      srcHint.className = 'badge acc';
+      srcHint.style.marginLeft = '8px';
+      srcHint.textContent = '来源: ' + data.account_name;
+      header.appendChild(srcHint);
     }
   } catch(e) {
     $('#topicPosts').innerHTML = '<div style="color:var(--danger);padding:20px;text-align:center">拉取失败：' + esc(e.message || '') + '</div>';

@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import imghdr
 import logging
-import random
 from pathlib import Path
 from urllib.parse import quote as escape
 
@@ -307,6 +306,7 @@ def get_topic_posts(topic_id: str, account_id: int = 0, count: int = 20,
                     force: bool = False, user=Depends(auth.require_admin)):
     """拉取指定超话的最新帖子。
     默认使用缓存（cache-first），force=true 时强制刷新。
+    微博超话帖子接口是公开的，不需要登录态。
     """
     # Cache-first: return cached data unless force=true
     if not force:
@@ -324,89 +324,81 @@ def get_topic_posts(topic_id: str, account_id: int = 0, count: int = 20,
                 "fetched_at": cached.get("fetched_at", ""),
             }
 
+    # 创建无 Cookie 的公开请求会话
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": (
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) "
+            "AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148"
+        ),
+        "Referer": "https://m.weibo.cn/",
+        "Accept": "application/json, text/plain, */*",
+        "X-Requested-With": "XMLHttpRequest",
+        "MWeibo-Pwa": "1",
+    })
+
+    # 尝试用账号的代理（如果有），但不需要 Cookie
     accounts = database.get_accounts()
-    candidates = [a for a in accounts if (a.get("cookie") or a.get("cookie_raw") or "").strip()]
-    if not candidates:
-        raise HTTPException(400, "没有可用账号，请先添加 Cookie")
+    proxy = None
+    channel = "direct"
+    for acc in accounts:
+        proxy_url = (acc.get("proxy") or "").strip()
+        if proxy_url.startswith(("socks5://", "socks5h://")):
+            proxy = proxy_url
+            channel = "socks"
+            break
 
-    # 如果指定了 account_id，优先使用
-    if account_id:
-        for i, a in enumerate(candidates):
-            if a["id"] == account_id:
-                candidates.insert(0, candidates.pop(i))
-                break
+    from ..weibo_client import CheckinOptions
+    opts = CheckinOptions.from_settings(database.get_setting)
 
-    # 随机打乱
-    random.shuffle(candidates)
+    try:
+        result = fetch_topic_posts(
+            session, cookies={}, containerid=topic_id,
+            channel=channel, proxy=proxy,
+            force=opts.proxy_force, allow_fallback=opts.proxy_fallback,
+            count=min(count, 50),
+        )
+    except Exception as exc:
+        return {
+            "ok": True,
+            "topic_id": topic_id,
+            "account_used": 0,
+            "account_name": "",
+            "posts": [],
+            "count": 0,
+            "error": f"拉取失败：{exc}",
+        }
 
-    last_error = ""
-    for acc in candidates:
-        cookie = normalize_cookie(acc.get("cookie") or acc.get("cookie_raw") or "")
-        if not cookie:
-            continue
+    if result.get("posts"):
+        posts = result["posts"]
+        for p in posts:
+            if p.get("pics"):
+                p["pics"] = [
+                    f"/api/topics/img?url={escape(url)}" if url.startswith(("http://", "https://")) else url
+                    for url in p["pics"]
+                ]
+            user_obj = p.get("user", {})
+            avatar = user_obj.get("profile_image_url", "")
+            if avatar.startswith(("http://", "https://")):
+                user_obj["profile_image_url"] = f"/api/topics/img?url={escape(avatar)}"
 
-        import requests as _req
-        session = _req.Session()
-        session.headers.update({
-            "User-Agent": (
-                "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) "
-                "AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148"
-            ),
-            "Referer": "https://m.weibo.cn/",
-            "Accept": "application/json, text/plain, */*",
-            "X-Requested-With": "XMLHttpRequest",
-            "MWeibo-Pwa": "1",
-        })
+        database.set_topic_posts_cache(topic_id, posts)
+        existing_topic = database.get_all_topic(topic_id)
+        if existing_topic and existing_topic.get("name"):
+            database.upsert_all_topic(topic_id=topic_id, name=existing_topic["name"], fetched_at=database._now())
+        else:
+            database.upsert_all_topic(topic_id=topic_id, fetched_at=database._now())
 
-        proxy = (acc.get("proxy") or "").strip() or None
-        channel = "socks" if proxy else "direct"
-
-        from ..weibo_client import CheckinOptions
-        opts = CheckinOptions.from_settings(database.get_setting)
-
-        try:
-            result = fetch_topic_posts(
-                session, cookie, containerid=topic_id,
-                channel=channel, proxy=proxy,
-                force=opts.proxy_force, allow_fallback=opts.proxy_fallback,
-                count=min(count, 50),
-            )
-            if result.get("posts"):
-                posts = result["posts"]
-                for p in posts:
-                    if p.get("pics"):
-                        p["pics"] = [
-                            f"/api/topics/img?url={escape(url)}" if url.startswith(("http://", "https://")) else url
-                            for url in p["pics"]
-                        ]
-                    user_obj = p.get("user", {})
-                    avatar = user_obj.get("profile_image_url", "")
-                    if avatar.startswith(("http://", "https://")):
-                        user_obj["profile_image_url"] = f"/api/topics/img?url={escape(avatar)}"
-
-                database.set_topic_posts_cache(topic_id, posts)
-                # Preserve existing name when updating fetched_at
-                existing_topic = database.get_all_topic(topic_id)
-                if existing_topic and existing_topic.get("name"):
-                    database.upsert_all_topic(topic_id=topic_id, name=existing_topic["name"], fetched_at=database._now())
-                else:
-                    database.upsert_all_topic(topic_id=topic_id, fetched_at=database._now())
-
-                return {
-                    "ok": True,
-                    "topic_id": topic_id,
-                    "account_used": acc["id"],
-                    "account_name": acc.get("name", ""),
-                    "posts": posts,
-                    "count": len(posts),
-                    "error": "",
-                    "cached": False,
-                }
-            else:
-                last_error = result.get("error", "")
-        except Exception as exc:
-            last_error = str(exc)
-            continue
+        return {
+            "ok": True,
+            "topic_id": topic_id,
+            "account_used": 0,
+            "account_name": "公开访问",
+            "posts": posts,
+            "count": len(posts),
+            "error": "",
+            "cached": False,
+        }
 
     return {
         "ok": True,
@@ -415,7 +407,7 @@ def get_topic_posts(topic_id: str, account_id: int = 0, count: int = 20,
         "account_name": "",
         "posts": [],
         "count": 0,
-        "error": last_error or "所有账号都无法获取，请检查 Cookie 是否有效",
+        "error": result.get("error", "未获取到帖子"),
     }
 
 
@@ -429,7 +421,7 @@ def refresh_posts(topic_id: str, data: RefreshPostsIn,
                   user=Depends(auth.require_admin)):
     """手动刷新超话帖子"""
     database.delete_topic_posts_cache(topic_id)
-    return get_topic_posts(topic_id, account_id=data.account_id, count=data.count, user=user)
+    return get_topic_posts(topic_id, count=data.count, user=user)
 
 
 # ========================= 图片代理 =========================
