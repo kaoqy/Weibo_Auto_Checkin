@@ -407,6 +407,58 @@ input[type="checkbox"]{accent-color:var(--accent);width:15px;height:15px;cursor:
 }
 
 
+/* ===== 超话详情头部 ===== */
+.topic-detail-header {
+  padding: 14px 16px;
+  background: linear-gradient(135deg, var(--surface-2), color-mix(in srgb, var(--accent) 3%, var(--surface-2)));
+  border-radius: var(--radius-sm);
+  margin-bottom: 12px;
+  border: 1px solid var(--line);
+}
+.topic-detail-header h3 { margin: 0 0 6px; font-size: 16px; font-weight: 700; }
+.topic-detail-header .meta { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.topic-detail-header .meta a { color: var(--accent); text-decoration: none; }
+.topic-detail-header .meta a:hover { text-decoration: underline; }
+.topic-desc { font-size: 12px; color: var(--muted); margin-top: 6px; line-height: 1.6; }
+
+.topic-toolbar { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
+.topic-search {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 13px;
+  transition: border-color .18s, box-shadow .18s;
+}
+.topic-search:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+#btn-push-tg { white-space: nowrap; }
+
+/* ===== 超话列表项 ===== */
+.topic-list-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all .2s;
+  position: relative;
+}
+.topic-list-item:hover { background: var(--surface-2); border-color: var(--line); }
+.topic-list-item.active {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 10%, var(--surface)), color-mix(in srgb, var(--accent) 6%, var(--surface)));
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
+}
+.topic-list-item.active::before { content: ''; position: absolute; left: 0; top: 20%; height: 60%; width: 3px; border-radius: 3px; background: var(--accent); }
+.topic-list-avatar { width: 40px; height: 40px; border-radius: 10px; background: var(--surface-2); object-fit: cover; flex-shrink: 0; border: 1px solid var(--line); }
+.topic-list-info { flex: 1; min-width: 0; }
+.topic-list-name { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topic-list-meta { font-size: 11px; color: var(--muted); display: flex; gap: 6px; flex-wrap: wrap; }
+
 /* ===== 超话帖子 ===== */
 .topic-post {
   border: 1px solid var(--line);

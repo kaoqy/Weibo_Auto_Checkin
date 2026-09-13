@@ -1088,9 +1088,16 @@ async function openTopicDetail(topicId, el, forceRefresh = false) {
   });
 
   $('#topicDetailTitle').textContent = currentTopicName;
+  const topicDesc = (cached && cached.description) ? esc(cached.description) : '';
+  const topicMembers = (cached && cached.member_count) ? `👥 ${cached.member_count}` : '';
   $('#topicDetailHeader').innerHTML = `
     <h3>${esc(currentTopicName)}</h3>
-    <div class="meta">ID: ${esc(topicId)} · <a href="https://weibo.com/page/${esc(topicId)}" target="_blank" rel="noopener">在微博打开 ↗</a></div>
+    <div class="meta">ID: ${esc(topicId)} · <a href="https://weibo.com/page/${esc(topicId)}" target="_blank" rel="noopener">在微博打开 ↗</a>${topicMembers ? ' · ' + topicMembers : ''}</div>
+    ${topicDesc ? '<div class="topic-desc">' + topicDesc + '</div>' : ''}
+    <div class="topic-toolbar">
+      <input type="text" class="topic-search" id="topicSearch" placeholder="🔍 搜索帖子..." oninput="filterPosts()" />
+      <button class="btn btn-ghost btn-sm" id="btn-push-tg" title="推送 AI 总结到 TG">📮 推送到 TG</button>
+    </div>
   `;
   $('#topicPosts').innerHTML = '<div class="loading-progress"><div class="loading-bar"><div class="loading-bar-inner" style="width:60%"></div></div><div class="loading-text">正在加载帖子…</div></div>';
   $('#aiSummaryContent').innerHTML = '<div class="ai-placeholder"><span class="ai-placeholder-icon">✨</span><p>点击「生成总结」按钮，AI 将自动分析超话帖子内容</p><p class="hint">也可输入问题进行个性化问答</p></div>';
@@ -1127,6 +1134,16 @@ async function openTopicDetail(topicId, el, forceRefresh = false) {
   } catch(e) {
     $('#topicPosts').innerHTML = '<div style="color:var(--danger);padding:20px;text-align:center">拉取失败：' + esc(e.message || '') + '</div>';
   }
+}
+
+function filterPosts() {
+  const kw = ($('#topicSearch') || {}).value?.trim().toLowerCase() || '';
+  if (!kw) { renderPosts(currentPosts); return; }
+  const filtered = currentPosts.filter(p => {
+    return (p.text || '').toLowerCase().includes(kw) ||
+           (p.user?.screen_name || '').toLowerCase().includes(kw);
+  });
+  renderPosts(filtered);
 }
 
 function linkifyText(text) {
@@ -1196,6 +1213,26 @@ function closeLightbox() {
 }
 document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeLightbox(); });
 
+
+// TG 推送
+$('#btn-push-tg').onclick = async () => {
+  if (!currentPosts || !currentPosts.length) { toast('没有帖子数据', 'warn'); return; }
+  const text = currentPosts.map((p, i) => '[' + (i+1) + '] ' + (p.user?.screen_name || '未知') + ': ' + (p.text || '')).join('\n');
+  const question = $('#ai-question')?.value?.trim() || '';
+  toast('推送中…');
+  try {
+    const r = await api.post('/api/topics/push_tg', {
+      text, topic_name: currentTopicName, question,
+    });
+    if (r.ok) {
+      toast('✅ 已推送到 TG', 'good');
+    } else {
+      toast('❌ ' + (r.error || '推送失败'), 'err');
+    }
+  } catch(e) {
+    toast('推送失败', 'err');
+  }
+};
 
 // AI 总结 / Q&A
 $('#btn-ai-summary').onclick = async () => {

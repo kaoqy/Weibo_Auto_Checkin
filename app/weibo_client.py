@@ -480,7 +480,7 @@ def verify_cookie(session, cookies, channel="auto", proxy=None,
 
 def get_followed_topics(session, cookies, channel="auto", proxy=None,
                         force=False, allow_fallback=True):
-    """获取关注超话列表，返回 [{name,id,scheme,done}]。"""
+    """获取关注超话列表，返回 [{name,id,scheme,done,avatar,description,member_count}]。"""
     topics = []
     since_id = ""
     while True:
@@ -511,12 +511,21 @@ def get_followed_topics(session, cookies, channel="auto", proxy=None,
                     button_name in ("已签", "已簽", "已签到", "已簽到")
                     or not button_scheme
                 )
+                # 提取头像、描述、成员数
+                avatar = item.get("pic", "") or item.get("portrait", "") or ""
+                if avatar and avatar.startswith("//"):
+                    avatar = "https:" + avatar
+                desc = item.get("desc", "") or item.get("desc1", "") or ""
+                member = item.get("member_count", 0) or 0
                 if name:
                     topics.append({
                         "name": name,
                         "id": topic_id,
                         "scheme": None if done else button_scheme,
                         "done": done,
+                        "avatar": avatar,
+                        "description": desc,
+                        "member_count": member,
                     })
         since_id = (data.get("cardlistInfo") or {}).get("since_id", "")
         if not since_id:

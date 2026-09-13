@@ -156,17 +156,26 @@ def refresh_topics(data: RefreshIn, user=Depends(auth.require_admin)):
             continue
         new_name = t.get("name", "").strip()
         existing = database.get_all_topic(cid)
+        avatar = t.get("avatar", "")
+        desc = t.get("description", "")
+        member = t.get("member_count", 0)
         if new_name:
             database.upsert_all_topic(
                 topic_id=cid,
                 name=new_name,
                 topic_url=f"https://weibo.com/page/{cid}",
+                avatar_url=avatar,
+                description=desc,
+                member_count=member,
             )
         elif existing:
             database.upsert_all_topic(
                 topic_id=cid,
                 name=existing.get("name", ""),
                 topic_url=f"https://weibo.com/page/{cid}",
+                avatar_url=avatar,
+                description=desc,
+                member_count=member,
             )
 
     return {"ok": True, "count": len(topics), "topics": topics}
@@ -230,17 +239,26 @@ def refresh_all_topics(user=Depends(auth.require_admin)):
                     continue
                 new_name = t.get("name", "").strip()
                 existing = database.get_all_topic(cid)
+                avatar = t.get("avatar", "")
+                desc = t.get("description", "")
+                member = t.get("member_count", 0)
                 if new_name:
                     database.upsert_all_topic(
                         topic_id=cid,
                         name=new_name,
                         topic_url=f"https://weibo.com/page/{cid}",
+                        avatar_url=avatar,
+                        description=desc,
+                        member_count=member,
                     )
                 elif existing:
                     database.upsert_all_topic(
                         topic_id=cid,
                         name=existing.get("name", ""),
                         topic_url=f"https://weibo.com/page/{cid}",
+                        avatar_url=avatar,
+                        description=desc,
+                        member_count=member,
                     )
 
             results.append({
@@ -597,3 +615,76 @@ def ai_summary(data: AISummaryIn, user=Depends(auth.require_admin)):
     except Exception as exc:
         log.error("AI 总结失败: %s", exc)
         return {"ok": False, "summary": "", "error": f"调用失败：{exc}"}
+
+
+# ========================= TG 推送超话摘要 =========================
+
+class TopicSummaryPushIn(BaseModel):
+    text: str
+    topic_name: str = "超话"
+    question: str = ""
+
+
+@router.post("/push_tg")
+def push_topic_summary(data: TopicSummaryPushIn, user=Depends(auth.require_admin)):
+    """推送超话 AI 摘要到 Telegram"""
+    base_url = (database.get_setting("ai_base_url", "") or "").strip().rstrip("/")
+    api_key = (database.get_setting("ai_api_key", "") or "").strip()
+    model = (database.get_setting("ai_model", "") or "gpt-4o-mini").strip()
+
+    if not base_url or not api_key:
+        return {"ok": False, "error": "未配置 AI 总结功能"}
+
+    truncated_text = data.text[:8000] if len(data.text) > 8000 else data.text
+
+    # 构建 prompt
+    is_qa = bool(data.question and data.question.strip())
+    if is_qa:
+        system_content = (
+            f"你是「{data.topic_name}」超话的内容分析助手。"
+            f"以下是该超话最新的帖子内容，请基于这些内容回答用户的问题。"
+            f"如果帖子中没有相关信息，请如实说明。\n\n"
+            f"--- 帖子内容 ---\n{truncated_text}"
+        )
+        messages = [
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": data.question.strip()},
+        ]
+    else:
+        system_content = AI_TOPIC_PROMPT.replace("{topic_name}", data.topic_name)
+        user_content = f"以下是「{data.topic_name}」超话的最新帖子内容：\n\n{truncated_text}"
+        messages = [
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": user_content},
+        ]
+
+    payload = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": 1200,
+        "temperature": 0.7,
+    }
+
+    try:
+        resp = requests.post(
+            f"{base_url}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=120,
+        )
+        resp.raise_for_status()
+        result = resp.json()
+        summary = result["choices"][0]["message"].get("content", "").strip()
+
+        # 推送到 TG
+        from ..notifier import send_telegram
+        tg_text = f"📊 {data.topic_name} 超话摘要\n\n{summary}"
+        send_telegram(tg_text, title="超话摘要")
+
+        return {"ok": True, "summary": summary}
+    except Exception as exc:
+        log.error("推送超话摘要失败: %s", exc)
+        return {"ok": False, "error": f"推送失败：{exc}"}
