@@ -1286,37 +1286,38 @@ $('#btn-ai-summary').onclick = async () => {
       box.appendChild(summaryDiv);
       reasoningDetails.hidden = true;
 
-      let done = false;
+      var done = false;
       while (!done) {
-        const { value, done: d } = await reader.read();
+        var { value: chunk, done: d } = await reader.read();
         done = d;
-        if (value) {
-          const chunk = decoder.decode(value, { stream: true });
-          const lines = chunk.split('\n');
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
+        if (chunk) {
+          var textChunk = decoder.decode(chunk, { stream: true });
+          var lines = textChunk.split('\n');
+          for (var i = 0; i < lines.length; i++) {
+            var line = lines[i];
+            if (line.indexOf('data: ') === 0) {
               try {
-                const data = JSON.parse(line.slice(6));
-                if (data.finish) {
+                var jsonStr = line.slice(6);
+                if (jsonStr === '[DONE]') { done = true; break; }
+                var chunkData = JSON.parse(jsonStr);
+                if (chunkData.finish) {
                   done = true;
-                  if (data.model) {
-                    const hint = document.createElement('div');
-                    hint.className = 'hint';
-                    hint.style.marginTop = '8px';
-                    hint.style.fontSize = '11px';
-                    hint.textContent = `模型: ${data.model}`;
+                  if (chunkData.model) {
+                    var hint = document.createElement('div');
+                    hint.className = 'ai-model-hint';
+                    hint.textContent = '模型: ' + chunkData.model;
                     box.appendChild(hint);
                   }
-                } else if (data.error) {
-                  summaryDiv.innerHTML += `<span style="color:var(--danger)">${esc(data.error)}</span>`;
+                } else if (chunkData.error) {
+                  summaryDiv.innerHTML += '<span style="color:var(--danger)">' + esc(chunkData.error) + '</span>';
                 } else {
-                  if (data.reasoning) {
-                    reasoningText += data.reasoning;
+                  if (chunkData.reasoning) {
+                    reasoningText += chunkData.reasoning;
                     reasoningPre.textContent = reasoningText;
                     reasoningDetails.hidden = false;
                   }
-                  if (data.text) {
-                    accumulated += data.text;
+                  if (chunkData.text) {
+                    accumulated += chunkData.text;
                     summaryDiv.innerHTML = formatAiSummary(accumulated);
                   }
                 }
@@ -1327,19 +1328,27 @@ $('#btn-ai-summary').onclick = async () => {
       }
     } else {
       // Non-streaming mode
-      const r = await api.post('/api/topics/ai_summary', { text, topic_name: currentTopicName, question, reasoning });
+      var r = await api.post('/api/topics/ai_summary', { text: text, topic_name: currentTopicName, question: question, reasoning: reasoning });
       if (r.ok) {
-        let html = '';
+        box.innerHTML = '';
         if (r.reasoning) {
-          html += `<details class="ai-reasoning"><summary>💭 推理过程</summary><pre>${esc(r.reasoning)}</pre></details>`;
+          var rd = document.createElement('details');
+          rd.className = 'ai-reasoning';
+          rd.innerHTML = '<summary>💭 推理过程</summary><pre>' + esc(r.reasoning) + '</pre>';
+          box.appendChild(rd);
         }
-        html += `<div class="ai-summary-text">${formatAiSummary(r.summary)}</div>`;
+        var sd = document.createElement('div');
+        sd.className = 'ai-summary-text';
+        sd.innerHTML = formatAiSummary(r.summary);
+        box.appendChild(sd);
         if (r.model) {
-          html += `<div class="hint" style="margin-top:8px;font-size:11px">模型: ${esc(r.model)}</div>`;
+          var mh = document.createElement('div');
+          mh.className = 'ai-model-hint';
+          mh.textContent = '模型: ' + esc(r.model);
+          box.appendChild(mh);
         }
-        box.innerHTML = html;
       } else {
-        box.innerHTML = `<div class="ai-summary-error">❌ ${esc(r.error || '总结失败')}</div>`;
+        box.innerHTML = '<div class="ai-summary-error">❌ ' + esc(r.error || '总结失败') + '</div>';
       }
     }
   } catch(e) {
@@ -1347,16 +1356,19 @@ $('#btn-ai-summary').onclick = async () => {
   }
 };
 
-// 格式化 AI 总结文本（简单 Markdown → HTML）
+// 格式化 AI 总结文本（Markdown → HTML，支持流式逐字显示）
 function formatAiSummary(text) {
   if (!text) return '';
-  let html = esc(text);
+  var html = esc(text);
   // Bold
   html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  // Headers
+  // Headers (process ### before ##)
   html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
   html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-  // List items
+  // List items: wrap consecutive <li> in <ul>
+  html = html.replace(/((?:^<li>.*<\/li>$\n?)+)/gm, function(match) {
+    return '<ul>' + match.replace(/^\n|\n$/g, '') + '</ul>';
+  });
   html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
   // Code
   html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
