@@ -302,7 +302,7 @@ def get_cached_posts(topic_id: str, user=Depends(auth.require_admin)):
 # ========================= 超话内容拉取 =========================
 
 @router.get("/posts/{topic_id}")
-def get_topic_posts(topic_id: str, account_id: int = 0, count: int = 20,
+def get_topic_posts(topic_id: str, count: int = 20,
                     force: bool = False, user=Depends(auth.require_admin)):
     """拉取指定超话的最新帖子。
     默认使用缓存（cache-first），force=true 时强制刷新。
@@ -421,7 +421,7 @@ def refresh_posts(topic_id: str, data: RefreshPostsIn,
                   user=Depends(auth.require_admin)):
     """手动刷新超话帖子"""
     database.delete_topic_posts_cache(topic_id)
-    return get_topic_posts(topic_id, count=data.count, user=user)
+    return get_topic_posts(topic_id, count=data.count, force=True)
 
 
 # ========================= 图片代理 =========================

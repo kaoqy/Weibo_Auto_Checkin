@@ -106,7 +106,7 @@ def _extract_posts_from_payload(payload):
     if not isinstance(payload, dict):
         return []
     results = []
-    
+
     # 格式 1: PC chaohua/page - items[].data 直接是 mblog
     items = payload.get("items") or []
     for item in items:
@@ -119,7 +119,7 @@ def _extract_posts_from_payload(payload):
                 results.append(normalized)
     if results:
         return results
-    
+
     # 格式 2: 移动端 container/getIndex - data.cards[].card_group[].mblog
     data = payload.get("data") or {}
     cards = data.get("cards") or []
@@ -130,7 +130,7 @@ def _extract_posts_from_payload(payload):
             normalized = _normalize_mblog(mblog)
             if normalized:
                 results.append(normalized)
-    
+
     # 格式 3: data.cards 直接是 mblog 列表（无 card_group 包装）
     if not results:
         for card in cards:
@@ -138,7 +138,7 @@ def _extract_posts_from_payload(payload):
             normalized = _normalize_mblog(mblog)
             if normalized:
                 results.append(normalized)
-    
+
     # 格式 4: data.list[] / data.items[] 直接是 mblog 列表
     if not results:
         direct_list = data.get("list") or data.get("items") or []
@@ -147,8 +147,59 @@ def _extract_posts_from_payload(payload):
             normalized = _normalize_mblog(mblog)
             if normalized:
                 results.append(normalized)
-    
+
     return results
+
+
+def _format_weibo_time(raw_time: str) -> str:
+    """将微博时间格式化为可读字符串。
+    处理：
+    - 相对时间（"10分钟前"、"今天 12:30"）→ 转为 YYYY-MM-DD HH:MM
+    - 已经是标准格式的 → 原样返回
+    - 无法解析 → 返回原始值
+    """
+    if not raw_time:
+        return ""
+    from datetime import datetime as _dt, timedelta as _td
+    now = _dt.now()
+
+    try:
+        # 标准格式
+        if len(raw_time) >= 10 and raw_time[4] == '-':
+            return raw_time[:16]
+        # "今天 HH:MM"
+        if raw_time.startswith("今天"):
+            t = raw_time.replace("今天", "").strip()
+            return f"{now.strftime('%Y-%m-%d')} {t}"
+        # "昨天 HH:MM"
+        if raw_time.startswith("昨天"):
+            t = raw_time.replace("昨天", "").strip()
+            yest = now - _td(days=1)
+            return f"{yest.strftime('%Y-%m-%d')} {t}"
+        # "N分钟前"
+        if "分钟前" in raw_time:
+            n = int(raw_time.replace("分钟前", "").strip())
+            out = now - _td(minutes=n)
+            return out.strftime("%Y-%m-%d %H:%M")
+        # "N小时前"
+        if "小时前" in raw_time:
+            n = int(raw_time.replace("小时前", "").strip())
+            out = now - _td(hours=n)
+            return out.strftime("%Y-%m-%d %H:%M")
+        # "N天前"
+        if "天前" in raw_time:
+            n = int(raw_time.replace("天前", "").strip())
+            out = now - _td(days=n)
+            return out.strftime("%Y-%m-%d %H:%M")
+        # "MM-DD HH:MM"（无年份，补当前年）
+        if len(raw_time) >= 11 and raw_time[2] == '-':
+            return f"{now.year}-{raw_time}"
+        # "YYYY-MM-DD" 纯日期
+        if len(raw_time) == 10 and raw_time[4] == '-':
+            return f"{raw_time} 00:00"
+    except Exception:
+        pass
+    return raw_time
 
 
 def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
@@ -163,30 +214,47 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
 
     # 清理 containerid，去掉可能的后缀
     clean_cid = containerid.split("_-_")[0] if "_-_" in containerid else containerid
+    # 去掉可能已存在的 100808 前缀
+    if clean_cid.startswith("100808"):
+        clean_cid = clean_cid[6:]
 
     # 端点列表（按优先级排序）
     endpoints = [
-        # PC 端（chaohua/page）- 需要 100808 前缀
+        # PC 端（chaohua/page）- 按时间排序
         {
             "url": f"{BASE_PC}/ajax_proxy/chaohua/page",
             "params": {"flowId": f"100808{clean_cid}_-_sort_time"},
             "headers": {"Referer": f"{BASE_PC}/p/100808{clean_cid}"},
         },
+        # PC 端（chaohua/page）- 默认排序
         {
             "url": f"{BASE_PC}/ajax_proxy/chaohua/page",
             "params": {"flowId": f"100808{clean_cid}"},
             "headers": {"Referer": f"{BASE_PC}/p/100808{clean_cid}"},
         },
-        # 移动端（container/getIndex）
+        # 移动端（container/getIndex）- 带 100808 前缀
         {
             "url": f"{BASE}/api/container/getIndex",
             "params": {"containerid": f"100808{clean_cid}", "page": 1, "count": 25},
             "headers": {"Referer": f"{BASE}/p/100808{clean_cid}"},
         },
+        # 移动端（container/getIndex）- 无前缀
         {
             "url": f"{BASE}/api/container/getIndex",
             "params": {"containerid": clean_cid, "page": 1, "count": 25},
             "headers": {"Referer": f"{BASE}/p/{clean_cid}"},
+        },
+        # 移动端 - _hot 热门
+        {
+            "url": f"{BASE}/api/container/getIndex",
+            "params": {"containerid": f"100808{clean_cid}_hot", "page": 1, "count": 25},
+            "headers": {"Referer": f"{BASE}/p/100808{clean_cid}"},
+        },
+        # 移动端 - _all 全部
+        {
+            "url": f"{BASE}/api/container/getIndex",
+            "params": {"containerid": f"100808{clean_cid}_all", "page": 1, "count": 25},
+            "headers": {"Referer": f"{BASE}/p/100808{clean_cid}"},
         },
     ]
 
@@ -266,6 +334,10 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
             continue
         seen_mids.add(mid)
         unique_posts.append(p)
+
+    # 格式化时间
+    for p in unique_posts[:count]:
+        p["created_at"] = _format_weibo_time(p.get("created_at", ""))
 
     error_msg = "; ".join(errors) if errors else ""
     return {"posts": unique_posts[:count], "error": error_msg}
