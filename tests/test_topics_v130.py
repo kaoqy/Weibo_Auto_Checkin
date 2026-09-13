@@ -1,4 +1,4 @@
-"""v1.3.0 超话功能测试。"""
+import json
 import sys
 from pathlib import Path
 
@@ -213,4 +213,134 @@ def test_ai_summary_with_mock(client, monkeypatch):
     assert body["ok"] is True
     assert body["summary"] == "这是 AI 总结内容"
     assert body["model"] == "gpt-4o-mini"
+    assert body["qa_mode"] is False
+    db._local.conn = None
+
+
+def test_ai_summary_qa_mode(client, monkeypatch):
+    """Q&A 模式：question 非空时，system prompt 应包含帖子内容上下文。"""
+    db.set_settings({
+        "ai_base_url": "https://api.openai.com/v1",
+        "ai_api_key": "sk-test",
+        "ai_model": "gpt-4o-mini",
+        "ai_topic_prompt": "总结以下内容：",
+    })
+
+    captured_messages = {}
+    class FakeResp:
+        status_code = 200
+        def json(self):
+            return {"choices": [{"message": {"content": "这是 AI 回答"}}]}
+        def raise_for_status(self):
+            pass
+
+    def fake_post(url, **kwargs):
+        captured_messages["messages"] = kwargs.get("json", {}).get("messages", [])
+        return FakeResp()
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    r = client.post("/api/topics/ai_summary", json={
+        "text": "帖子内容测试",
+        "topic_name": "测试超话",
+        "question": "这个超话在讨论什么？",
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body["qa_mode"] is True
+    # 验证 system prompt 包含帖子内容
+    msgs = captured_messages["messages"]
+    assert any("帖子内容测试" in m.get("content", "") for m in msgs)
+    # 验证 question 是 user message
+    assert any(m.get("role") == "user" and "讨论什么" in m.get("content", "") for m in msgs)
+    db._local.conn = None
+
+
+def test_ai_summary_reasoning(client, monkeypatch):
+    """reasoning=true 时，payload 应包含 reasoning_effort，且返回 reasoning_content。"""
+    db.set_settings({
+        "ai_base_url": "https://api.openai.com/v1",
+        "ai_api_key": "sk-test",
+        "ai_model": "gpt-4o-mini",
+    })
+
+    class FakeResp:
+        status_code = 200
+        def json(self):
+            return {
+                "choices": [{
+                    "message": {
+                        "content": "推理总结",
+                        "reasoning_content": "这是推理过程",
+                    }
+                }]
+            }
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setattr(requests, "post", lambda *a, **kw: FakeResp())
+    r = client.post("/api/topics/ai_summary", json={
+        "text": "帖子内容",
+        "topic_name": "测试超话",
+        "reasoning": True,
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body.get("reasoning") == "这是推理过程"
+    db._local.conn = None
+
+
+def test_ai_summary_streaming(client, monkeypatch):
+    """streaming 模式应返回 StreamingResponse 并生成 SSE 数据。"""
+    db.set_settings({
+        "ai_base_url": "https://api.openai.com/v1",
+        "ai_api_key": "sk-test",
+        "ai_model": "gpt-4o-mini",
+    })
+
+    # Mock SSE response
+    fake_lines = [
+        'data: {"choices": [{"delta": {"content": "流"}, "finish_reason": null}]}',
+        'data: {"choices": [{"delta": {"content": "式"}, "finish_reason": null}]}',
+        'data: {"choices": [{"delta": {"content": "输"}, "finish_reason": null}]}',
+        'data: {"choices": [{"delta": {"content": "出"}, "finish_reason": "stop"}], "model": "test-model"}',
+        'data: [DONE]',
+    ]
+
+    class FakeResp:
+        status_code = 200
+        def raise_for_status(self):
+            pass
+        def iter_lines(self, decode_unicode=True):
+            return iter(fake_lines)
+
+    def fake_post(url, **kwargs):
+        json_data = kwargs.get("json", {})
+        assert json_data.get("stream") is True
+        return FakeResp()
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    from starlette.testclient import TestClient as _TC
+    r = client.post("/api/topics/ai_summary", json={
+        "text": "帖子内容",
+        "topic_name": "测试超话",
+        "stream": True,
+    })
+    assert r.status_code == 200
+    assert "text/event-stream" in r.headers.get("content-type", "")
+    # 流式响应体
+    body = b"".join(r.iter_bytes())
+    decoded = body.decode("utf-8")
+    # 拼接流式 chunks 中的 text
+    accumulated = ""
+    for line in decoded.split("\n"):
+        if line.startswith("data: "):
+            try:
+                data = json.loads(line[6:])
+                accumulated += data.get("text", "")
+            except json.JSONDecodeError:
+                pass
+    assert accumulated == "流式输出"
+    assert "test-model" in decoded
     db._local.conn = None

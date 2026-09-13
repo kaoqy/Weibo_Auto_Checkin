@@ -1,4 +1,4 @@
-"""超话管理 API（v1.3.0 - 修复版）。"""
+"""超话管理 API（v1.0.0 - 修复版）。"""
 
 from __future__ import annotations
 
@@ -462,11 +462,19 @@ def proxy_image(url: str):
 class AISummaryIn(BaseModel):
     text: str
     topic_name: str = "超话"
+    question: str = ""
+    reasoning: bool = False
+    stream: bool = False
 
 
 @router.post("/ai_summary")
 def ai_summary(data: AISummaryIn, user=Depends(auth.require_admin)):
-    """调用 OpenAI 兼容 API 对超话内容进行总结"""
+    """调用 OpenAI 兼容 API 对超话内容进行总结或回答问题。
+
+    支持模式：
+    - 总结模式（默认）：无 question 时，用 AI_TOPIC_PROMPT 结构化总结超话帖子。
+    - Q&A 模式：有 question 时，把帖子内容作为上下文，结合 question 生成回答。
+    """
     base_url = (database.get_setting("ai_base_url", "") or "").strip().rstrip("/")
     api_key = (database.get_setting("ai_api_key", "") or "").strip()
     model = (database.get_setting("ai_model", "") or "gpt-4o-mini").strip()
@@ -478,32 +486,120 @@ def ai_summary(data: AISummaryIn, user=Depends(auth.require_admin)):
             "error": "未配置 AI 总结功能。请在设置中填写 API Base URL 和 API Key。",
         }
 
-    system_prompt = AI_TOPIC_PROMPT.replace("{topic_name}", data.topic_name)
     truncated_text = data.text[:8000] if len(data.text) > 8000 else data.text
-    user_content = f"以下是「{data.topic_name}」超话的最新帖子内容：\n\n{truncated_text}"
+
+    # 构建 messages
+    is_qa = bool(data.question and data.question.strip())
+    if is_qa:
+        # Q&A 模式：system 带上下文 + 分析指令，user 是问题
+        system_content = (
+            f"你是「{data.topic_name}」超话的内容分析助手。"
+            f"以下是该超话最新的帖子内容，请基于这些内容回答用户的问题。"
+            f"如果帖子中没有相关信息，请如实说明。\n\n"
+            f"--- 帖子内容 ---\n{truncated_text}"
+        )
+        messages = [
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": data.question.strip()},
+        ]
+    else:
+        # 总结模式：结构化总结
+        system_content = AI_TOPIC_PROMPT.replace("{topic_name}", data.topic_name)
+        user_content = f"以下是「{data.topic_name}」超话的最新帖子内容：\n\n{truncated_text}"
+        messages = [
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": user_content},
+        ]
+
+    payload = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": 1200,
+        "temperature": 0.7,
+        "stream": data.stream,
+    }
+    if data.reasoning:
+        payload["reasoning_effort"] = "medium"
 
     try:
-        resp = requests.post(
-            f"{base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_content},
-                ],
-                "max_tokens": 800,
-                "temperature": 0.7,
-            },
-            timeout=60,
-        )
-        resp.raise_for_status()
-        result = resp.json()
-        summary = result["choices"][0]["message"]["content"].strip()
-        return {"ok": True, "summary": summary, "model": model}
+        if data.stream:
+            # SSE streaming response
+            def generate():
+                import json as _json
+                resp_stream = requests.post(
+                    f"{base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                        "Accept": "text/event-stream",
+                    },
+                    json=payload,
+                    timeout=120,
+                    stream=True,
+                )
+                resp_stream.raise_for_status()
+                for line in resp_stream.iter_lines(decode_unicode=True):
+                    if line is None:
+                        continue
+                    s = line.strip()
+                    if s.startswith("data: "):
+                        chunk = s[6:]
+                        if chunk == "[DONE]":
+                            break
+                        try:
+                            chunk_data = _json.loads(chunk)
+                            choice = chunk_data["choices"][0]
+                            delta = choice.get("delta", {})
+                            text_piece = delta.get("content", "")
+                            reasoning_piece = delta.get("reasoning_content", "")
+                            if text_piece or reasoning_piece:
+                                out = {"text": text_piece, "reasoning": reasoning_piece}
+                                yield f"data: {_json.dumps(out, ensure_ascii=False)}\n\n"
+                            if choice.get("finish_reason"):
+                                out_done = {"finish": True}
+                                try:
+                                    usage = chunk_data.get("usage")
+                                    if usage:
+                                        out_done["usage"] = usage
+                                    mdl = chunk_data.get("model")
+                                    if mdl:
+                                        out_done["model"] = mdl
+                                except Exception:
+                                    pass
+                                yield f"data: {_json.dumps(out_done, ensure_ascii=False)}\n\n"
+                                break
+                        except Exception as exc:
+                            out_err = {"error": str(exc)}
+                            yield f"data: {_json.dumps(out_err, ensure_ascii=False)}\n\n"
+                            break
+
+            from fastapi.responses import StreamingResponse
+            return StreamingResponse(generate(), media_type="text/event-stream")
+        else:
+            # Non-streaming
+            resp = requests.post(
+                f"{base_url}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=120,
+            )
+            resp.raise_for_status()
+            result = resp.json()
+            msg = result["choices"][0]["message"]
+            summary = msg.get("content", "").strip()
+            reasoning_content = msg.get("reasoning_content", "") or ""
+            out = {
+                "ok": True,
+                "summary": summary,
+                "model": result.get("model", model),
+                "qa_mode": is_qa,
+            }
+            if reasoning_content:
+                out["reasoning"] = reasoning_content
+            return out
     except requests.exceptions.Timeout:
         return {"ok": False, "summary": "", "error": "请求超时，请稍后重试"}
     except Exception as exc:

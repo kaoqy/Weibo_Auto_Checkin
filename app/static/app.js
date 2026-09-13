@@ -872,7 +872,7 @@ async function loadSettings() {
     setVal('s-tg_silent', settingsCache.tg_silent==='1');
     const retEl = $('#s-log_retention_days');
     if (retEl) retEl.value = settingsCache.log_retention_days||'30';
-    // v1.3.0 AI
+    // 1.0.0 AI
     $('#s-ai_base_url').value = settingsCache.ai_base_url||'';
     $('#s-ai_api_key').value = settingsCache.ai_api_key||'';
     $('#s-ai_model').value = settingsCache.ai_model||'gpt-4o-mini';
@@ -902,7 +902,7 @@ function collectSettings() {
     checkin_delay_min: val('s-checkin_delay_min'),
     checkin_delay_max: val('s-checkin_delay_max'),
     log_retention_days: val('s-log_retention_days','30'),
-    // v1.3.0 AI 总结
+    // 1.0.0 AI 总结
     ai_base_url: val('s-ai_base_url').trim(),
     ai_api_key: val('s-ai_api_key').trim(),
     ai_model: val('s-ai_model').trim() || 'gpt-4o-mini',
@@ -1026,7 +1026,7 @@ $('#btn-change-pwd').onclick = async () => {
   }
 };
 
-/* ===== 超话管理（v1.3.0 修复版） ===== */
+/* ===== 超话管理（1.0.0 修复版） ===== */
 var topicsCache = [];
 var currentTopicId = null;
 var currentTopicName = '';
@@ -1156,24 +1156,117 @@ $('#btn-ai-summary').onclick = async () => {
   const box = $('#aiSummaryContent');
   const question = $('#ai-question')?.value?.trim() || '';
   const reasoning = $('#ai-reasoning')?.checked || false;
+  const stream = $('#ai-stream')?.checked || false;
+  const text = currentPosts.map((p, i) => `[${i+1}] ${p.user?.screen_name || '未知'}: ${p.text || ''}`).join('\n');
+
   box.innerHTML = '<div class="ai-summary-loading"><span class="qr-spinner" style="width:16px;height:16px;border-width:2px"></span> AI 正在思考…</div>';
+
   try {
-    const text = currentPosts.map((p, i) => `[${i+1}] ${p.user?.screen_name || '未知'}: ${p.text || ''}`).join('\n');
-    const r = await api.post('/api/topics/ai_summary', { text, topic_name: currentTopicName, question, reasoning });
-    if (r.ok) {
-      let html = '';
-      if (r.reasoning) {
-        html += `<details class="ai-reasoning"><summary>💭 推理过程</summary><pre>${esc(r.reasoning)}</pre></details>`;
+    if (stream) {
+      // Streaming mode: fetch + ReadableStream
+      const resp = await fetch('/api/topics/ai_summary', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, topic_name: currentTopicName, question, reasoning, stream: true }),
+      });
+      if (!resp.ok) {
+        const err = await resp.json();
+        box.innerHTML = `<div class="ai-summary-error">❌ ${esc(err.error || '请求失败')}</div>`;
+        return;
       }
-      html += `<div class="ai-summary-text">${esc(r.summary)}</div><div class="hint" style="margin-top:8px;font-size:11px">模型: ${esc(r.model || '')}</div>`;
-      box.innerHTML = html;
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let accumulated = '';
+      let reasoningText = '';
+      box.innerHTML = '';
+      const reasoningDetails = document.createElement('details');
+      reasoningDetails.className = 'ai-reasoning';
+      reasoningDetails.innerHTML = '<summary>💭 推理过程</summary><pre></pre>';
+      const reasoningPre = reasoningDetails.querySelector('pre');
+      const summaryDiv = document.createElement('div');
+      summaryDiv.className = 'ai-summary-text';
+      box.appendChild(reasoningDetails);
+      box.appendChild(summaryDiv);
+      reasoningDetails.hidden = true;
+
+      let done = false;
+      while (!done) {
+        const { value, done: d } = await reader.read();
+        done = d;
+        if (value) {
+          const chunk = decoder.decode(value, { stream: true });
+          const lines = chunk.split('\n');
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const data = JSON.parse(line.slice(6));
+                if (data.finish) {
+                  done = true;
+                  if (data.model) {
+                    const hint = document.createElement('div');
+                    hint.className = 'hint';
+                    hint.style.marginTop = '8px';
+                    hint.style.fontSize = '11px';
+                    hint.textContent = `模型: ${data.model}`;
+                    box.appendChild(hint);
+                  }
+                } else if (data.error) {
+                  summaryDiv.innerHTML += `<span style="color:var(--danger)">${esc(data.error)}</span>`;
+                } else {
+                  if (data.reasoning) {
+                    reasoningText += data.reasoning;
+                    reasoningPre.textContent = reasoningText;
+                    reasoningDetails.hidden = false;
+                  }
+                  if (data.text) {
+                    accumulated += data.text;
+                    summaryDiv.innerHTML = formatAiSummary(accumulated);
+                  }
+                }
+              } catch (e) { /* ignore parse errors */ }
+            }
+          }
+        }
+      }
     } else {
-      box.innerHTML = `<div class="ai-summary-error">❌ ${esc(r.error || '总结失败')}</div>`;
+      // Non-streaming mode
+      const r = await api.post('/api/topics/ai_summary', { text, topic_name: currentTopicName, question, reasoning });
+      if (r.ok) {
+        let html = '';
+        if (r.reasoning) {
+          html += `<details class="ai-reasoning"><summary>💭 推理过程</summary><pre>${esc(r.reasoning)}</pre></details>`;
+        }
+        html += `<div class="ai-summary-text">${formatAiSummary(r.summary)}</div>`;
+        if (r.model) {
+          html += `<div class="hint" style="margin-top:8px;font-size:11px">模型: ${esc(r.model)}</div>`;
+        }
+        box.innerHTML = html;
+      } else {
+        box.innerHTML = `<div class="ai-summary-error">❌ ${esc(r.error || '总结失败')}</div>`;
+      }
     }
   } catch(e) {
     box.innerHTML = `<div class="ai-summary-error">❌ ${esc(e.message || '请求失败')}</div>`;
   }
 };
+
+// 格式化 AI 总结文本（简单 Markdown → HTML）
+function formatAiSummary(text) {
+  if (!text) return '';
+  let html = esc(text);
+  // Bold
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  // Headers
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  // List items
+  html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+  // Code
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // Line breaks
+  html = html.replace(/\n/g, '<br>');
+  return html;
+}
 
 // 刷新帖子（手动强制刷新）
 $('#btn-topic-refresh').onclick = async () => {

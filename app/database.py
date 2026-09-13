@@ -145,7 +145,7 @@ def init_db() -> None:
         CREATE INDEX IF NOT EXISTS idx_logs_account ON checkin_logs(account_id);
         CREATE INDEX IF NOT EXISTS idx_logs_time   ON checkin_logs(created_at);
 
-        -- v1.3.0：单账号关注超话缓存
+        -- v1.0.0：单账号关注超话缓存
         CREATE TABLE IF NOT EXISTS topic_cache (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
             account_id   INTEGER NOT NULL,
@@ -155,7 +155,7 @@ def init_db() -> None:
             UNIQUE(account_id)
         );
 
-        -- v1.3.0：所有账号关注过的全量超话（去重）
+        -- v1.0.0：所有账号关注过的全量超话（去重）
         CREATE TABLE IF NOT EXISTS all_topics (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
             topic_id     TEXT NOT NULL UNIQUE,
@@ -172,7 +172,7 @@ def init_db() -> None:
 
         CREATE INDEX IF NOT EXISTS idx_topic_cache_account ON topic_cache(account_id);
         CREATE INDEX IF NOT EXISTS idx_all_topics_topic_id ON all_topics(topic_id);
-        -- v1.3.0：超话帖子缓存
+        -- v1.0.0：超话帖子缓存
         CREATE TABLE IF NOT EXISTS topic_posts_cache (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
             topic_id     TEXT NOT NULL UNIQUE,
@@ -243,7 +243,7 @@ def _seed_defaults(conn: sqlite3.Connection) -> None:
         "tg_only_on_change": "0",     # 仅在有失败/异常时推送
         "tg_silent": "0",             # 静默推送（不震动提示）
         "log_retention_days": "30",   # 日志保留天数（0=不清理）
-        # ---- v1.3.0 超话 AI 总结 ----
+        # ---- v1.0.0 超话 AI 总结 ----
         "ai_base_url": "",          # OpenAI 兼容 API base_url
         "ai_api_key": "",           # API Key
         "ai_model": "gpt-4o-mini",  # 模型名
@@ -865,7 +865,7 @@ def delete_user_sessions(user_id: int) -> None:
     conn.commit()
 
 
-# ========================= v1.3.0 超话缓存 =========================
+# ========================= v1.0.0 超话缓存 =========================
 
 # ---------- topic_cache 表（单账号关注超话缓存） ----------
 

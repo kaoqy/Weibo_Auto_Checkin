@@ -48,7 +48,7 @@ _RETRYABLE = (
     requests.exceptions.SSLError,
 )
 
-# ========================= 超话页面（v1.3.0） =========================
+# ========================= 超话页面（v1.0.0） =========================
 
 TOPIC_POSTS_URL = BASE + "/api/container/getIndex"
 
@@ -66,10 +66,15 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
     clean_cid = containerid.split("_-_")[0] if "_-_" in containerid else containerid
 
     # 按优先级尝试不同的容器ID格式（最新内容优先）
+    # ⚠️ 不要用 vtype=12，那是精华/热门过滤，会漏掉普通帖子
+    # vtype=61 是时序最新，省略 vtype 则默认按时间排序
     cids_to_try = [
+        clean_cid,                    # 原始格式，最常用
         f"{clean_cid}_-_new",        # new posts (chronological)
-        clean_cid,                    # original format
-        f"100808{clean_cid}",        # 100808 prefix format
+        f"{clean_cid}_-_all",        # all posts
+        f"100808{clean_cid}",       # 100808 前缀
+        f"100808{clean_cid}_-_all", # 100808 前缀 + _all
+        f"100808{clean_cid}_-_hot", # 100808 前缀 + _hot
     ]
     
     seen = set()
@@ -83,7 +88,7 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
         page = 1
         since_id = ""
         while len(posts) < count:
-            params = {"containerid": cid, "page": page, "count": 25, "vtype": 12}
+            params = {"containerid": cid, "page": page, "count": 25}
             if since_id:
                 params["since_id"] = since_id
             try:
