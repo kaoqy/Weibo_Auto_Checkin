@@ -1260,57 +1260,59 @@ $('#btn-ai-summary').onclick = async () => {
     toast('请先选择超话并拉取帖子', 'warn');
     return;
   }
-  const box = $('#aiSummaryContent');
-  const question = $('#ai-question')?.value?.trim() || '';
-  const text = currentPosts.map((p, i) => `[${i+1}] ${p.user?.screen_name || '未知'}: ${p.text || ''}`).join('\n');
+  var box = $('#aiSummaryContent');
+  var question = ($('#ai-question') || {}).value || '';
+  question = question.trim();
+  var text = currentPosts.map(function(p, i) { return '[' + (i+1) + '] ' + (p.user?.screen_name || '未知') + ': ' + (p.text || ''); }).join('\n');
 
   box.innerHTML = '<div class="ai-summary-loading"><span class="qr-spinner" style="width:16px;height:16px;border-width:2px"></span> AI 正在思考…</div>';
 
   try {
-    const resp = await fetch('/api/topics/ai_summary', {
+    var resp = await fetch('/api/topics/ai_summary', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, topic_name: currentTopicName, question, stream: true }),
+      body: JSON.stringify({ text: text, topic_name: currentTopicName, question: question, stream: true }),
     });
 
     if (!resp.ok) {
-      const err = await resp.json();
+      var err = await resp.json();
       box.innerHTML = '<div class="ai-summary-error">❌ ' + esc(err.error || '请求失败') + '</div>';
       return;
     }
 
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-    let accumulated = '';
-    let buffer = '';
+    var reader = resp.body.getReader();
+    var decoder = new TextDecoder();
+    var accumulated = '';
+    var buffer = '';
     box.innerHTML = '';
-    const summaryDiv = document.createElement('div');
+    var summaryDiv = document.createElement('div');
     summaryDiv.className = 'ai-summary-text';
     box.appendChild(summaryDiv);
 
-    let done = false;
+    var done = false;
     while (!done) {
-      const { value: chunk, done: d } = await reader.read();
-      done = d;
+      var result = await reader.read();
+      var chunk = result.value;
+      done = result.done;
 
-      if (chunk) {
+      if (chunk && chunk.length > 0) {
         buffer += decoder.decode(chunk, { stream: true });
-        const lines = buffer.split('\n');
+        var lines = buffer.split('\n');
         buffer = lines.pop() || '';
 
-        for (let line of lines) {
-          line = line.trim();
+        for (var i = 0; i < lines.length; i++) {
+          var line = lines[i].trim();
           if (!line || !line.startsWith('data: ')) continue;
 
-          const jsonStr = line.slice(6).trim();
-          if (jsonStr === '[DONE]') { done = true; break; }
+          var jsonStr = line.slice(6).trim();
+          if (!jsonStr || jsonStr === '[DONE]') { done = true; break; }
 
           try {
-            const chunkData = JSON.parse(jsonStr);
+            var chunkData = JSON.parse(jsonStr);
             if (chunkData.finish) {
               done = true;
               if (chunkData.model) {
-                const hint = document.createElement('div');
+                var hint = document.createElement('div');
                 hint.className = 'ai-model-hint';
                 hint.textContent = '模型: ' + chunkData.model;
                 box.appendChild(hint);
@@ -1322,7 +1324,7 @@ $('#btn-ai-summary').onclick = async () => {
               summaryDiv.innerHTML = formatAiSummary(accumulated);
             }
           } catch (e) {
-            // JSON 不完整，跳过等待下一个 chunk
+            // JSON 不完整，跳过
           }
         }
       }
@@ -1331,9 +1333,9 @@ $('#btn-ai-summary').onclick = async () => {
     // 处理剩余的 buffer
     if (buffer.trim().startsWith('data: ')) {
       try {
-        const jsonStr = buffer.trim().slice(6).trim();
+        var jsonStr = buffer.trim().slice(6).trim();
         if (jsonStr !== '[DONE]') {
-          const chunkData = JSON.parse(jsonStr);
+          var chunkData = JSON.parse(jsonStr);
           if (chunkData.text) {
             accumulated += chunkData.text;
             summaryDiv.innerHTML = formatAiSummary(accumulated);

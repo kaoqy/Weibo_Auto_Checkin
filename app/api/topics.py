@@ -549,7 +549,7 @@ def ai_summary(data: AISummaryIn, user=Depends(auth.require_admin)):
                 )
                 resp_stream.raise_for_status()
                 buffer = b""
-                for chunk in resp_stream.iter_content(chunk_size=1024):
+                for chunk in resp_stream.iter_content(chunk_size=2048):
                     if not chunk:
                         continue
                     buffer += chunk
@@ -565,7 +565,7 @@ def ai_summary(data: AISummaryIn, user=Depends(auth.require_admin)):
                                 continue
                             if line_str.startswith("data: "):
                                 data_str = line_str[6:].strip()
-                                if data_str == "[DONE]":
+                                if not data_str or data_str == "[DONE]":
                                     break
                                 try:
                                     chunk_data = _json.loads(data_str)
