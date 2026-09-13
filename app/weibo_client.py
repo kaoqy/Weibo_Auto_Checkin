@@ -219,42 +219,36 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
     if clean_cid.startswith("100808"):
         clean_cid = clean_cid[6:]
 
-    # 端点列表（按优先级排序）
+    # 端点列表（按优先级排序，确保获取最新帖子而非精华帖）
     endpoints = [
-        # PC 端（chaohua/page）- 按时间排序
+        # PC 端（chaohua/page）- 按时间排序（最可靠）
         {
             "url": f"{BASE_PC}/ajax_proxy/chaohua/page",
-            "params": {"flowId": f"100808{clean_cid}_-_sort_time"},
+            "params": {"flowId": f"100808{clean_cid}_-_sort_time", "vtype": 1},
             "headers": {"Referer": f"{BASE_PC}/p/100808{clean_cid}"},
         },
         # PC 端（chaohua/page）- 默认排序
         {
             "url": f"{BASE_PC}/ajax_proxy/chaohua/page",
-            "params": {"flowId": f"100808{clean_cid}"},
+            "params": {"flowId": f"100808{clean_cid}", "vtype": 1},
             "headers": {"Referer": f"{BASE_PC}/p/100808{clean_cid}"},
         },
         # 移动端（container/getIndex）- 带 100808 前缀
         {
             "url": f"{BASE}/api/container/getIndex",
-            "params": {"containerid": f"100808{clean_cid}", "page": 1, "count": 25},
+            "params": {"containerid": f"100808{clean_cid}", "page": 1, "count": 25, "vtype": 1},
             "headers": {"Referer": f"{BASE}/p/100808{clean_cid}"},
         },
         # 移动端（container/getIndex）- 无前缀
         {
             "url": f"{BASE}/api/container/getIndex",
-            "params": {"containerid": clean_cid, "page": 1, "count": 25},
+            "params": {"containerid": clean_cid, "page": 1, "count": 25, "vtype": 1},
             "headers": {"Referer": f"{BASE}/p/{clean_cid}"},
         },
-        # 移动端 - _hot 热门
+        # 移动端 - _all 全部（回退方案）
         {
             "url": f"{BASE}/api/container/getIndex",
-            "params": {"containerid": f"100808{clean_cid}_hot", "page": 1, "count": 25},
-            "headers": {"Referer": f"{BASE}/p/100808{clean_cid}"},
-        },
-        # 移动端 - _all 全部
-        {
-            "url": f"{BASE}/api/container/getIndex",
-            "params": {"containerid": f"100808{clean_cid}_all", "page": 1, "count": 25},
+            "params": {"containerid": f"100808{clean_cid}_all", "page": 1, "count": 25, "vtype": 1},
             "headers": {"Referer": f"{BASE}/p/100808{clean_cid}"},
         },
     ]
