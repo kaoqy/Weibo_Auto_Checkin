@@ -50,12 +50,11 @@ _RETRYABLE = (
 
 # ========================= 超话页面（v1.3.0） =========================
 
-TOPIC_POSTS_URL = BASE + "/api/container/getIndex"
-
 
 def _parse_mblog_card(item):
     """从单个 card_item 解析 mblog，返回标准化 dict 或 None。"""
-    if item.get("card_type") != "9":
+    card_type = item.get("card_type")
+    if card_type != 9 and card_type != "9":
         return None
     mblog = item.get("mblog") or {}
     if not mblog:
@@ -83,6 +82,8 @@ def _parse_mblog_card(item):
 
 def _extract_posts_from_payload(payload):
     """从 API 响应中提取帖子列表，兼容多种响应格式。"""
+    if not isinstance(payload, dict):
+        return []
     data = payload.get("data") or {}
     # 格式 1: cards[].card_group[].mblog (标准 container 接口)
     cards = data.get("cards") or []
@@ -100,7 +101,7 @@ def _extract_posts_from_payload(payload):
             mblog = entry.get("mblog") or entry
             if not mblog.get("id"):
                 continue
-            parsed = _parse_mblog_card({"card_type": "9", "mblog": mblog})
+            parsed = _parse_mblog_card({"card_type": 9, "mblog": mblog})
             if parsed:
                 results.append(parsed)
     # 格式 3: data.cards 直接是 mblog 列表（无 card_group 包装）
@@ -108,7 +109,7 @@ def _extract_posts_from_payload(payload):
         for card in cards:
             mblog = card.get("mblog") or card
             if mblog.get("id"):
-                parsed = _parse_mblog_card({"card_type": "9", "mblog": mblog})
+                parsed = _parse_mblog_card({"card_type": 9, "mblog": mblog})
                 if parsed:
                     results.append(parsed)
     return results
@@ -119,10 +120,10 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
     """拉取指定超话的最新帖子列表（默认前 count 条）。
 
     微博超话帖子接口是公开的，不需要登录态。
-    返回 dict: {"posts": [...], "error": ""} 或 {"posts": [], "error": "具体错误原因"}。
+    参考：https://m.weibo.cn/api/container/getIndex?containerid=100808{topic_id}
     """
     posts = []
-    error_msg = ""
+    errors = []
 
     # 清理 containerid，去掉可能的后缀
     clean_cid = containerid.split("_-_")[0] if "_-_" in containerid else containerid
@@ -153,32 +154,34 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
                 params["since_id"] = since_id
             try:
                 payload = request_json(
-                    session, "GET", TOPIC_POSTS_URL, params=params, cookies=cookies,
+                    session, "GET", TOPICS_URL, params=params, cookies=cookies,
                     channel=channel, proxy=proxy, force=force,
                     allow_fallback=allow_fallback,
                 )
             except NetworkError as exc:
-                error_msg = f"网络错误：{exc}"
-                break  # 换下一个 cid
+                errors.append(f"{cid} p{page}: 网络错误 {exc}")
+                break
             except RuntimeError as exc:
-                error_msg = f"请求失败：{exc}"
-                break  # 换下一个 cid
+                errors.append(f"{cid} p{page}: 请求失败 {exc}")
+                break
             except Exception as exc:
-                error_msg = f"未知错误：{exc}"
-                break  # 换下一个 cid
+                errors.append(f"{cid} p{page}: 未知错误 {exc}")
+                break
 
             # 检查响应状态
             ok_val = payload.get("ok")
             if ok_val == -100:
-                error_msg = "Cookie 过期"
-                break  # 换下一个 cid
+                errors.append(f"{cid} p{page}: Cookie 过期")
+                break
+            # 兼容 ok: 1 (int) 和 ok: "1" (str)
             if ok_val != 1 and ok_val != "1":
-                # 有些接口返回 ok: "1" 字符串
-                break  # 换下一个 cid
+                log.warning(f"fetch_topic_posts: ok={ok_val!r}, cid={cid}, page={page}")
+                break
 
             extracted = _extract_posts_from_payload(payload)
             if not extracted:
-                break  # 换下一个 cid
+                errors.append(f"{cid} p{page}: 无帖子数据")
+                break
 
             posts.extend(extracted)
             if len(posts) >= count:
@@ -208,6 +211,8 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
             continue
         seen_mids.add(mid)
         unique_posts.append(p)
+
+    error_msg = "; ".join(errors) if errors else ""
     return {"posts": unique_posts[:count], "error": error_msg}
 
 
