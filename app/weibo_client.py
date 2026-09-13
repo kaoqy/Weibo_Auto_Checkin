@@ -24,6 +24,7 @@ except ImportError:
     SOCKS_AVAILABLE = False
 
 BASE = "https://m.weibo.cn"
+BASE_PC = "https://weibo.com"
 CONFIG_URL = BASE + "/api/config"
 TOPICS_URL = BASE + "/api/container/getIndex"
 FOLLOWED_CONTAINER = "100803_-_followsuper"
@@ -50,31 +51,36 @@ _RETRYABLE = (
 
 # ========================= 超话页面（v1.3.0） =========================
 
-BASE_PC = "https://weibo.com"
-BASE_MOBILE = "https://m.weibo.cn"
 
-
-def _parse_mblog_card(item):
-    """从单个 card_item 解析 mblog，返回标准化 dict 或 None。"""
-    card_type = item.get("card_type")
-    if card_type != 9 and card_type != "9":
+def _normalize_mblog(mblog_raw):
+    """将 mblog 对象（PC 或移动端格式）标准化为统一输出格式。"""
+    if not mblog_raw or not isinstance(mblog_raw, dict):
         return None
-    mblog = item.get("mblog") or {}
-    if not mblog:
+    if not mblog_raw.get("id"):
         return None
     import re as _re
-    text = mblog.get("text", "")
+    text = mblog_raw.get("text", "")
     text = _re.sub(r'<[^>]+>', '', text).strip()
-    user = mblog.get("user") or {}
+    user = mblog_raw.get("user") or {}
+    # pics: pic_ids (list of str) or pic_infos (dict)
+    pics = []
+    if mblog_raw.get("pic_ids"):
+        pics = mblog_raw["pic_ids"]
+    elif mblog_raw.get("pic_infos"):
+        for pic_info in mblog_raw["pic_infos"].values():
+            if isinstance(pic_info, dict):
+                url = pic_info.get("original", {}).get("url") or pic_info.get("large", {}).get("url") or pic_info.get("url", "")
+                if url:
+                    pics.append(url)
     return {
-        "mid": mblog.get("idstr") or str(mblog.get("id", "")),
+        "mid": mblog_raw.get("idstr") or str(mblog_raw.get("id", "")),
         "text": text,
-        "created_at": mblog.get("created_at", ""),
-        "source": mblog.get("source", ""),
-        "reposts_count": mblog.get("reposts_count", 0),
-        "comments_count": mblog.get("comments_count", 0),
-        "attitudes_count": mblog.get("attitudes_count", 0),
-        "pics": [p.get("url", "") for p in (mblog.get("pics") or [])],
+        "created_at": mblog_raw.get("created_at", ""),
+        "source": mblog_raw.get("source", ""),
+        "reposts_count": mblog_raw.get("reposts_count", 0),
+        "comments_count": mblog_raw.get("comments_count", 0),
+        "attitudes_count": mblog_raw.get("attitudes_count", 0),
+        "pics": pics,
         "user": {
             "id": user.get("idstr") or str(user.get("id", "")),
             "screen_name": user.get("screen_name", ""),
@@ -84,37 +90,52 @@ def _parse_mblog_card(item):
 
 
 def _extract_posts_from_payload(payload):
-    """从 API 响应中提取帖子列表，兼容多种响应格式。"""
+    """从 API 响应中提取帖子列表，兼容 PC chaohua/page 和移动端 container/getIndex。"""
     if not isinstance(payload, dict):
         return []
-    data = payload.get("data") or {}
-    # 格式 1: cards[].card_group[].mblog (标准 container 接口)
-    cards = data.get("cards") or []
     results = []
+    
+    # 格式 1: PC chaohua/page - items[].data 直接是 mblog
+    items = payload.get("items") or []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if item.get("category") == "feed":
+            mblog = item.get("data")
+            normalized = _normalize_mblog(mblog)
+            if normalized:
+                results.append(normalized)
+    if results:
+        return results
+    
+    # 格式 2: 移动端 container/getIndex - data.cards[].card_group[].mblog
+    data = payload.get("data") or {}
+    cards = data.get("cards") or []
     for card in cards:
         card_group = card.get("card_group") or []
         for item in card_group:
-            parsed = _parse_mblog_card(item)
-            if parsed:
-                results.append(parsed)
-    # 格式 2: data.list[] / data.items[] 直接是 mblog 列表
-    if not results:
-        direct_list = data.get("list") or data.get("items") or []
-        for entry in direct_list:
-            mblog = entry.get("mblog") or entry
-            if not mblog.get("id"):
-                continue
-            parsed = _parse_mblog_card({"card_type": 9, "mblog": mblog})
-            if parsed:
-                results.append(parsed)
+            mblog = item.get("mblog")
+            normalized = _normalize_mblog(mblog)
+            if normalized:
+                results.append(normalized)
+    
     # 格式 3: data.cards 直接是 mblog 列表（无 card_group 包装）
     if not results:
         for card in cards:
             mblog = card.get("mblog") or card
-            if mblog.get("id"):
-                parsed = _parse_mblog_card({"card_type": 9, "mblog": mblog})
-                if parsed:
-                    results.append(parsed)
+            normalized = _normalize_mblog(mblog)
+            if normalized:
+                results.append(normalized)
+    
+    # 格式 4: data.list[] / data.items[] 直接是 mblog 列表
+    if not results:
+        direct_list = data.get("list") or data.get("items") or []
+        for entry in direct_list:
+            mblog = entry.get("mblog") or entry
+            normalized = _normalize_mblog(mblog)
+            if normalized:
+                results.append(normalized)
+    
     return results
 
 
@@ -123,7 +144,7 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
     """拉取指定超话的最新帖子列表（默认前 count 条）。
 
     微博超话帖子接口是公开的，不需要登录态。
-    尝试多个端点：PC 端 -> 移动端 -> chaohua 端
+    优先尝试 PC 端 chaohua/page，失败则回退到移动端 container/getIndex。
     """
     posts = []
     errors = []
@@ -133,27 +154,27 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
 
     # 端点列表（按优先级排序）
     endpoints = [
-        # PC 端（chaohua/page）
+        # PC 端（chaohua/page）- 需要 100808 前缀
         {
             "url": f"{BASE_PC}/ajax_proxy/chaohua/page",
-            "params": {"flowId": f"{clean_cid}_-_sort_time"},
-            "headers": {"Referer": f"{BASE_PC}/p/{clean_cid}"},
+            "params": {"flowId": f"100808{clean_cid}_-_sort_time"},
+            "headers": {"Referer": f"{BASE_PC}/p/100808{clean_cid}"},
         },
         {
             "url": f"{BASE_PC}/ajax_proxy/chaohua/page",
-            "params": {"flowId": clean_cid},
-            "headers": {"Referer": f"{BASE_PC}/p/{clean_cid}"},
+            "params": {"flowId": f"100808{clean_cid}"},
+            "headers": {"Referer": f"{BASE_PC}/p/100808{clean_cid}"},
         },
         # 移动端（container/getIndex）
         {
-            "url": f"{BASE_MOBILE}/api/container/getIndex",
-            "params": {"containerid": f"100808{clean_cid}"},
-            "headers": {"Referer": f"{BASE_MOBILE}/p/{clean_cid}"},
+            "url": f"{BASE}/api/container/getIndex",
+            "params": {"containerid": f"100808{clean_cid}", "page": 1, "count": 25},
+            "headers": {"Referer": f"{BASE}/p/100808{clean_cid}"},
         },
         {
-            "url": f"{BASE_MOBILE}/api/container/getIndex",
-            "params": {"containerid": clean_cid},
-            "headers": {"Referer": f"{BASE_MOBILE}/p/{clean_cid}"},
+            "url": f"{BASE}/api/container/getIndex",
+            "params": {"containerid": clean_cid, "page": 1, "count": 25},
+            "headers": {"Referer": f"{BASE}/p/{clean_cid}"},
         },
     ]
 
@@ -186,14 +207,19 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
                 errors.append(f"{ep['url']} p{page}: 未知错误 {exc}")
                 break
 
-            # 检查响应状态
-            ok_val = payload.get("ok")
-            if ok_val == -100:
-                errors.append(f"{ep['url']} p{page}: Cookie 过期")
-                break
-            if ok_val != 1 and ok_val != "1":
-                log.warning(f"fetch_topic_posts: ok={ok_val!r}, url={ep['url']}, page={page}")
-                break
+            # 检查响应状态（PC 端没有 ok 字段，直接有 items）
+            if "items" in payload:
+                # PC 端格式
+                pass
+            else:
+                # 移动端格式，检查 ok
+                ok_val = payload.get("ok")
+                if ok_val == -100:
+                    errors.append(f"{ep['url']} p{page}: Cookie 过期")
+                    break
+                if ok_val != 1 and ok_val != "1":
+                    log.warning(f"fetch_topic_posts: ok={ok_val!r}, url={ep['url']}, page={page}")
+                    break
 
             extracted = _extract_posts_from_payload(payload)
             if not extracted:
@@ -302,7 +328,6 @@ def request_via_proxy(session, method, url, channel="auto", proxy=None,
 
     if proxy and channel in ("socks", "auto"):
         if not SOCKS_AVAILABLE:
-            # 配置了 SOCKS 代理但未装 PySocks
             msg = ("配置了 SOCKS5 代理，但缺少 PySocks 支持。请安装：pip install PySocks "
                    "（或移除设置里的 SOCKS 代理节点改用直连）")
             log.error(msg)
@@ -427,12 +452,7 @@ def checkin_topic(session, cookies, scheme, st, channel="auto", proxy=None,
 
 
 def merge_refreshed_cookies(session, cookie_dict: dict) -> tuple[dict, list]:
-    """合并响应中的 Set-Cookie，返回 (新dict, 变化的key列表)。
-
-    只有「原 cookie_dict 中已存在、且值实际发生变化」的 key 才计入 changed。
-    响应里新出现的无关 cookie 只并入 merged，但不触发回写，避免每次签到
-    都因无关 cookie 被判为「有变动」而频繁写数据库。
-    """
+    """合并响应中的 Set-Cookie，返回 (新dict, 变化的key列表)。"""
     merged = dict(cookie_dict)
     changed = []
     for cookie in session.cookies:
@@ -471,18 +491,12 @@ class CheckinOptions:
 def run_account_checkin(cookie_dict: dict, opts: CheckinOptions,
                         proxy_url: str | None = None,
                         proxy_index: int = 0) -> dict:
-    """
-    对单个账号执行一遍签到。
-    - proxy_url: 账号指定使用的 socks 链接（优先）
-    - proxy_index: 无指定时按 opts.proxies 轮询的序号（兼容旧逻辑）
-    返回 dict：{status, channel, total, success, fail, message, results, cookie, cookie_changed}
-    """
+    """对单个账号执行一遍签到。"""
     cookie_dict = normalize_cookie(cookie_dict)
     if not cookie_dict:
         return _bundle("failed", "Cookie 为空，请重新登录", 0, 0, 0, [],
                        cookie_dict, [], failure_type="cookie_invalid")
 
-    # 代理选择：账号指定 proxy_url 优先；否则按 opts.proxies 轮询
     proxy = None
     channel = "direct"
     if proxy_url and proxy_url.strip().startswith(("socks5://", "socks5h://")):
@@ -539,7 +553,6 @@ def run_account_checkin(cookie_dict: dict, opts: CheckinOptions,
             )
             resp_text = str(response)
             if str(response.get("errno")) == "100015" or "验签" in resp_text or "驗簽" in resp_text:
-                # 刷新 st 重试
                 logged_in, st = verify_cookie(
                     session, cookie_dict, channel=channel, proxy=proxy,
                     force=opts.proxy_force, allow_fallback=opts.proxy_fallback,
@@ -561,7 +574,6 @@ def run_account_checkin(cookie_dict: dict, opts: CheckinOptions,
             results.append({"name": topic["name"], "success": success,
                             "message": message or str(response)[:100]})
         except NetworkError:
-            # 签到请求网络失败，整遍判为网络失败
             merged, changed = merge_refreshed_cookies(session, cookie_dict)
             return _bundle("failed", "签到过程中网络失败", total,
                            sum(1 for r in results if r["success"]),
