@@ -1,4 +1,4 @@
-"""超话管理 API（v1.0.0 - 修复版）。"""
+"""超话管理 API（v1.3.0）。"""
 
 from __future__ import annotations
 

@@ -872,7 +872,7 @@ async function loadSettings() {
     setVal('s-tg_silent', settingsCache.tg_silent==='1');
     const retEl = $('#s-log_retention_days');
     if (retEl) retEl.value = settingsCache.log_retention_days||'30';
-    // 1.0.0 AI
+    // 1.3.0 AI
     $('#s-ai_base_url').value = settingsCache.ai_base_url||'';
     $('#s-ai_api_key').value = settingsCache.ai_api_key||'';
     $('#s-ai_model').value = settingsCache.ai_model||'gpt-4o-mini';
@@ -902,7 +902,7 @@ function collectSettings() {
     checkin_delay_min: val('s-checkin_delay_min'),
     checkin_delay_max: val('s-checkin_delay_max'),
     log_retention_days: val('s-log_retention_days','30'),
-    // 1.0.0 AI 总结
+    // 1.3.0 AI 总结
     ai_base_url: val('s-ai_base_url').trim(),
     ai_api_key: val('s-ai_api_key').trim(),
     ai_model: val('s-ai_model').trim() || 'gpt-4o-mini',
@@ -1026,7 +1026,7 @@ $('#btn-change-pwd').onclick = async () => {
   }
 };
 
-/* ===== 超话管理（1.0.0 修复版） ===== */
+/* ===== 超话管理（1.3.0） ===== */
 var topicsCache = [];
 var currentTopicId = null;
 var currentTopicName = '';

@@ -48,7 +48,7 @@ _RETRYABLE = (
     requests.exceptions.SSLError,
 )
 
-# ========================= 超话页面（v1.0.0） =========================
+# ========================= 超话页面（v1.3.0） =========================
 
 TOPIC_POSTS_URL = BASE + "/api/container/getIndex"
 
