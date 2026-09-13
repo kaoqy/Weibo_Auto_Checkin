@@ -50,6 +50,9 @@ _RETRYABLE = (
 
 # ========================= 超话页面（v1.3.0） =========================
 
+BASE_PC = "https://weibo.com"
+BASE_MOBILE = "https://m.weibo.cn"
+
 
 def _parse_mblog_card(item):
     """从单个 card_item 解析 mblog，返回标准化 dict 或 None。"""
@@ -120,7 +123,7 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
     """拉取指定超话的最新帖子列表（默认前 count 条）。
 
     微博超话帖子接口是公开的，不需要登录态。
-    参考：https://m.weibo.cn/api/container/getIndex?containerid=100808{topic_id}
+    尝试多个端点：PC 端 -> 移动端 -> chaohua 端
     """
     posts = []
     errors = []
@@ -128,59 +131,73 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
     # 清理 containerid，去掉可能的后缀
     clean_cid = containerid.split("_-_")[0] if "_-_" in containerid else containerid
 
-    # 按优先级尝试不同的容器ID格式
-    cids_to_try = [
-        f"100808{clean_cid}",       # 100808 前缀（最常见）
-        clean_cid,                    # 原始格式
-        f"{clean_cid}_-_new",        # new posts
-        f"{clean_cid}_-_all",        # all posts
-        f"100808{clean_cid}_-_all", # 100808 + all
-        f"100808{clean_cid}_-_hot", # 100808 + hot
+    # 端点列表（按优先级排序）
+    endpoints = [
+        # PC 端（chaohua/page）
+        {
+            "url": f"{BASE_PC}/ajax_proxy/chaohua/page",
+            "params": {"flowId": f"{clean_cid}_-_sort_time"},
+            "headers": {"Referer": f"{BASE_PC}/p/{clean_cid}"},
+        },
+        {
+            "url": f"{BASE_PC}/ajax_proxy/chaohua/page",
+            "params": {"flowId": clean_cid},
+            "headers": {"Referer": f"{BASE_PC}/p/{clean_cid}"},
+        },
+        # 移动端（container/getIndex）
+        {
+            "url": f"{BASE_MOBILE}/api/container/getIndex",
+            "params": {"containerid": f"100808{clean_cid}"},
+            "headers": {"Referer": f"{BASE_MOBILE}/p/{clean_cid}"},
+        },
+        {
+            "url": f"{BASE_MOBILE}/api/container/getIndex",
+            "params": {"containerid": clean_cid},
+            "headers": {"Referer": f"{BASE_MOBILE}/p/{clean_cid}"},
+        },
     ]
 
-    seen = set()
-    unique_cids = []
-    for c in cids_to_try:
-        if c not in seen:
-            seen.add(c)
-            unique_cids.append(c)
-
-    for cid in unique_cids:
+    for ep in endpoints:
         page = 1
         since_id = ""
         while len(posts) < count:
-            params = {"containerid": cid, "page": page, "count": 25}
+            params = dict(ep["params"])
+            if page > 1:
+                params["page"] = page
             if since_id:
                 params["since_id"] = since_id
             try:
+                # 合并自定义 headers
+                old_headers = dict(session.headers)
+                session.headers.update(ep.get("headers", {}))
                 payload = request_json(
-                    session, "GET", TOPICS_URL, params=params, cookies=cookies,
+                    session, "GET", ep["url"], params=params, cookies=cookies,
                     channel=channel, proxy=proxy, force=force,
                     allow_fallback=allow_fallback,
                 )
+                session.headers = old_headers
             except NetworkError as exc:
-                errors.append(f"{cid} p{page}: 网络错误 {exc}")
+                errors.append(f"{ep['url']} p{page}: 网络错误 {exc}")
                 break
             except RuntimeError as exc:
-                errors.append(f"{cid} p{page}: 请求失败 {exc}")
+                errors.append(f"{ep['url']} p{page}: 请求失败 {exc}")
                 break
             except Exception as exc:
-                errors.append(f"{cid} p{page}: 未知错误 {exc}")
+                errors.append(f"{ep['url']} p{page}: 未知错误 {exc}")
                 break
 
             # 检查响应状态
             ok_val = payload.get("ok")
             if ok_val == -100:
-                errors.append(f"{cid} p{page}: Cookie 过期")
+                errors.append(f"{ep['url']} p{page}: Cookie 过期")
                 break
-            # 兼容 ok: 1 (int) 和 ok: "1" (str)
             if ok_val != 1 and ok_val != "1":
-                log.warning(f"fetch_topic_posts: ok={ok_val!r}, cid={cid}, page={page}")
+                log.warning(f"fetch_topic_posts: ok={ok_val!r}, url={ep['url']}, page={page}")
                 break
 
             extracted = _extract_posts_from_payload(payload)
             if not extracted:
-                errors.append(f"{cid} p{page}: 无帖子数据")
+                errors.append(f"{ep['url']} p{page}: 无帖子数据")
                 break
 
             posts.extend(extracted)
@@ -196,11 +213,11 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
             else:
                 page += 1
                 if page > 3:
-                    break  # 最多翻 3 页
+                    break
             time.sleep(0.3)
 
         if posts:
-            break  # 有数据了
+            break
 
     # Deduplicate by mid
     seen_mids = set()
