@@ -69,12 +69,14 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
     # ⚠️ 不要用 vtype=12，那是精华/热门过滤，会漏掉普通帖子
     # vtype=61 是时序最新，省略 vtype 则默认按时间排序
     cids_to_try = [
+        f"{clean_cid}_-_sort_time",  # 时序排序（用户指定）
         clean_cid,                    # 原始格式，最常用
         f"{clean_cid}_-_new",        # new posts (chronological)
         f"{clean_cid}_-_all",        # all posts
         f"100808{clean_cid}",       # 100808 前缀
         f"100808{clean_cid}_-_all", # 100808 前缀 + _all
         f"100808{clean_cid}_-_hot", # 100808 前缀 + _hot
+        f"100808{clean_cid}_-_sort_time", # 100808 前缀 + 时序排序
     ]
     
     seen = set()
