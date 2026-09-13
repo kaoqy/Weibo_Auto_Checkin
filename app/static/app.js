@@ -1078,8 +1078,8 @@ async function openTopicDetail(topicId, el, forceRefresh = false) {
   currentTopicId = topicId;
   
   // 从 data-name 属性获取名称
-  const nameFromAttr = el ? el.getAttribute('data-name') : '';
-  const cached = (topicsCache || []).find(t => t.topic_id === topicId);
+  var nameFromAttr = el ? el.getAttribute('data-name') : '';
+  var cached = (topicsCache || []).find(function(t) { return t.topic_id === topicId; });
   currentTopicName = nameFromAttr || (cached ? cached.name : topicId);
 
   // 高亮当前选中
@@ -1088,22 +1088,28 @@ async function openTopicDetail(topicId, el, forceRefresh = false) {
   });
 
   $('#topicDetailTitle').textContent = currentTopicName;
-  const topicDesc = (cached && cached.description) ? esc(cached.description) : '';
-  const topicMembers = (cached && cached.member_count) ? `👥 ${cached.member_count}` : '';
-  $('#topicDetailHeader').innerHTML = `
-    <h3>${esc(currentTopicName)}</h3>
-    <div class="meta">ID: ${esc(topicId)} · <a href="https://weibo.com/page/${esc(topicId)}" target="_blank" rel="noopener">在微博打开 ↗</a>${topicMembers ? ' · ' + topicMembers : ''}</div>
-    ${topicDesc ? '<div class="topic-desc">' + topicDesc + '</div>' : ''}
-    <div class="topic-toolbar">
-      <input type="text" class="topic-search" id="topicSearch" placeholder="🔍 搜索帖子..." oninput="filterPosts()" />
-      <button class="btn btn-ghost btn-sm" id="btn-push-tg" title="推送 AI 总结到 TG">📮 推送到 TG</button>
-    </div>
-  `;
+  var topicDesc = (cached && cached.description) ? esc(cached.description) : '';
+  var topicMembers = (cached && cached.member_count) ? ('👥 ' + cached.member_count) : '';
+  var headerHtml = '<h3>' + esc(currentTopicName) + '</h3>';
+  headerHtml += '<div class="meta">ID: ' + esc(topicId) + ' · <a href="https://weibo.com/page/' + esc(topicId) + '" target="_blank" rel="noopener">在微博打开 ↗</a>';
+  if (topicMembers) headerHtml += ' · ' + topicMembers;
+  headerHtml += '</div>';
+  if (topicDesc) headerHtml += '<div class="topic-desc">' + topicDesc + '</div>';
+  headerHtml += '<div class="topic-toolbar">';
+  headerHtml += '<input type="text" class="topic-search" id="topicSearch" placeholder="🔍 搜索帖子..." />';
+  headerHtml += '<button class="btn btn-ghost btn-sm" id="btn-push-tg" title="推送 AI 总结到 TG">📮 推送到 TG</button>';
+  headerHtml += '</div>';
+  $('#topicDetailHeader').innerHTML = headerHtml;
   $('#topicPosts').innerHTML = '<div class="loading-progress"><div class="loading-bar"><div class="loading-bar-inner" style="width:60%"></div></div><div class="loading-text">正在加载帖子…</div></div>';
   $('#aiSummaryContent').innerHTML = '<div class="ai-placeholder"><span class="ai-placeholder-icon">✨</span><p>点击「生成总结」按钮，AI 将自动分析超话帖子内容</p><p class="hint">也可输入问题进行个性化问答</p></div>';
   currentPosts = [];
 
   // 绑定动态按钮事件（必须在 innerHTML 设置后）
+  var searchInput = $('#topicSearch');
+  if (searchInput) {
+    searchInput.oninput = function() { filterPosts(); };
+    searchInput.onkeydown = function(e) { if (e.key === 'Escape') { this.value = ''; filterPosts(); } };
+  }
   var pushTgBtn = $('#btn-push-tg');
   if (pushTgBtn) {
     pushTgBtn.onclick = function() {
@@ -1219,8 +1225,12 @@ function toggleExpand(id) {
   var el = document.getElementById(id);
   if (!el) return;
   el.classList.toggle('expanded');
+  // Find the expand button (next sibling or parent's next sibling)
   var btn = el.nextElementSibling;
-  if (btn && btn.classList.contains('topic-post-expand')) {
+  if (!btn || !btn.classList.contains('topic-post-expand')) {
+    btn = el.parentElement.querySelector('.topic-post-expand');
+  }
+  if (btn) {
     btn.textContent = el.classList.contains('expanded') ? '收起' : '展开';
   }
 }
@@ -1230,7 +1240,7 @@ function openLightbox(url) {
   lightboxUrl = url;
   var lb = document.createElement('div');
   lb.className = 'lightbox';
-  var imgUrl = url.replace(/'/g, "%27");
+  var imgUrl = url.replace(/'/g, "\'");
   lb.innerHTML = '<div class="lightbox-img" style="background-image:url(\'' + imgUrl + '\')" onclick="closeLightbox()"></div><button class="lightbox-close" onclick="closeLightbox()">×</button>';
   document.body.appendChild(lb);
   setTimeout(function() { lb.classList.add('show'); }, 10);
@@ -1244,7 +1254,7 @@ document.addEventListener('keydown', function(e) { if (e.key === 'Escape') close
 
 // TG 推送按钮事件已在 openTopicDetail 内绑定
 
-// AI 总结 / Q&A
+// AI 总结 / Q&A（仅流式输出）
 $('#btn-ai-summary').onclick = async () => {
   if (!currentPosts || !currentPosts.length) {
     toast('请先选择超话并拉取帖子', 'warn');
@@ -1252,107 +1262,88 @@ $('#btn-ai-summary').onclick = async () => {
   }
   const box = $('#aiSummaryContent');
   const question = $('#ai-question')?.value?.trim() || '';
-  const reasoning = $('#ai-reasoning')?.checked || false;
-  const stream = $('#ai-stream')?.checked || false;
   const text = currentPosts.map((p, i) => `[${i+1}] ${p.user?.screen_name || '未知'}: ${p.text || ''}`).join('\n');
 
   box.innerHTML = '<div class="ai-summary-loading"><span class="qr-spinner" style="width:16px;height:16px;border-width:2px"></span> AI 正在思考…</div>';
 
   try {
-    if (stream) {
-      // Streaming mode: fetch + ReadableStream
-      const resp = await fetch('/api/topics/ai_summary', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, topic_name: currentTopicName, question, reasoning, stream: true }),
-      });
-      if (!resp.ok) {
-        const err = await resp.json();
-        box.innerHTML = `<div class="ai-summary-error">❌ ${esc(err.error || '请求失败')}</div>`;
-        return;
-      }
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let accumulated = '';
-      let reasoningText = '';
-      box.innerHTML = '';
-      const reasoningDetails = document.createElement('details');
-      reasoningDetails.className = 'ai-reasoning';
-      reasoningDetails.innerHTML = '<summary>💭 推理过程</summary><pre></pre>';
-      const reasoningPre = reasoningDetails.querySelector('pre');
-      const summaryDiv = document.createElement('div');
-      summaryDiv.className = 'ai-summary-text';
-      box.appendChild(reasoningDetails);
-      box.appendChild(summaryDiv);
-      reasoningDetails.hidden = true;
+    const resp = await fetch('/api/topics/ai_summary', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, topic_name: currentTopicName, question, stream: true }),
+    });
 
-      var done = false;
-      while (!done) {
-        var { value: chunk, done: d } = await reader.read();
-        done = d;
-        if (chunk) {
-          var textChunk = decoder.decode(chunk, { stream: true });
-          var lines = textChunk.split('\n');
-          for (var i = 0; i < lines.length; i++) {
-            var line = lines[i];
-            if (line.indexOf('data: ') === 0) {
-              try {
-                var jsonStr = line.slice(6);
-                if (jsonStr === '[DONE]') { done = true; break; }
-                var chunkData = JSON.parse(jsonStr);
-                if (chunkData.finish) {
-                  done = true;
-                  if (chunkData.model) {
-                    var hint = document.createElement('div');
-                    hint.className = 'ai-model-hint';
-                    hint.textContent = '模型: ' + chunkData.model;
-                    box.appendChild(hint);
-                  }
-                } else if (chunkData.error) {
-                  summaryDiv.innerHTML += '<span style="color:var(--danger)">' + esc(chunkData.error) + '</span>';
-                } else {
-                  if (chunkData.reasoning) {
-                    reasoningText += chunkData.reasoning;
-                    reasoningPre.textContent = reasoningText;
-                    reasoningDetails.hidden = false;
-                  }
-                  if (chunkData.text) {
-                    accumulated += chunkData.text;
-                    summaryDiv.innerHTML = formatAiSummary(accumulated);
-                  }
-                }
-              } catch (e) { /* ignore parse errors */ }
+    if (!resp.ok) {
+      const err = await resp.json();
+      box.innerHTML = '<div class="ai-summary-error">❌ ' + esc(err.error || '请求失败') + '</div>';
+      return;
+    }
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let accumulated = '';
+    let buffer = '';
+    box.innerHTML = '';
+    const summaryDiv = document.createElement('div');
+    summaryDiv.className = 'ai-summary-text';
+    box.appendChild(summaryDiv);
+
+    let done = false;
+    while (!done) {
+      const { value: chunk, done: d } = await reader.read();
+      done = d;
+
+      if (chunk) {
+        buffer += decoder.decode(chunk, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (let line of lines) {
+          line = line.trim();
+          if (!line || !line.startsWith('data: ')) continue;
+
+          const jsonStr = line.slice(6).trim();
+          if (jsonStr === '[DONE]') { done = true; break; }
+
+          try {
+            const chunkData = JSON.parse(jsonStr);
+            if (chunkData.finish) {
+              done = true;
+              if (chunkData.model) {
+                const hint = document.createElement('div');
+                hint.className = 'ai-model-hint';
+                hint.textContent = '模型: ' + chunkData.model;
+                box.appendChild(hint);
+              }
+            } else if (chunkData.error) {
+              summaryDiv.innerHTML += '<span style="color:var(--danger)">' + esc(chunkData.error) + '</span>';
+            } else if (chunkData.text) {
+              accumulated += chunkData.text;
+              summaryDiv.innerHTML = formatAiSummary(accumulated);
             }
+          } catch (e) {
+            // JSON 不完整，跳过等待下一个 chunk
           }
         }
       }
-    } else {
-      // Non-streaming mode
-      var r = await api.post('/api/topics/ai_summary', { text: text, topic_name: currentTopicName, question: question, reasoning: reasoning });
-      if (r.ok) {
-        box.innerHTML = '';
-        if (r.reasoning) {
-          var rd = document.createElement('details');
-          rd.className = 'ai-reasoning';
-          rd.innerHTML = '<summary>💭 推理过程</summary><pre>' + esc(r.reasoning) + '</pre>';
-          box.appendChild(rd);
-        }
-        var sd = document.createElement('div');
-        sd.className = 'ai-summary-text';
-        sd.innerHTML = formatAiSummary(r.summary);
-        box.appendChild(sd);
-        if (r.model) {
-          var mh = document.createElement('div');
-          mh.className = 'ai-model-hint';
-          mh.textContent = '模型: ' + esc(r.model);
-          box.appendChild(mh);
-        }
-      } else {
-        box.innerHTML = '<div class="ai-summary-error">❌ ' + esc(r.error || '总结失败') + '</div>';
-      }
     }
+
+    // 处理剩余的 buffer
+    if (buffer.trim().startsWith('data: ')) {
+      try {
+        const jsonStr = buffer.trim().slice(6).trim();
+        if (jsonStr !== '[DONE]') {
+          const chunkData = JSON.parse(jsonStr);
+          if (chunkData.text) {
+            accumulated += chunkData.text;
+            summaryDiv.innerHTML = formatAiSummary(accumulated);
+          }
+        }
+      } catch (e) { /* ignore */ }
+    }
+
   } catch(e) {
-    box.innerHTML = `<div class="ai-summary-error">❌ ${esc(e.message || '请求失败')}</div>`;
+    box.innerHTML = '<div class="ai-summary-error">❌ ' + esc(e.message || '请求失败') + '</div>';
   }
 };
 
@@ -1360,13 +1351,22 @@ $('#btn-ai-summary').onclick = async () => {
 function formatAiSummary(text) {
   if (!text) return '';
   var html = esc(text);
-  // Bold
+  // Bold (handle incomplete ** during streaming)
   html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  // If there's an unclosed **, don't render it
+  var boldCount = (html.match(/\*\*/g) || []).length;
+  if (boldCount % 2 !== 0) {
+    // Remove the last unclosed **
+    var lastIndex = html.lastIndexOf('**');
+    if (lastIndex >= 0) {
+      html = html.substring(0, lastIndex) + html.substring(lastIndex + 2);
+    }
+  }
   // Headers (process ### before ##)
   html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
   html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
   // List items: wrap consecutive <li> in <ul>
-  html = html.replace(/((?:^<li>.*<\/li>$\n?)+)/gm, function(match) {
+  html = html.replace(/(^<li>.*<\/li>(\n|$))+/gm, function(match) {
     return '<ul>' + match.replace(/^\n|\n$/g, '') + '</ul>';
   });
   html = html.replace(/^- (.+)$/gm, '<li>$1</li>');

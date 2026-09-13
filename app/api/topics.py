@@ -548,14 +548,53 @@ def ai_summary(data: AISummaryIn, user=Depends(auth.require_admin)):
                     stream=True,
                 )
                 resp_stream.raise_for_status()
-                for line in resp_stream.iter_lines(decode_unicode=True):
-                    if line is None:
+                buffer = b""
+                for chunk in resp_stream.iter_content(chunk_size=1024):
+                    if not chunk:
                         continue
-                    s = line.strip()
-                    if s.startswith("data: "):
-                        chunk = s[6:]
-                        if chunk == "[DONE]":
-                            break
+                    buffer += chunk
+                    while b"\n\n" in buffer:
+                        message, buffer = buffer.split(b"\n\n", 1)
+                        for msg_line in message.split(b"\n"):
+                            msg_line = msg_line.strip()
+                            if not msg_line:
+                                continue
+                            try:
+                                line_str = msg_line.decode("utf-8")
+                            except UnicodeDecodeError:
+                                continue
+                            if line_str.startswith("data: "):
+                                data_str = line_str[6:].strip()
+                                if data_str == "[DONE]":
+                                    break
+                                try:
+                                    chunk_data = _json.loads(data_str)
+                                    choice = chunk_data.get("choices", [{}])[0]
+                                    delta = choice.get("delta", {})
+                                    text_piece = delta.get("content", "") or ""
+                                    if text_piece:
+                                        out = {"text": text_piece}
+                                        yield f"data: {_json.dumps(out, ensure_ascii=False)}\n\n"
+                                    if choice.get("finish_reason"):
+                                        out_done = {"finish": True}
+                                        try:
+                                            usage = chunk_data.get("usage")
+                                            if usage:
+                                                out_done["usage"] = usage
+                                            mdl = chunk_data.get("model")
+                                            if mdl:
+                                                out_done["model"] = mdl
+                                        except Exception:
+                                            pass
+                                        yield f"data: {_json.dumps(out_done, ensure_ascii=False)}\n\n"
+                                        break
+                                except _json.JSONDecodeError:
+                                    buffer = msg_line + b"\n" + buffer
+                                    break
+                                except Exception as exc:
+                                    out_err = {"error": str(exc)}
+                                    yield f"data: {_json.dumps(out_err, ensure_ascii=False)}\n\n"
+                                    break
                         try:
                             chunk_data = _json.loads(chunk)
                             choice = chunk_data["choices"][0]
@@ -600,15 +639,12 @@ def ai_summary(data: AISummaryIn, user=Depends(auth.require_admin)):
             result = resp.json()
             msg = result["choices"][0]["message"]
             summary = msg.get("content", "").strip()
-            reasoning_content = msg.get("reasoning_content", "") or ""
             out = {
                 "ok": True,
                 "summary": summary,
                 "model": result.get("model", model),
                 "qa_mode": is_qa,
             }
-            if reasoning_content:
-                out["reasoning"] = reasoning_content
             return out
     except requests.exceptions.Timeout:
         return {"ok": False, "summary": "", "error": "请求超时，请稍后重试"}

@@ -258,7 +258,7 @@ def test_ai_summary_qa_mode(client, monkeypatch):
 
 
 def test_ai_summary_reasoning(client, monkeypatch):
-    """reasoning=true 时，payload 应包含 reasoning_effort，且返回 reasoning_content。"""
+    """测试 AI 总结功能（推理功能已移除）。"""
     db.set_settings({
         "ai_base_url": "https://api.openai.com/v1",
         "ai_api_key": "sk-test",
@@ -272,7 +272,6 @@ def test_ai_summary_reasoning(client, monkeypatch):
                 "choices": [{
                     "message": {
                         "content": "推理总结",
-                        "reasoning_content": "这是推理过程",
                     }
                 }]
             }
@@ -283,12 +282,11 @@ def test_ai_summary_reasoning(client, monkeypatch):
     r = client.post("/api/topics/ai_summary", json={
         "text": "帖子内容",
         "topic_name": "测试超话",
-        "reasoning": True,
     })
     assert r.status_code == 200
     body = r.json()
     assert body["ok"] is True
-    assert body.get("reasoning") == "这是推理过程"
+    assert body["summary"] == "推理总结"
     db._local.conn = None
 
 
@@ -313,8 +311,11 @@ def test_ai_summary_streaming(client, monkeypatch):
         status_code = 200
         def raise_for_status(self):
             pass
-        def iter_lines(self, decode_unicode=True):
-            return iter(fake_lines)
+        def iter_content(self, chunk_size=1024):
+            # Simulate SSE format with double newlines
+            for line in fake_lines:
+                yield line.encode("utf-8") + b"\n"
+            yield b"\n"
 
     def fake_post(url, **kwargs):
         json_data = kwargs.get("json", {})
