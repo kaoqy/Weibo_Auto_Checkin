@@ -51,6 +51,7 @@ _RETRYABLE = (
 # ========================= 超话页面（v1.3.0） =========================
 
 TOPIC_POSTS_URL = BASE + "/api/container/getIndex"
+TOPIC_PAGE_URL = BASE + "/ajax_proxy/chaohua/page"
 
 
 def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
@@ -89,13 +90,21 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
     for cid in unique_cids:
         page = 1
         since_id = ""
+        # _sort_time 用 /ajax_proxy/chaohua/page?flowId=... 端点
+        use_flow = "_-_" in cid
+        req_url = TOPIC_PAGE_URL if use_flow else TOPIC_POSTS_URL
         while len(posts) < count:
-            params = {"containerid": cid, "page": page, "count": 25}
-            if since_id:
-                params["since_id"] = since_id
+            if use_flow:
+                params = {"flowId": cid}
+                if page > 1 and since_id:
+                    params["since_id"] = since_id
+            else:
+                params = {"containerid": cid, "page": page, "count": 25}
+                if since_id:
+                    params["since_id"] = since_id
             try:
                 payload = request_json(
-                    session, "GET", TOPIC_POSTS_URL, params=params, cookies=cookies,
+                    session, "GET", req_url, params=params, cookies=cookies,
                     channel=channel, proxy=proxy, force=force,
                     allow_fallback=allow_fallback,
                 )
