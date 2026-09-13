@@ -64,14 +64,26 @@ def _normalize_mblog(mblog_raw):
     user = mblog_raw.get("user") or {}
     # pics: pic_ids (list of str) or pic_infos (dict)
     pics = []
-    if mblog_raw.get("pic_ids"):
-        pics = mblog_raw["pic_ids"]
-    elif mblog_raw.get("pic_infos"):
-        for pic_info in mblog_raw["pic_infos"].values():
+    pic_infos = mblog_raw.get("pic_infos") or {}
+    if pic_infos:
+        for pic_info in pic_infos.values():
             if isinstance(pic_info, dict):
-                url = pic_info.get("original", {}).get("url") or pic_info.get("large", {}).get("url") or pic_info.get("url", "")
-                if url:
-                    pics.append(url)
+                # original can be a string URL or a dict with url key
+                original = pic_info.get("original")
+                if isinstance(original, str) and original:
+                    pics.append(original)
+                elif isinstance(original, dict) and original.get("url"):
+                    pics.append(original["url"])
+                else:
+                    large = pic_info.get("large")
+                    if isinstance(large, str) and large:
+                        pics.append(large)
+                    elif isinstance(large, dict) and large.get("url"):
+                        pics.append(large["url"])
+    elif mblog_raw.get("pic_ids"):
+        # pic_ids are photo IDs, convert to URLs
+        for pic_id in mblog_raw["pic_ids"]:
+            pics.append(f"https://wx2.sinaimg.cn/orj1080/{pic_id}.jpg")
     return {
         "mid": mblog_raw.get("idstr") or str(mblog_raw.get("id", "")),
         "text": text,
