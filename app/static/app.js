@@ -1137,29 +1137,65 @@ function linkifyText(text) {
 function renderPosts(posts) {
   const box = $('#topicPosts');
   if (!box) return;
-  box.innerHTML = posts.map(p => {
+  box.innerHTML = posts.map((p, idx) => {
     const avatar = esc(p.user?.profile_image_url || '/default-avatar.svg');
     const userName = esc(p.user?.screen_name || '未知');
     const time = esc(p.created_at || '');
+    const mid = esc(p.mid || '');
     const text = linkifyText(esc(p.text || ''));
-    const pics = (p.pics || []).map(url => '<img src="' + esc(url) + '" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display=\'none\'" />').join('');
-    const picsHtml = pics ? `<div class="topic-post-pics">${pics}</div>` : '';
-    return `<div class="topic-post">
-      <div class="topic-post-header">
-        <img class="topic-post-avatar" src="${avatar}" alt="" onerror="this.onerror=null;this.src=\'/default-avatar.svg\'" />
-        <span class="topic-post-user">${userName}</span>
-        <span class="topic-post-time">${time}</span>
-      </div>
-      <div class="topic-post-text">${text}</div>
-      ${picsHtml}
-      <div class="topic-post-actions">
-        <span>🔁 ${p.reposts_count || 0}</span>
-        <span>💬 ${p.comments_count || 0}</span>
-        <span>❤️ ${p.attitudes_count || 0}</span>
-      </div>
-    </div>`;
+    const isLong = (p.text || '').length > 200;
+    const textId = 'post-text-' + idx;
+    const pics = (p.pics || []).map((url) => '<img src="' + esc(url) + '" alt="" loading="lazy" referrerpolicy="no-referrer" onclick="openLightbox(\'' + url + '\')" onerror="this.style.display=\'none\'" />').join('');
+    const picsHtml = pics ? '<div class="topic-post-pics">' + pics + '</div>' : '';
+    const source = esc(p.source || '');
+    const sourceHtml = source ? '<span class="topic-post-source">来自 ' + source + '</span>' : '';
+    return '<div class="topic-post">' +
+      '<div class="topic-post-header">' +
+        '<img class="topic-post-avatar" src="' + avatar + '" alt="" onerror="this.onerror=null;this.src=\'/default-avatar.svg\'" />' +
+        '<div class="topic-post-user-info">' +
+          '<span class="topic-post-user">' + userName + '</span>' +
+          sourceHtml +
+        '</div>' +
+        '<span class="topic-post-time">' + time + '</span>' +
+      '</div>' +
+      '<div class="topic-post-text" id="' + textId + '">' + text + '</div>' +
+      (isLong ? '<button class="btn btn-ghost btn-sm topic-post-expand" onclick="toggleExpand(\'' + textId + '\')">展开</button>' : '') +
+      picsHtml +
+      '<div class="topic-post-actions">' +
+        '<span>🔁 ' + (p.reposts_count || 0) + '</span>' +
+        '<span>💬 ' + (p.comments_count || 0) + '</span>' +
+        '<span>❤️ ' + (p.attitudes_count || 0) + '</span>' +
+        (mid ? '<a href="https://weibo.com/detail/' + mid + '" target="_blank" rel="noopener" class="topic-post-link">原文 ↗</a>' : '') +
+      '</div>' +
+    '</div>';
   }).join('');
 }
+
+function toggleExpand(id) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  el.classList.toggle('expanded');
+  var btn = el.nextElementSibling;
+  if (btn && btn.classList.contains('topic-post-expand')) {
+    btn.textContent = el.classList.contains('expanded') ? '收起' : '展开';
+  }
+}
+
+var lightboxUrl = '';
+function openLightbox(url) {
+  lightboxUrl = url;
+  var lb = document.createElement('div');
+  lb.className = 'lightbox';
+  lb.innerHTML = '<div class="lightbox-img" style="background-image:url(\'' + url + '\')" onclick="closeLightbox()"></div><button class="lightbox-close" onclick="closeLightbox()">×</button>';
+  document.body.appendChild(lb);
+  setTimeout(function() { lb.classList.add('show'); }, 10);
+}
+function closeLightbox() {
+  var lb = document.querySelector('.lightbox');
+  if (lb) { lb.classList.remove('show'); setTimeout(function() { lb.remove(); }, 200); }
+}
+document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeLightbox(); });
+
 
 // AI 总结 / Q&A
 $('#btn-ai-summary').onclick = async () => {
