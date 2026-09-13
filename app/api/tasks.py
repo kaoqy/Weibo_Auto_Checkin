@@ -156,7 +156,7 @@ def update_settings(values: dict, user: dict = Depends(auth.require_admin)):
         "checkin_delay_min", "checkin_delay_max",
         "log_retention_days",
         # v1.0.0 AI 总结
-        "ai_base_url", "ai_api_key", "ai_model", "ai_topic_prompt",
+        "ai_base_url", "ai_api_key", "ai_model",
     }
     updates = {k: v for k, v in values.items() if k in known}
     database.set_settings(updates)

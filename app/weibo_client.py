@@ -91,7 +91,7 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
         page = 1
         since_id = ""
         # _sort_time 用 /ajax_proxy/chaohua/page?flowId=... 端点
-        use_flow = "_-_" in cid
+        use_flow = cid.endswith("_-_sort_time")
         req_url = TOPIC_PAGE_URL if use_flow else TOPIC_POSTS_URL
         while len(posts) < count:
             if use_flow:

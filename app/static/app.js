@@ -876,7 +876,6 @@ async function loadSettings() {
     $('#s-ai_base_url').value = settingsCache.ai_base_url||'';
     $('#s-ai_api_key').value = settingsCache.ai_api_key||'';
     $('#s-ai_model').value = settingsCache.ai_model||'gpt-4o-mini';
-    $('#s-ai_topic_prompt').value = settingsCache.ai_topic_prompt||'你是一个超话内容总结助手。请对以下超话帖子内容进行简洁总结（200字以内），包括：1. 主要讨论话题 2. 热门帖子要点 3. 整体氛围。只输出总结文字，不要任何前缀或格式标记。';
   } catch(e){ toast('加载设置失败','err'); }
 }
 
@@ -906,7 +905,6 @@ function collectSettings() {
     ai_base_url: val('s-ai_base_url').trim(),
     ai_api_key: val('s-ai_api_key').trim(),
     ai_model: val('s-ai_model').trim() || 'gpt-4o-mini',
-    ai_topic_prompt: val('s-ai_topic_prompt').trim(),
   };
 }
 $('#btn-save-all').onclick = async () => {
