@@ -407,6 +407,78 @@ input[type="checkbox"]{accent-color:var(--accent);width:15px;height:15px;cursor:
 }
 
 
+/* ===== 三列布局 ===== */
+.topics-3col {
+  display: grid;
+  grid-template-columns: 240px 1fr 280px;
+  gap: 12px;
+  align-items: stretch;
+  height: calc(100vh - 100px);
+  margin-bottom: 0;
+  min-height: 0;
+}
+
+.topics-col {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  height: 100%;
+}
+
+.topics-col .card-head {
+  flex-shrink: 0;
+  padding: 14px 16px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.topics-col .card-head h2 {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.topics-col > .topics-list,
+.topics-col > .topic-posts,
+.topics-col > .ai-panel {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  padding: 8px;
+}
+
+.topics-col > .topic-detail-header {
+  flex-shrink: 0;
+}
+
+.topics-col > .topics-filter {
+  flex-shrink: 0;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+}
+
+/* ===== 中列帖子容器 ===== */
+.topics-col-mid .card {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.topics-col-mid .topic-detail-header {
+  flex-shrink: 0;
+}
+
+.topics-col-mid .topic-posts {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
 /* ===== 超话详情头部 ===== */
 .topic-detail-header {
   padding: 14px 16px;
@@ -499,14 +571,52 @@ input[type="checkbox"]{accent-color:var(--accent);width:15px;height:15px;cursor:
 
 .topic-post-expand { margin-top: 6px; }
 
-.topic-post-pics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-top: 8px; }
-.topic-post-pics img { width: 100%; aspect-ratio: 1; border-radius: 6px; object-fit: cover; cursor: pointer; transition: transform .2s; }
-.topic-post-pics img:hover { transform: scale(1.05); }
+.topic-post-pics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  margin-top: 8px;
+  border-radius: 6px;
+  overflow: hidden;
+  align-items: start;
+}
+.topic-post-pics img {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 6px;
+  object-fit: cover;
+  cursor: pointer;
+  transition: transform .2s;
+  display: block;
+  background: var(--surface-2);
+}
+.topic-post-pics img:hover { transform: scale(1.03); }
 
 .topic-post-actions { display: flex; gap: 12px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 11px; color: var(--muted); }
 .topic-post-actions span { display: flex; align-items: center; gap: 3px; }
 .topic-post-link { color: var(--accent); text-decoration: none; margin-left: auto; font-weight: 600; }
 .topic-post-link:hover { text-decoration: underline; }
+
+/* ===== 右列 AI 面板 ===== */
+.topics-col-right .card {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.topics-col-right .ai-panel {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.topics-col-right .ai-summary-content {
+  flex: 1;
+  overflow-y: auto;
+}
 
 /* ===== Lightbox ===== */
 .lightbox { position: fixed; inset: 0; background: rgba(0,0,0,.85); z-index: 300; display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity .2s; backdrop-filter: blur(4px); }
@@ -516,14 +626,20 @@ input[type="checkbox"]{accent-color:var(--accent);width:15px;height:15px;cursor:
 .lightbox-close:hover { opacity: 1; }
 
 /* ===== 响应式 ===== */
-@media (max-width: 1200px) { .topics-3col { grid-template-columns: 200px 1fr 240px; } }
-@media (max-width: 900px) { .topics-3col { grid-template-columns: 1fr; height: auto; } .topics-col { max-height: 50vh; } }
-.topic-post-text { font-size: 12px; }
-.topic-post-header { gap: 8px; }
-.topic-post-avatar { width: 32px; height: 32px; }
-.topic-post-source { font-size: 10px; }
-.topic-post-time { font-size: 10px; }
-.topic-post-actions { gap: 8px; font-size: 10px; }
-.topic-post-pics { grid-template-columns: repeat(2, 1fr); }
-.lightbox-img { width: 95vmin; height: 95vmin; }
-@media (max-width: 900px) { .topic-post-pics { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 1200px) {
+  .topics-3col { grid-template-columns: 200px 1fr 240px; }
+}
+@media (max-width: 900px) {
+  .topics-3col { grid-template-columns: 1fr; height: auto; min-height: 60vh; }
+  .topics-col { max-height: 50vh; }
+  .topics-col-left { order: 1; }
+  .topics-col-mid { order: 2; }
+  .topics-col-right { order: 3; }
+}
+@media (max-width: 640px) {
+  .topic-post-pics { grid-template-columns: repeat(2, 1fr); }
+  .topic-toolbar { flex-wrap: wrap; }
+  .topic-search { width: 100%; }
+  #btn-push-tg { width: 100%; }
+  .lightbox-img { width: 95vmin; height: 95vmin; }
+}

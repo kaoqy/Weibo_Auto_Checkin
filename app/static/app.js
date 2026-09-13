@@ -1102,6 +1102,33 @@ async function openTopicDetail(topicId, el, forceRefresh = false) {
   $('#topicPosts').innerHTML = '<div class="loading-progress"><div class="loading-bar"><div class="loading-bar-inner" style="width:60%"></div></div><div class="loading-text">正在加载帖子…</div></div>';
   $('#aiSummaryContent').innerHTML = '<div class="ai-placeholder"><span class="ai-placeholder-icon">✨</span><p>点击「生成总结」按钮，AI 将自动分析超话帖子内容</p><p class="hint">也可输入问题进行个性化问答</p></div>';
   currentPosts = [];
+
+  // 绑定动态按钮事件（必须在 innerHTML 设置后）
+  var pushTgBtn = $('#btn-push-tg');
+  if (pushTgBtn) {
+    pushTgBtn.onclick = function() {
+      if (!currentPosts || !currentPosts.length) { toast('没有帖子数据', 'warn'); return; }
+      var text = currentPosts.map(function(p, i) { return '[' + (i+1) + '] ' + (p.user?.screen_name || '未知') + ': ' + (p.text || ''); }).join('\n');
+      var question = ($('#ai-question') || {}).value || '';
+      toast('推送中…');
+      api.post('/api/topics/push_tg', { text: text, topic_name: currentTopicName, question: question }).then(function(r) {
+        toast(r.ok ? '✅ 已推送到 TG' : ('❌ ' + (r.error || '推送失败')), r.ok ? 'good' : 'err');
+      }).catch(function() { toast('推送失败', 'err'); });
+    };
+  }
+  var topicRefreshBtn = $('#btn-topic-refresh');
+  if (topicRefreshBtn) {
+    topicRefreshBtn.onclick = function() {
+      if (!currentTopicId) { toast('请先选择超话', 'warn'); return; }
+      if (isLoadingPosts) return;
+      isLoadingPosts = true;
+      var el = document.querySelector('.topic-list-item[data-id="' + currentTopicId + '"]');
+      openTopicDetail(currentTopicId, el, true).then(function() {
+        toast('已刷新', 'good');
+        isLoadingPosts = false;
+      }).catch(function() { isLoadingPosts = false; });
+    };
+  }
   try {
     const url = '/api/topics/posts/' + encodeURIComponent(topicId) + '?count=20' + (forceRefresh ? '&force=true' : '');
     const data = await api.get(url);
@@ -1203,7 +1230,8 @@ function openLightbox(url) {
   lightboxUrl = url;
   var lb = document.createElement('div');
   lb.className = 'lightbox';
-  lb.innerHTML = '<div class="lightbox-img" style="background-image:url(\'' + url + '\')" onclick="closeLightbox()"></div><button class="lightbox-close" onclick="closeLightbox()">×</button>';
+  var imgUrl = url.replace(/'/g, "%27");
+  lb.innerHTML = '<div class="lightbox-img" style="background-image:url(\'' + imgUrl + '\')" onclick="closeLightbox()"></div><button class="lightbox-close" onclick="closeLightbox()">×</button>';
   document.body.appendChild(lb);
   setTimeout(function() { lb.classList.add('show'); }, 10);
 }
@@ -1214,25 +1242,7 @@ function closeLightbox() {
 document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeLightbox(); });
 
 
-// TG 推送
-$('#btn-push-tg').onclick = async () => {
-  if (!currentPosts || !currentPosts.length) { toast('没有帖子数据', 'warn'); return; }
-  const text = currentPosts.map((p, i) => '[' + (i+1) + '] ' + (p.user?.screen_name || '未知') + ': ' + (p.text || '')).join('\n');
-  const question = $('#ai-question')?.value?.trim() || '';
-  toast('推送中…');
-  try {
-    const r = await api.post('/api/topics/push_tg', {
-      text, topic_name: currentTopicName, question,
-    });
-    if (r.ok) {
-      toast('✅ 已推送到 TG', 'good');
-    } else {
-      toast('❌ ' + (r.error || '推送失败'), 'err');
-    }
-  } catch(e) {
-    toast('推送失败', 'err');
-  }
-};
+// TG 推送按钮事件已在 openTopicDetail 内绑定
 
 // AI 总结 / Q&A
 $('#btn-ai-summary').onclick = async () => {
@@ -1355,19 +1365,7 @@ function formatAiSummary(text) {
   return html;
 }
 
-// 刷新帖子（手动强制刷新）
-$('#btn-topic-refresh').onclick = async () => {
-  if (!currentTopicId) { toast('请先选择超话', 'warn'); return; }
-  if (isLoadingPosts) return;
-  isLoadingPosts = true;
-  try {
-    const el = document.querySelector(`.topic-list-item[data-id="${currentTopicId}"]`);
-    await openTopicDetail(currentTopicId, el, true);
-    toast('已刷新', 'good');
-  } finally {
-    isLoadingPosts = false;
-  }
-};
+// 刷新帖子事件已在 openTopicDetail 内绑定
 
 // 更新超话列表 - 刷新按钮（获取最新数据）
 $('#btn-topics-refresh').onclick = async () => {
