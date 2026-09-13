@@ -51,7 +51,61 @@ _RETRYABLE = (
 # ========================= 超话页面（v1.3.0） =========================
 
 TOPIC_POSTS_URL = BASE + "/api/container/getIndex"
-TOPIC_PAGE_URL = BASE + "/ajax_proxy/chaohua/page"
+# 时序排序走微博 PC 端代理接口（注意域名是 weibo.com 不是 m.weibo.cn）
+TOPIC_PAGE_URL = "https://weibo.com/ajax_proxy/chaohua/page"
+
+
+def _parse_mblog_card(item):
+    """从单个 card_item 解析 mblog，返回标准化 dict 或 None。"""
+    if item.get("card_type") != "9":
+        return None
+    mblog = item.get("mblog") or {}
+    if not mblog:
+        return None
+    import re as _re
+    text = mblog.get("text", "")
+    text = _re.sub(r'<[^>]+>', '', text).strip()
+    user = mblog.get("user") or {}
+    return {
+        "mid": mblog.get("idstr") or str(mblog.get("id", "")),
+        "text": text,
+        "created_at": mblog.get("created_at", ""),
+        "source": mblog.get("source", ""),
+        "reposts_count": mblog.get("reposts_count", 0),
+        "comments_count": mblog.get("comments_count", 0),
+        "attitudes_count": mblog.get("attitudes_count", 0),
+        "pics": [p.get("url", "") for p in (mblog.get("pics") or [])],
+        "user": {
+            "id": user.get("idstr") or str(user.get("id", "")),
+            "screen_name": user.get("screen_name", ""),
+            "profile_image_url": user.get("profile_image_url", "").replace("http://", "https://"),
+        },
+    }
+
+
+def _extract_posts_from_payload(payload):
+    """从 API 响应中提取帖子列表，兼容两种端点格式。"""
+    data = payload.get("data") or {}
+    # 格式 1: cards[].card_group[].mblog (标准 container 接口)
+    cards = data.get("cards") or []
+    results = []
+    for card in cards:
+        card_group = card.get("card_group") or []
+        for item in card_group:
+            parsed = _parse_mblog_card(item)
+            if parsed:
+                results.append(parsed)
+    # 格式 2: data.list[] 直接是 mblog 列表（chaohua/page 接口）
+    if not results:
+        direct_list = data.get("list") or data.get("items") or []
+        for entry in direct_list:
+            mblog = entry.get("mblog") or entry
+            if not mblog.get("id"):
+                continue
+            parsed = _parse_mblog_card({"card_type": "9", "mblog": mblog})
+            if parsed:
+                results.append(parsed)
+    return results
 
 
 def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
@@ -67,8 +121,6 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
     clean_cid = containerid.split("_-_")[0] if "_-_" in containerid else containerid
 
     # 按优先级尝试不同的容器ID格式（最新内容优先）
-    # ⚠️ 不要用 vtype=12，那是精华/热门过滤，会漏掉普通帖子
-    # vtype=61 是时序最新，省略 vtype 则默认按时间排序
     cids_to_try = [
         f"{clean_cid}_-_sort_time",  # 时序排序（用户指定）
         clean_cid,                    # 原始格式，最常用
@@ -79,7 +131,7 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
         f"100808{clean_cid}_-_hot", # 100808 前缀 + _hot
         f"100808{clean_cid}_-_sort_time", # 100808 前缀 + 时序排序
     ]
-    
+
     seen = set()
     unique_cids = []
     for c in cids_to_try:
@@ -120,52 +172,25 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
             if payload.get("ok") != 1:
                 break  # 换下一个 cid
 
-            cards = (payload.get("data") or {}).get("cards", [])
-            if not cards:
+            extracted = _extract_posts_from_payload(payload)
+            if not extracted:
                 break
 
-            found = False
-            for card in cards:
-                card_group = card.get("card_group") or []
-                for item in card_group:
-                    if item.get("card_type") != "9":
-                        continue
-                    mblog = item.get("mblog") or {}
-                    if not mblog:
-                        continue
-                    found = True
-                    user = mblog.get("user") or {}
-                    text = mblog.get("text", "")
-                    import re as _re
-                    text = _re.sub(r'<[^>]+>', '', text).strip()
-                    posts.append({
-                        "mid": mblog.get("idstr") or str(mblog.get("id", "")),
-                        "text": text,
-                        "created_at": mblog.get("created_at", ""),
-                        "source": mblog.get("source", ""),
-                        "reposts_count": mblog.get("reposts_count", 0),
-                        "comments_count": mblog.get("comments_count", 0),
-                        "attitudes_count": mblog.get("attitudes_count", 0),
-                        "pics": [p.get("url", "") for p in (mblog.get("pics") or [])],
-                        "user": {
-                            "id": user.get("idstr") or str(user.get("id", "")),
-                            "screen_name": user.get("screen_name", ""),
-                            "profile_image_url": user.get("profile_image_url", "").replace("http://", "https://"),
-                        },
-                    })
-                    if len(posts) >= count:
-                        break
-                if len(posts) >= count:
-                    break
-            if not found:
+            posts.extend(extracted)
+            if len(posts) >= count:
                 break
-            # Get next page cursor
-            cardlist_info = (payload.get("data") or {}).get("cardlistInfo") or {}
+
+            # 翻页
+            data = payload.get("data") or {}
+            cardlist_info = data.get("cardlistInfo") or {}
             next_since = cardlist_info.get("since_id", "")
             if next_since:
                 since_id = next_since
             else:
                 page += 1
+                # chaohua/page 可能用 page 参数翻页
+                if use_flow and page > 3:
+                    break  # 最多翻 3 页
             time.sleep(0.3)
 
         if posts:

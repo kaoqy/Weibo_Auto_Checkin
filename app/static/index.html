@@ -129,13 +129,15 @@
               <div class="card-head">
                 <h2>全部超话</h2>
                 <div>
-                  <button class="btn btn-ghost btn-sm" id="btn-topics-refresh">↻ 刷新</button>
-                  <button class="btn btn-danger btn-sm" id="btn-topics-clear">🗑 清空</button>
+                  <button class="btn btn-ghost btn-sm" id="btn-topics-refresh" title="刷新全部账号">↻ 刷新</button>
+                  <button class="btn btn-danger btn-sm" id="btn-topics-clear" title="清空记录">🗑 清空</button>
                 </div>
               </div>
-              <p class="hint" style="margin:0 0 12px">记录所有账号关注过的去重超话列表。点击可查看最新内容。</p>
+              <div class="topics-filter">
+                <p class="hint" style="margin:0">所有账号关注的去重超话 · 点击查看详情</p>
+              </div>
               <div id="topicsList" class="topics-list"></div>
-              <div class="hint" id="topicsHint" style="margin-top:10px"></div>
+              <div class="hint" id="topicsHint" style="margin-top:8px;text-align:center"></div>
             </div>
           </div>
           <!-- 中列：帖子内容 -->
@@ -153,17 +155,24 @@
           <div class="topics-col topics-col-right">
             <div class="card">
               <div class="card-head">
-                <h2>AI 总结</h2>
-                <button class="btn btn-ghost btn-sm" id="btn-ai-summary">✨ 生成</button>
+                <h2>AI 分析</h2>
+                <button class="btn btn-primary btn-sm" id="btn-ai-summary">✨ 生成总结</button>
               </div>
-              <div class="ai-summary-toolbar">
-                <input type="text" id="ai-question" class="ai-question-input" placeholder="💬 输入问题让 AI 分析..." />
-                <label class="ai-reasoning-label"><input type="checkbox" id="ai-reasoning" /> 推理</label>
-                <label class="ai-stream-label"><input type="checkbox" id="ai-stream" /> 流式</label>
-              </div>
-              <div class="ai-summary-content" id="aiSummaryContent">
-                <p class="hint">点击「✨ 生成」按钮，AI 将自动总结超话帖子内容。</p>
-                <p class="hint" style="margin-top:8px;font-size:11px">提示：需在「设置」中配置 API Base URL 和 API Key。支持提问和推理。</p>
+              <div class="ai-panel">
+                <div class="ai-toolbar">
+                  <input type="text" id="ai-question" class="ai-question-input" placeholder="💬 输入问题让 AI 分析（留空则自动总结）..." />
+                  <div class="ai-options">
+                    <label class="ai-chip"><input type="checkbox" id="ai-reasoning" /> 🧠 推理</label>
+                    <label class="ai-chip"><input type="checkbox" id="ai-stream" /> 🌊 流式</label>
+                  </div>
+                </div>
+                <div class="ai-summary-content" id="aiSummaryContent">
+                  <div class="ai-placeholder">
+                    <span class="ai-placeholder-icon">✨</span>
+                    <p>点击「生成总结」按钮，AI 将自动分析超话帖子内容</p>
+                    <p class="hint">也可输入问题进行个性化问答</p>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
