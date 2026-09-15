@@ -19,6 +19,9 @@
   --danger-soft: #fee2e2;
   --shadow: 0 8px 24px rgba(0,0,0,.06);
   --radius: 14px;
+
+  --radius-sm: 8px;
+  --shadow-sm: 0 2px 8px rgba(0,0,0,.06);
 }
 html[data-theme="dark"] {
   color-scheme: dark;
@@ -72,6 +75,7 @@ html[data-theme="dark"] body::before {
     radial-gradient(circle at 80% 30%, rgba(var(--accent-rgb), .05) 0%, transparent 40%),
     radial-gradient(circle at 50% 70%, rgba(var(--accent-rgb), .04) 0%, transparent 50%),
     linear-gradient(135deg, var(--bg), color-mix(in srgb, var(--bg) 94%, var(--accent) 6%));
+}
 
 /* ===== 滚动条美化 ===== */
 ::-webkit-scrollbar{width:9px;height:9px}
