@@ -1181,7 +1181,17 @@ function filterPosts() {
 
 function linkifyText(text) {
   if (!text) return '';
-  return text.replace(/(https?:\/\/[^\s<>"]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer" style="color:var(--accent);text-decoration:none">$1</a>');
+  let html = text;
+  // #话题# 标签 → 链接
+  html = html.replace(/#([^#\s]+)#/g, '<a href="https://s.weibo.com/weibo?q=' + encodeURIComponent('#$1#') + '" target="_blank" rel="noopener noreferrer" style="color:var(--accent);text-decoration:none">#$1#</a>');
+  // URL → 链接
+  html = html.replace(/(https?:\/\/[^\s<>"]+)/g, function(url) {
+    // 去掉末尾标点（非 URL 字符）
+    var trimmed = url.replace(/[.,;!?)]+$/, '');
+    var extra = url.slice(trimmed.length);
+    return '<a href="' + trimmed + '" target="_blank" rel="noopener noreferrer" style="color:var(--accent);text-decoration:none">' + trimmed + '</a>' + extra;
+  });
+  return html;
 }
 
 function renderPosts(posts) {
@@ -1309,6 +1319,13 @@ $('#btn-ai-summary').onclick = async () => {
 
           try {
             var chunkData = JSON.parse(jsonStr);
+            if (chunkData.text) {
+              accumulated += chunkData.text;
+              summaryDiv.innerHTML = formatAiSummary(accumulated);
+            }
+            if (chunkData.error) {
+              summaryDiv.innerHTML += '<span style="color:var(--danger)">' + esc(chunkData.error) + '</span>';
+            }
             if (chunkData.finish) {
               done = true;
               if (chunkData.model) {
@@ -1317,11 +1334,6 @@ $('#btn-ai-summary').onclick = async () => {
                 hint.textContent = '模型: ' + chunkData.model;
                 box.appendChild(hint);
               }
-            } else if (chunkData.error) {
-              summaryDiv.innerHTML += '<span style="color:var(--danger)">' + esc(chunkData.error) + '</span>';
-            } else if (chunkData.text) {
-              accumulated += chunkData.text;
-              summaryDiv.innerHTML = formatAiSummary(accumulated);
             }
           } catch (e) {
             // JSON 不完整，跳过
@@ -1368,7 +1380,7 @@ function formatAiSummary(text) {
   html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
   html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
   // List items: wrap consecutive <li> in <ul>
-  html = html.replace(/(^<li>.*<\/li>(\n|$))+/gm, function(match) {
+  html = html.replace(/(<li>.*<\/li>(\n|$))+/gm, function(match) {
     return '<ul>' + match.replace(/^\n|\n$/g, '') + '</ul>';
   });
   html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
