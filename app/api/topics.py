@@ -595,32 +595,6 @@ def ai_summary(data: AISummaryIn, user=Depends(auth.require_admin)):
                                     out_err = {"error": str(exc)}
                                     yield f"data: {_json.dumps(out_err, ensure_ascii=False)}\n\n"
                                     break
-                        try:
-                            chunk_data = _json.loads(chunk)
-                            choice = chunk_data["choices"][0]
-                            delta = choice.get("delta", {})
-                            text_piece = delta.get("content", "")
-                            reasoning_piece = delta.get("reasoning_content", "")
-                            if text_piece or reasoning_piece:
-                                out = {"text": text_piece, "reasoning": reasoning_piece}
-                                yield f"data: {_json.dumps(out, ensure_ascii=False)}\n\n"
-                            if choice.get("finish_reason"):
-                                out_done = {"finish": True}
-                                try:
-                                    usage = chunk_data.get("usage")
-                                    if usage:
-                                        out_done["usage"] = usage
-                                    mdl = chunk_data.get("model")
-                                    if mdl:
-                                        out_done["model"] = mdl
-                                except Exception:
-                                    pass
-                                yield f"data: {_json.dumps(out_done, ensure_ascii=False)}\n\n"
-                                break
-                        except Exception as exc:
-                            out_err = {"error": str(exc)}
-                            yield f"data: {_json.dumps(out_err, ensure_ascii=False)}\n\n"
-                            break
 
             from fastapi.responses import StreamingResponse
             return StreamingResponse(generate(), media_type="text/event-stream")

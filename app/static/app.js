@@ -1182,8 +1182,10 @@ function filterPosts() {
 function linkifyText(text) {
   if (!text) return '';
   let html = text;
-  // #话题# 标签 → 链接
-  html = html.replace(/#([^#\s]+)#/g, '<a href="https://s.weibo.com/weibo?q=' + encodeURIComponent('#$1#') + '" target="_blank" rel="noopener noreferrer" style="color:var(--accent);text-decoration:none">#$1#</a>');
+  // #话题# 标签 → 链接（使用回调函数获取捕获组）
+  html = html.replace(/#([^#\s]+)#/g, function(match, topic) {
+    return '<a href="https://s.weibo.com/weibo?q=' + encodeURIComponent(match) + '" target="_blank" rel="noopener noreferrer" style="color:var(--accent);text-decoration:none">' + match + '</a>';
+  });
   // URL → 链接
   html = html.replace(/(https?:\/\/[^\s<>"]+)/g, function(url) {
     // 去掉末尾标点（非 URL 字符）
