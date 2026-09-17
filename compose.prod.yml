@@ -4,7 +4,7 @@
 #
 # 服务器上用法:
 #   docker compose -f compose.prod.yml up -d
-# 或由 deploy.sh 的 remote 子命令自动处理
+# 或由 GitHub Actions 自动构建后拉取
 # ============================================================
 name: weibo-checkin
 

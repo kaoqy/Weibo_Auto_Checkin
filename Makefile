@@ -1,5 +1,5 @@
 # 微博签到管理面板 · 常用命令
-.PHONY: run checkin test test-frontend docker-build docker-up docker-down deploy deploy-remote clean
+.PHONY: run checkin test test-frontend docker-build docker-up docker-down clean
 
 # 本地启动
 run:
@@ -27,14 +27,6 @@ docker-up:
 # Docker Compose 停止
 docker-down:
 	docker compose down
-
-# 登录+构建+推送+远程部署
-deploy:
-	bash deploy.sh deploy
-
-# 仅远程部署（假定已推送）
-deploy-remote:
-	bash deploy.sh remote
 
 # 清理测试产物
 clean:

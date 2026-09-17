@@ -71,17 +71,7 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/api/health  # 期
 
 > Docker Hub 会同时发布带日期-迭代的版本 tag（如 `kaoqy666/weibo-checkin:20260816-01`），`latest` 永远指向最新。
 
-## 🛠️ 开发者：本地构建 / 发布（deploy.sh）
-
-`deploy.sh` 面向**维护者**：构建镜像 → 推送 Docker Hub →（可选）SSH 远程部署。
-
-```bash
-# 环境变量（或 .env 文件，含 REGISTRY_USER / REGISTRY_TOKEN）
-bash deploy.sh push          # 登录 → 构建 → 推送（latest + 日期tag，保留最近5个）
-bash deploy.sh build         # 仅本地构建
-bash deploy.sh remote        # 仅远程部署（需已推送 + WCM_DEPLOY_HOST）
-bash deploy.sh deploy        # 构建+推送+远程部署
-```
+## 🛠️ 开发者：本地构建 / 发布
 
 本地源码运行（开发调试）：
 
@@ -90,6 +80,15 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python run.py          # http://localhost:8000
 .venv/bin/python run.py checkin  # 命令行跑一次签到
 ```
+
+Docker 本地构建：
+
+```bash
+docker build -t weibo-checkin:latest .
+docker compose up -d --build
+```
+
+发布：推送 tag 触发 GitHub Actions 自动构建 Docker Hub 镜像（见 `.github/workflows/build-docker.yml`）。
 
 ## 🎯 使用
 
@@ -120,8 +119,6 @@ node tests/frontend-render.test.js      # 前端渲染测试（自动装 jsdom�
 weibo-checkin-manager/
 ├── run.py            # 本地启动
 ├── install.sh        # 用户一键安装/更新/管理（推荐）
-├── deploy.sh         # 维护者：构建/推送/远程部署
-├── release.sh        # 创建 GitHub Release
 ├── compose.prod.yml  # 生产 compose（仅拉镜像运行）
 ├── Dockerfile
 ├── app/              # 后端 + 前端
