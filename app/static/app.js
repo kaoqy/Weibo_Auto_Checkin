@@ -876,6 +876,9 @@ async function loadSettings() {
     $('#s-ai_base_url').value = settingsCache.ai_base_url||'';
     $('#s-ai_api_key').value = settingsCache.ai_api_key||'';
     $('#s-ai_model').value = settingsCache.ai_model||'gpt-4o-mini';
+    // 每日超话推送
+    setVal('s-topics_daily_push', settingsCache.topics_daily_push==='1');
+    $('#s-topics_daily_push_cron').value = settingsCache.topics_daily_push_cron||'0 8 * * *';
   } catch(e){ toast('加载设置失败','err'); }
 }
 
@@ -905,6 +908,9 @@ function collectSettings() {
     ai_base_url: val('s-ai_base_url').trim(),
     ai_api_key: val('s-ai_api_key').trim(),
     ai_model: val('s-ai_model').trim() || 'gpt-4o-mini',
+    // 每日超话推送
+    topics_daily_push: chk('s-topics_daily_push'),
+    topics_daily_push_cron: val('s-topics_daily_push_cron').trim() || '0 8 * * *',
   };
 }
 $('#btn-save-all').onclick = async () => {
@@ -1139,6 +1145,7 @@ async function openTopicDetail(topicId, el, forceRefresh = false) {
     const url = '/api/topics/posts/' + encodeURIComponent(topicId) + '?count=20' + (forceRefresh ? '&force=true' : '');
     const data = await api.get(url);
     currentPosts = data.posts || [];
+    window.__currentPosts = currentPosts;
     if (!currentPosts.length) {
       const err = data.error || '未知错误';
       const tried = data.tried ? `（已尝试 ${data.tried} 个端点）` : '';
@@ -1182,16 +1189,30 @@ function filterPosts() {
 function linkifyText(text) {
   if (!text) return '';
   let html = text;
-  // #话题# 标签 → 链接（使用回调函数获取捕获组）
+  // #话题# 标签 → 链接
   html = html.replace(/#([^#\s]+)#/g, function(match, topic) {
-    return '<a href="https://s.weibo.com/weibo?q=' + encodeURIComponent(match) + '" target="_blank" rel="noopener noreferrer" style="color:var(--accent);text-decoration:none">' + match + '</a>';
+    return '<a href="https://s.weibo.com/weibo?q=' + encodeURIComponent(match) + '" target="_blank" rel="noopener noreferrer" class="topic-link">' + match + '</a>';
   });
-  // URL → 链接
+  // URL → 短链接显示（完整 URL 保留在 href）
   html = html.replace(/(https?:\/\/[^\s<>"]+)/g, function(url) {
-    // 去掉末尾标点（非 URL 字符）
     var trimmed = url.replace(/[.,;!?)]+$/, '');
     var extra = url.slice(trimmed.length);
-    return '<a href="' + trimmed + '" target="_blank" rel="noopener noreferrer" style="color:var(--accent);text-decoration:none">' + trimmed + '</a>' + extra;
+    // 截取域名作为显示文本
+    var display = trimmed;
+    try {
+      var u = new URL(trimmed);
+      var path = u.pathname;
+      // 如果路径较长，只显示域名+省略号
+      if (path.length > 20) {
+        display = u.host + '/…';
+      } else {
+        // 显示完整 URL 但截断尾部
+        display = trimmed.length > 60 ? trimmed.slice(0, 30) + '…' : trimmed;
+      }
+    } catch(e) {
+      display = trimmed.length > 60 ? trimmed.slice(0, 30) + '…' : trimmed;
+    }
+    return '<a href="' + trimmed + '" target="_blank" rel="noopener noreferrer" class="topic-link">' + display + '</a>' + extra;
   });
   return html;
 }
@@ -1204,13 +1225,15 @@ function renderPosts(posts) {
     const userName = esc(p.user?.screen_name || '未知');
     const time = esc(p.created_at || '');
     const mid = esc(p.mid || '');
-    const text = linkifyText(esc(p.text || ''));
-    const isLong = (p.text || '').length > 200;
+    const rawText = p.text || '';
+    const text = linkifyText(esc(rawText));
+    const isLong = rawText.length > 120;
     const textId = 'post-text-' + idx;
     const pics = (p.pics || []).map((url) => '<img src="' + esc(url) + '" alt="" loading="lazy" referrerpolicy="no-referrer" onclick="openLightbox(\'' + url + '\')" onerror="this.style.display=\'none\'" />').join('');
     const picsHtml = pics ? '<div class="topic-post-pics">' + pics + '</div>' : '';
     const source = esc(p.source || '');
     const sourceHtml = source ? '<span class="topic-post-source">来自 ' + source + '</span>' : '';
+    const truncated = isLong ? esc(rawText.slice(0, 120)) + '<span class="topic-ellipsis">…</span>' : '';
     return '<div class="topic-post">' +
       '<div class="topic-post-header">' +
         '<img class="topic-post-avatar" src="' + avatar + '" alt="" onerror="this.onerror=null;this.src=\'/default-avatar.svg\'" />' +
@@ -1220,8 +1243,10 @@ function renderPosts(posts) {
         '</div>' +
         '<span class="topic-post-time">' + time + '</span>' +
       '</div>' +
-      '<div class="topic-post-text" id="' + textId + '">' + text + '</div>' +
-      (isLong ? '<button class="btn btn-ghost btn-sm topic-post-expand" onclick="toggleExpand(\'' + textId + '\')">展开</button>' : '') +
+      '<div class="topic-post-text' + (isLong ? ' topic-post-collapsed' : '') + '" id="' + textId + '">' +
+        (isLong ? truncated : text) +
+      '</div>' +
+      (isLong ? '<button class="btn btn-ghost btn-sm topic-post-expand" onclick="toggleExpand(\'' + textId + '\')">展开全文</button>' : '') +
       picsHtml +
       '<div class="topic-post-actions">' +
         '<span>🔁 ' + (p.reposts_count || 0) + '</span>' +
@@ -1236,14 +1261,30 @@ function renderPosts(posts) {
 function toggleExpand(id) {
   var el = document.getElementById(id);
   if (!el) return;
-  el.classList.toggle('expanded');
-  // Find the expand button (next sibling or parent's next sibling)
   var btn = el.nextElementSibling;
   if (!btn || !btn.classList.contains('topic-post-expand')) {
     btn = el.parentElement.querySelector('.topic-post-expand');
   }
-  if (btn) {
-    btn.textContent = el.classList.contains('expanded') ? '收起' : '展开';
+  var isCollapsed = el.classList.contains('topic-post-collapsed');
+  if (isCollapsed) {
+    // 展开：移除截断，显示完整内容
+    el.classList.remove('topic-post-collapsed');
+    // 从原始数据重新渲染完整文本
+    var idx = parseInt(id.replace('post-text-', ''));
+    if (window.__currentPosts && window.__currentPosts[idx]) {
+      var p = window.__currentPosts[idx];
+      el.innerHTML = linkifyText(esc(p.text || ''));
+    }
+    if (btn) btn.textContent = '收起';
+  } else {
+    // 收起：截断显示
+    el.classList.add('topic-post-collapsed');
+    var idx2 = parseInt(id.replace('post-text-', ''));
+    if (window.__currentPosts && window.__currentPosts[idx2]) {
+      var p2 = window.__currentPosts[idx2];
+      el.innerHTML = esc(p2.text.slice(0, 120)) + '<span class="topic-ellipsis">…</span>';
+    }
+    if (btn) btn.textContent = '展开全文';
   }
 }
 

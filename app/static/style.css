@@ -637,6 +637,29 @@ html[data-theme="dark"] .topic-post-text::after {
 }
 .topic-post-text.expanded::after { display: none; }
 
+/* 帖子链接样式 */
+.topic-link { color: var(--accent); text-decoration: none; }
+.topic-link:hover { text-decoration: underline; }
+
+/* 长文本截断 */
+.topic-post-collapsed {
+  max-height: 120px;
+  overflow: hidden;
+  position: relative;
+}
+.topic-post-collapsed::after {
+  content: '';
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  height: 40px;
+  background: linear-gradient(to bottom, transparent, var(--surface));
+  pointer-events: none;
+}
+html[data-theme="dark"] .topic-post-collapsed::after {
+  background: linear-gradient(to bottom, transparent, var(--surface));
+}
+.topic-ellipsis { color: var(--muted); }
+
 .topic-post-expand { margin-top: 6px; }
 
 .topic-post-pics {

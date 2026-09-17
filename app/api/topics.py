@@ -19,6 +19,68 @@ from ..weibo_client import (
     normalize_cookie,
 )
 
+def call_ai_summary(text: str, topic_name: str = "超话", question: str = "", stream: bool = False) -> dict:
+    """直接调用 AI 总结（不依赖 FastAPI 路由）。"""
+    base_url = (database.get_setting("ai_base_url", "") or "").strip().rstrip("/")
+    api_key = (database.get_setting("ai_api_key", "") or "").strip()
+    model = (database.get_setting("ai_model", "") or "gpt-4o-mini").strip()
+
+    if not base_url or not api_key:
+        return {"ok": False, "summary": "", "error": "未配置 AI 总结功能"}
+
+    truncated_text = text[:8000] if len(text) > 8000 else text
+    is_qa = bool(question and question.strip())
+    if is_qa:
+        system_content = (
+            f"你是「{topic_name}」超话的内容分析助手。"
+            f"以下是该超话最新的帖子内容，请基于这些内容回答用户的问题。"
+            f"如果帖子中没有相关信息，请如实说明。\n\n"
+            f"--- 帖子内容 ---\n{truncated_text}"
+        )
+        messages = [
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": question.strip()},
+        ]
+    else:
+        system_content = AI_TOPIC_PROMPT.replace("{topic_name}", topic_name)
+        user_content = f"以下是「{topic_name}」超话的最新帖子内容：\n\n{truncated_text}"
+        messages = [
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": user_content},
+        ]
+
+    payload = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": 1200,
+        "temperature": 0.7,
+        "stream": stream,
+    }
+
+    try:
+        if stream:
+            # Non-streaming fallback for scheduler
+            payload["stream"] = False
+        resp = requests.post(
+            f"{base_url}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=120,
+        )
+        resp.raise_for_status()
+        result = resp.json()
+        msg = result["choices"][0]["message"]
+        summary = msg.get("content", "").strip()
+        return {"ok": True, "summary": summary, "model": result.get("model", model), "qa_mode": is_qa}
+    except requests.exceptions.Timeout:
+        return {"ok": False, "summary": "", "error": "请求超时"}
+    except Exception as exc:
+        return {"ok": False, "summary": "", "error": f"调用失败：{exc}"}
+
+
 router = APIRouter(prefix="/api/topics", tags=["topics"])
 
 log = logging.getLogger("weibo.topics")

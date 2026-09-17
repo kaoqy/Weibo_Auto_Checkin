@@ -286,23 +286,40 @@ def reload_schedule() -> None:
     cron_expr = database.get_setting("schedule_cron", "0 7 * * *")
     if not enabled:
         log.info("定时签到已关闭")
-        return
+    else:
+        try:
+            # 兼容 5 段(标准) 或 6 段(青龙 style: 秒 分 时 日 月 周) cron
+            parts = cron_expr.strip().split()
+            fixed = cron_expr.strip()
+            if len(parts) == 6:
+                # 青龙/常见写法多一个「秒」段：0 10 0 * * * → 去掉秒 → 10 0 * * *
+                fixed = " ".join(parts[1:])
+                log.info("检测到 6 段 cron，已转为标准 5 段：%s", fixed)
+            trigger = CronTrigger.from_crontab(fixed, timezone="Asia/Shanghai")
+            scheduler.add_job(_fire_scheduled, trigger, id="weibo_checkin",
+                              name=f"微博定时签到 ({fixed})",
+                              misfire_grace_time=300, coalesce=True)
+            log.info("已配置定时签到：%s", fixed)
+        except Exception as exc:
+            log.error("定时表达式无效 %r：%s", cron_expr, exc)
 
-    try:
-        # 兼容 5 段(标准) 或 6 段(青龙 style: 秒 分 时 日 月 周) cron
-        parts = cron_expr.strip().split()
-        fixed = cron_expr.strip()
-        if len(parts) == 6:
-            # 青龙/常见写法多一个「秒」段：0 10 0 * * * → 去掉秒 → 10 0 * * *
-            fixed = " ".join(parts[1:])
-            log.info("检测到 6 段 cron，已转为标准 5 段：%s", fixed)
-        trigger = CronTrigger.from_crontab(fixed, timezone="Asia/Shanghai")
-        scheduler.add_job(_fire_scheduled, trigger, id="weibo_checkin",
-                          name=f"微博定时签到 ({fixed})",
-                          misfire_grace_time=300, coalesce=True)
-        log.info("已配置定时签到：%s", fixed)
-    except Exception as exc:
-        log.error("定时表达式无效 %r：%s", cron_expr, exc)
+    # 每日超话推送任务
+    existing_push = scheduler.get_job("topics_daily_push")
+    if existing_push:
+        existing_push.remove()
+    topics_push_enabled = database.get_setting("topics_daily_push", "0") == "1"
+    if topics_push_enabled:
+        topics_push_cron = database.get_setting("topics_daily_push_cron", "0 8 * * *")
+        parts = topics_push_cron.strip().split()
+        fixed = " ".join(parts[1:]) if len(parts) == 6 else topics_push_cron
+        try:
+            trigger = CronTrigger.from_crontab(fixed, timezone="Asia/Shanghai")
+            scheduler.add_job(_topics_daily_push_job, trigger, id="topics_daily_push",
+                              name=f"每日超话总结推送 ({fixed})",
+                              misfire_grace_time=300, coalesce=True)
+            log.info("已配置每日超话总结推送：%s", fixed)
+        except Exception as exc:
+            log.error("超话推送表达式无效 %r：%s", topics_push_cron, exc)
 
 
 def start_scheduler() -> None:
@@ -317,8 +334,63 @@ def start_scheduler() -> None:
             id="log_purge", max_instances=1, coalesce=True,
             misfire_grace_time=3600,
         )
+    # 每日自动推送超话总结到 TG
+    if not scheduler.get_job("topics_daily_push"):
+        topics_push_enabled = database.get_setting("topics_daily_push", "0") == "1"
+        if topics_push_enabled:
+            topics_push_cron = database.get_setting("topics_daily_push_cron", "0 8 * * *")
+            parts = topics_push_cron.strip().split()
+            fixed = " ".join(parts[1:]) if len(parts) == 6 else topics_push_cron
+            trigger = CronTrigger.from_crontab(fixed, timezone="Asia/Shanghai")
+            scheduler.add_job(_topics_daily_push_job, trigger, id="topics_daily_push",
+                              name=f"每日超话总结推送 ({fixed})",
+                              misfire_grace_time=300, coalesce=True)
+            log.info("已配置每日超话总结推送：%s", fixed)
     reload_schedule()
     log.info("调度器已启动")
+
+
+def _topics_daily_push_job() -> None:
+    """每日自动推送超话总结到 TG。"""
+    try:
+        enabled = database.get_setting("topics_daily_push", "0") == "1"
+        if not enabled:
+            return
+        # 获取所有去重超话
+        topics = database.get_all_topics(limit=200)
+        if not topics.get("items"):
+            log.info("每日超话推送：无超话数据，跳过")
+            return
+        # 取前 5 个超话生成总结
+        items = topics["items"][:5]
+        lines = []
+        for t in items:
+            name = t.get("name", "")
+            topic_id = t.get("topic_id", "")
+            if not name or not topic_id:
+                continue
+            # 获取帖子缓存
+            cache = database.get_topic_posts_cache(topic_id)
+            if not cache or not cache.get("posts"):
+                continue
+            posts = cache["posts"][:10]  # 最多 10 条
+            text = "\n".join(
+                f"[{i+1}] {p.get('user', {}).get('screen_name', '未知')}: {p.get('text', '')}"
+                for i, p in enumerate(posts)
+            )
+            # 调用 AI 总结（使用辅助函数，不依赖 FastAPI 路由）
+            from .api.topics import call_ai_summary
+            result = call_ai_summary(text, topic_name=name)
+            if result.get("ok"):
+                lines.append(f"📊 {name}\n{result.get('summary', '')}\n")
+        if lines:
+            from .notifier import send_telegram
+            send_telegram("\n\n".join(lines), "📊 每日超话总结")
+            log.info("每日超话总结已推送")
+        else:
+            log.info("每日超话推送：无有效数据")
+    except Exception as exc:
+        log.exception("每日超话推送异常: %s", exc)
 
 
 def _purge_logs_job() -> None:
