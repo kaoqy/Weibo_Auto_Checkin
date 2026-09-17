@@ -69,7 +69,7 @@ docker run -d --name weibo-checkin --restart unless-stopped \
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/api/health  # 期望 200
 ```
 
-> Docker Hub 会同时发布带日期-迭代的版本 tag（如 `kaoqy666/weibo-checkin:20260816-01`），`latest` 永远指向最新。
+> GitHub Actions 会在推送 tag 时自动构建 Docker Hub 镜像，版本号与 Git tag 一致（如 `v1.3.0`），`latest` 永远指向最新。
 
 ## 🛠️ 开发者：本地构建 / 发布
 
@@ -81,7 +81,14 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python run.py checkin  # 命令行跑一次签到
 ```
 
-Docker 本地构建：
+发布：推送 tag 触发 GitHub Actions 自动构建 Docker Hub 镜像（见 `.github/workflows/build-docker.yml`）。
+
+```bash
+git tag v1.3.0
+git push origin v1.3.0   # 自动触发 Docker Hub 构建
+```
+
+本地 Docker 构建：
 
 ```bash
 docker build -t weibo-checkin:latest .

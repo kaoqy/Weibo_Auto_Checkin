@@ -1,7 +1,6 @@
 """账号管理 API。"""
 from __future__ import annotations
 
-import imghdr
 import logging
 import re
 from datetime import datetime
@@ -465,6 +464,21 @@ def _extract_weibo_profile(payload: object) -> dict:
     return profile
 
 
+def _detect_image_ext(content: bytes) -> str | None:
+    """从 magic bytes 检测图片扩展名（替代已弃用的 imghdr）。"""
+    if content[:8] == bytes([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]):
+        return ".png"
+    if content[:3] == bytes([0xFF, 0xD8, 0xFF]):
+        return ".jpg"
+    if content[:6] in (b'GIF87a', b'GIF89a'):
+        return ".gif"
+    if content[:4] == b'RIFF' and content[8:12] == b'WEBP':
+        return ".webp"
+    if content[:2] == b'BM':
+        return ".bmp"
+    return None
+
+
 def _cache_weibo_avatar(session, avatar_url: str, uid: str = "") -> str:
     """下载微博头像到持久化 data/avatars 目录并返回本地访问地址。"""
     if not avatar_url or not avatar_url.startswith(("http://", "https://")):
@@ -488,14 +502,7 @@ def _cache_weibo_avatar(session, avatar_url: str, uid: str = "") -> str:
 
         content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
         extension = AVATAR_CONTENT_TYPES.get(content_type)
-        detected = imghdr.what(None, content)
-        detected_extensions = {
-            "jpeg": ".jpg",
-            "png": ".png",
-            "webp": ".webp",
-            "gif": ".gif",
-        }
-        extension = detected_extensions.get(detected, extension)
+        extension = _detect_image_ext(content) or extension
         if not extension:
             return ""
 

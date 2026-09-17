@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import imghdr
 import logging
 from pathlib import Path
 from urllib.parse import quote as escape
@@ -26,6 +25,22 @@ log = logging.getLogger("weibo.topics")
 
 IMG_CACHE_DIR = database.DB_PATH.parent / "img_cache"
 IMG_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _detect_image_ext(content: bytes) -> str | None:
+    """从 magic bytes 检测图片扩展名（替代已弃用的 imghdr）。"""
+    if content[:8] == bytes([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]):
+        return ".png"
+    if content[:3] == bytes([0xFF, 0xD8, 0xFF]):
+        return ".jpg"
+    if content[:6] in (b'GIF87a', b'GIF89a'):
+        return ".gif"
+    if content[:4] == b'RIFF' and content[8:12] == b'WEBP':
+        return ".webp"
+    if content[:2] == b'BM':
+        return ".bmp"
+    return None
+
 
 # 硬编码的 AI 提示词
 AI_TOPIC_PROMPT = """你是一个专业的微博超话内容分析助手。请根据以下超话帖子内容进行深度总结分析。
@@ -73,9 +88,7 @@ def _download_image(url: str) -> Path | None:
         content = resp.content
         if len(content) < 100:
             return None
-        detected = imghdr.what(None, content)
-        ext_map = {"png": ".png", "webp": ".webp", "gif": ".gif", "jpeg": ".jpg"}
-        ext = ext_map.get(detected, ext)
+        ext = _detect_image_ext(content) or ext
         local_path = IMG_CACHE_DIR / f"{url_hash}{ext}"
         local_path.write_bytes(content)
         return local_path
