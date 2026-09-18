@@ -1194,7 +1194,7 @@ function linkifyText(text) {
     return '<a href="https://s.weibo.com/weibo?q=' + encodeURIComponent(match) + '" target="_blank" rel="noopener noreferrer" class="topic-link">' + match + '</a>';
   });
   // URL → 短链接显示（完整 URL 保留在 href）
-  html = html.replace(/(https?:\/\/[^\s<>"]+)/g, function(url) {
+  html = html.replace(/(?<!['"])https?:\/\/[^\s<>"]+/g, function(url) {
     var trimmed = url.replace(/[.,;!?)]+$/, '');
     var extra = url.slice(trimmed.length);
     // 截取域名作为显示文本

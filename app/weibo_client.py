@@ -61,6 +61,14 @@ def _normalize_mblog(mblog_raw):
     import re as _re
     text = mblog_raw.get("text", "")
     text = _re.sub(r'<[^>]+>', '', text).strip()
+    # 去掉微博文本尾部的「来自 XXX」和「转发了」等重复内容
+    # 这些内容已经单独存在于 source / retweeted_status 字段中
+    if text:
+        # 去掉尾部的「来自 XXX」行（source 字段已包含此信息）
+        text = _re.sub(r'\n来自\s+\S+\s*$', '', text)
+        # 去掉尾部的时间戳行（如 "Thu Sep 17 21:13:15 +0800 2026"）
+        text = _re.sub(r'\n[A-Z][a-z]{2}\s[A-Z][a-z]{2}\s\d{1,2}\s\d{2}:\d{2}:\d{2}\s[+-]\d{4}\s\d{4}\s*$', '', text)
+        text = text.strip()
     user = mblog_raw.get("user") or {}
     # pics: pic_ids (list of str) or pic_infos (dict)
     pics = []
