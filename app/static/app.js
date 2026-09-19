@@ -420,25 +420,26 @@ function flagEmoji(cc) {
   return String.fromCodePoint(0x1F1E6 + ccU.charCodeAt(0) - 65, 0x1F1E6 + ccU.charCodeAt(1) - 65);
 }
 function proxyTestHtml(p) {
-  if (!p.last_test) return '<span class="ptest-idle">尚未测速</span>';
-  const cls = p.last_test === 'ok' ? 't-ok' : 't-bad';
-  const icon = p.last_test === 'ok' ? '●' : '●';
-  const latency = Number(p.last_latency_ms || 0);
-  const detail = p.last_test_message || (p.last_test === 'ok' ? '测试成功' : '测试失败');
-  const tested = p.last_test_at ? ` · ${esc(p.last_test_at.slice(5,16))}` : '';
-  return `<span class="${cls}">${icon} ${esc(detail)}${latency && !detail.includes('ms') ? ` · ${latency} ms` : ''}${tested}</span>`;
+  if (!p || !p.last_test) return '<span class="ptest-idle">尚未测速</span>';
+  var cls = p.last_test === 'ok' ? 't-ok' : 't-bad';
+  var icon = p.last_test === 'ok' ? '●' : '●';
+  var latency = Number(p.last_latency_ms || 0);
+  var detail = p.last_test_message || (p.last_test === 'ok' ? '测试成功' : '测试失败');
+  var tested = p.last_test_at ? ' · ' + esc(String(p.last_test_at).slice(5,16)) : '';
+  var latencyStr = latency && String(detail).indexOf('ms') < 1 ? ' · ' + latency + ' ms' : '';
+  return '<span class="' + cls + '">' + icon + ' ' + esc(detail || '') + latencyStr + tested + '</span>';
 }
 
 async function loadProxies() {
   try {
     const list = await api.get('/api/proxies');
     $('#proxyListHint').textContent = list.length ? '' : '添加后，账号管理里可为每个账号指定对应代理（不同节点并行签到）。';
-    const box = $('#proxyList');
+    const proxyBox = $('#proxyList');
     if (!list.length) {
-      box.innerHTML = '<div style="color:var(--muted);padding:16px;text-align:center">尚未添加代理节点，点击「＋ 添加代理」</div>';
+      proxyBox.innerHTML = '<div style="color:var(--muted);padding:16px;text-align:center">尚未添加代理节点，点击「＋ 添加代理」</div>';
       return;
     }
-    box.innerHTML = list.map(p => {
+    proxyBox.innerHTML = list.map(p => {
       const flag = flagEmoji(p.geo_country_code);
       const host = p.ip || ((p.url||'').replace(/socks5.*@/,'').replace(/^socks5:\/\//,''));
       const has = p.ip || (p.url||'').includes('socks5');
@@ -462,9 +463,9 @@ async function loadProxies() {
     }).join('');
   } catch(e){ toast('加载代理失败','err'); }
   // Event delegation for proxy actions
-  var proxyList = $('#proxyList');
-  if (proxyList) {
-    proxyList.onclick = function(e) {
+  var proxyListBox = $('#proxyList');
+  if (proxyListBox) {
+    proxyListBox.onclick = function(e) {
       var btn = e.target.closest('button[data-action]');
       if (!btn) return;
       var id = parseInt(btn.dataset.id);
@@ -1141,35 +1142,41 @@ async function loadTopics(reset = true) {
   try {
     const data = await api.get('/api/topics/all?limit=200');
     topicsCache = data.items || [];
-    const hint = $('#topicsHint');
-    if (hint) hint.textContent = `共 ${data.total} 个去重超话`;
+    var hint = $('#topicsHint');
+    if (hint) hint.textContent = '共 ' + (data.total || 0) + ' 个去重超话';
     if (!topicsCache.length) {
-      $('#topicsList').innerHTML = '<div style="color:var(--muted);padding:20px;text-align:center">暂无超话记录。<br>点击「📥 全部获取」从账号关注列表拉取。</div>';
+      $('#topicsList').innerHTML = '<div style="color:var(--muted);padding:20px;text-align:center">暂无超话记录。<br>点击「↻ 刷新」从账号关注列表拉取。</div>';
       return;
     }
     renderTopicList(topicsCache);
   } catch(e) {
-    toast('加载超话失败', 'err');
+    console.error('loadTopics error:', e);
+    toast('加载超话失败: ' + (e.message || ''), 'err');
+    $('#topicsList').innerHTML = '<div style="color:var(--danger);padding:20px;text-align:center">加载失败<br><span style="font-size:11px">' + esc(e.message || '') + '</span></div>';
   }
 }
 
 function renderTopicList(topics) {
   const box = $('#topicsList');
   if (!box) return;
-  box.innerHTML = topics.map(t => {
-    const avatar = esc(t.avatar_url || '');
-    const avatarHtml = avatar
+  if (!topics || !topics.length) {
+    box.innerHTML = '<div style="color:var(--muted);padding:20px;text-align:center">暂无超话记录</div>';
+    return;
+  }
+  box.innerHTML = topics.map(function(t) {
+    if (!t) return '';
+    var avatar = esc(t.avatar_url || '');
+    var avatarHtml = avatar
       ? '<img src="' + avatar + '" class="topic-list-avatar" alt="" onerror="this.onerror=null;this.src=\'/default-avatar.svg\'" />'
       : '<div class="topic-list-avatar">💬</div>';
-    const name = t.name || t.topic_id;
-    const members = t.member_count ? `<span>👥 ${t.member_count}</span>` : '';
-    const updated = t.updated_at ? `<span>${esc(t.updated_at.slice(5,16))}</span>` : '';
-    const isActive = t.topic_id === currentTopicId ? ' active' : '';
-    const pushEnabled = t.push_enabled === 1;
-    // 使用 data-id 属性存储，通过事件委托绑定点击，避免 JS 注入
-    const div = document.createElement('div');
+    var name = t.name || t.topic_id || '未知超话';
+    var members = t.member_count ? '<span>👥 ' + t.member_count + '</span>' : '';
+    var updated = t.updated_at ? '<span>' + esc(String(t.updated_at).slice(5,16)) + '</span>' : '';
+    var isActive = t.topic_id === currentTopicId ? ' active' : '';
+    var pushEnabled = t.push_enabled === 1;
+    var div = document.createElement('div');
     div.className = 'topic-list-item' + isActive;
-    div.dataset.id = t.topic_id;
+    div.dataset.id = t.topic_id || '';
     div.dataset.name = name;
     div.innerHTML =
       avatarHtml +
@@ -1592,21 +1599,27 @@ function formatAiSummary(text) {
 $('#btn-topics-refresh').onclick = async () => {
   if (isLoadingList) return;
   isLoadingList = true;
+  const btn = $('#btn-topics-refresh');
+  btn.disabled = true; btn.textContent = '刷新中…';
   const list = $('#topicsList');
   if (list) list.innerHTML = '<div class="loading-progress"><div class="loading-bar"><div class="loading-bar-inner" style="width:20%"></div></div><div class="loading-text">正在刷新超话列表...</div></div>';
   try {
     const r = await api.post('/api/topics/refresh_all', {});
     if (r.ok) {
-      toast(r.message || '刷新完成', 'good');
+      var msg = r.message || '刷新完成';
+      if (r.errors) msg += '（' + r.errors + ' 个账号失败）';
+      toast(msg, 'good');
     } else {
       toast(r.error || '刷新失败', 'err');
     }
   } catch(e) {
-    toast('刷新失败: ' + e.message, 'err');
+    console.error('refresh_all error:', e);
+    toast('刷新失败: ' + (e.message || ''), 'err');
   } finally {
     isLoadingList = false;
+    btn.disabled = false; btn.textContent = '↻ 刷新';
   }
-  loadTopics();
+  setTimeout(function() { loadTopics(); }, 100);
 };
 
 $('#btn-topics-clear').onclick = async () => {
