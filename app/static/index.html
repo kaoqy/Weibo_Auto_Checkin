@@ -218,89 +218,194 @@
 
       <!-- 设置 -->
       <section class="view" id="view-settings" hidden>
-        <div class="settings-grid">
-          <div class="card">
-            <div class="card-head"><h2>Telegram 通知</h2></div>
-            <div class="form">
-              <label>启用 TG 推送<input type="checkbox" id="s-tg_enabled" /></label>
-              <label>Bot Token <input id="s-tg_bot_token" placeholder="123456:ABC-DEF..." autocomplete="off" /></label>
-              <label>Chat / User ID <input id="s-tg_user_id" placeholder="987654321" /></label>
-              <label>附带每日一言<input type="checkbox" id="s-tg_quote_enabled" /></label>
-              <label>仅异常时推送<input type="checkbox" id="s-tg_only_on_change" /></label>
-              <label>静默推送（不提示音）<input type="checkbox" id="s-tg_silent" /></label>
-              <div class="form-actions">
-                <button class="btn btn-ghost" id="btn-test-tg">测试推送</button>
+        <div class="settings-modern">
+          <!-- 签到行为 -->
+          <div class="settings-section">
+            <div class="settings-section-head">
+              <span class="settings-section-ico">⏰</span>
+              <h2>签到行为</h2>
+            </div>
+            <div class="settings-section-body">
+              <div class="settings-row">
+                <div class="settings-label"><label for="s-schedule_enabled">启用定时签到</label></div>
+                <label class="switch"><input type="checkbox" id="s-schedule_enabled" /><span class="switch-slider"></span></label>
+              </div>
+              <div class="settings-row">
+                <div class="settings-label"><label for="s-schedule_cron">Cron 表达式</label><small>定时触发签到的周期</small></div>
+                <input id="s-schedule_cron" class="input-modern" placeholder="0 7 * * *" />
+              </div>
+              <div class="settings-row">
+                <div class="settings-label"><label for="s-checkin_delay_min">签到延时区间</label><small>每个超话之间的随机等待（秒），防止风控</small></div>
+                <div class="input-row">
+                  <input id="s-checkin_delay_min" class="input-modern" type="number" placeholder="3" />
+                  <span class="input-sep">~</span>
+                  <input id="s-checkin_delay_max" class="input-modern" type="number" placeholder="8" />
+                </div>
+              </div>
+              <div class="settings-row">
+                <div class="settings-label"><label for="s-auto_refresh_topics">签到后自动刷新超话</label><small>每次签到完成后自动拉取关注超话的最新帖子缓存</small></div>
+                <label class="switch"><input type="checkbox" id="s-auto_refresh_topics" /><span class="switch-slider"></span></label>
               </div>
             </div>
           </div>
-          <div class="card">
-            <div class="card-head"><h2>定时签到</h2></div>
-            <div class="form">
-              <label>启用定时<input type="checkbox" id="s-schedule_enabled" /></label>
-              <label>Cron 表达式 <input id="s-schedule_cron" placeholder="0 7 * * *" /><small>默认每天 7:00</small></label>
-              <div class="form-actions"><button class="btn btn-ghost" id="btn-save-schedule">保存</button></div>
+
+          <!-- 防封策略 -->
+          <div class="settings-section">
+            <div class="settings-section-head">
+              <span class="settings-section-ico">🛡️</span>
+              <h2>防封策略</h2>
             </div>
-          </div>
-          <div class="card">
-            <div class="card-head"><h2>防封策略</h2></div>
-            <div class="form">
-              <label>启用防封等待<input type="checkbox" id="s-anti_ban_enabled" /></label>
-              <div class="row2">
-                <label>最小等待(s)<input type="number" id="s-anti_ban_wait_min" /></label>
-                <label>最大等待(s)<input type="number" id="s-anti_ban_wait_max" /></label>
+            <div class="settings-section-body">
+              <div class="settings-row">
+                <div class="settings-label"><label for="s-anti_ban_enabled">启用防封等待</label><small>账号之间随机等待，避开风控检测</small></div>
+                <label class="switch"><input type="checkbox" id="s-anti_ban_enabled" /><span class="switch-slider"></span></label>
               </div>
-              <label>窗口(凌晨N点前)<input type="number" id="s-anti_ban_window_hour" /></label>
-              <small class="hint">账号之间随机等待，降低风控风险</small>
-            </div>
-          </div>
-          <div class="card">
-            <div class="card-head"><h2>代理策略</h2></div>
-            <div class="form">
-              <p class="hint" style="margin-bottom:12px">代理节点请到侧栏「<b>🌐 代理</b>」标签页添加/管理（支持手动输入或粘贴链接自动识别归属地），并到「账号管理」为每个账号指定代理。</p>
-              <div class="row2">
-                <label><input type="checkbox" id="s-proxy_force" /> 严格代理（失败不回退直连）</label>
-                <label><input type="checkbox" id="s-proxy_fallback" checked /> 失败回退直连</label>
+              <div class="settings-row">
+                <div class="settings-label"><label for="s-anti_ban_wait_min">防封等待区间</label><small>多个账号之间的随机等待（秒）</small></div>
+                <div class="input-row">
+                  <input id="s-anti_ban_wait_min" class="input-modern" type="number" placeholder="120" />
+                  <span class="input-sep">~</span>
+                  <input id="s-anti_ban_wait_max" class="input-modern" type="number" placeholder="300" />
+                </div>
+              </div>
+              <div class="settings-row">
+                <div class="settings-label"><label for="s-anti_ban_window_hour">凌晨截止时间</label><small>此时间之前不执行防封等待</small></div>
+                <input id="s-anti_ban_window_hour" class="input-modern" type="number" placeholder="7" />
               </div>
             </div>
           </div>
-          <div class="card">
-            <div class="card-head"><h2>签到参数</h2></div>
-            <div class="form">
-              <div class="row2">
-                <label>超话最小延时(s)<input type="number" id="s-checkin_delay_min" /></label>
-                <label>超话最大延时(s)<input type="number" id="s-checkin_delay_max" /></label>
+
+          <!-- 代理策略 -->
+          <div class="settings-section">
+            <div class="settings-section-head">
+              <span class="settings-section-ico">🌐</span>
+              <h2>代理策略</h2>
+            </div>
+            <div class="settings-section-body">
+              <div class="settings-row">
+                <div class="settings-label"><label for="s-proxy_force">严格代理</label><small>失败时不回退直连</small></div>
+                <label class="switch"><input type="checkbox" id="s-proxy_force" /><span class="switch-slider"></span></label>
               </div>
-              <label>日志保留天数<input type="number" id="s-log_retention_days" min="0" /><small>0 = 不自动清理</small></label>
-            </div>
-          </div>
-          <div class="card">
-            <div class="card-head"><h2>超话每日推送</h2></div>
-            <div class="form">
-              <label>启用每日推送<input type="checkbox" id="s-topics_daily_push" /></label>
-              <label>推送 Cron <input id="s-topics_daily_push_cron" placeholder="0 8 * * *" /><small>默认每天 8:00</small></label>
-            </div>
-          </div>
-          <div class="card">
-            <div class="card-head"><h2>AI 总结（1.3.0）</h2></div>
-            <div class="form">
-              <label>API Base URL <input id="s-ai_base_url" placeholder="https://api.openai.com/v1" autocomplete="off" /><small>OpenAI 兼容 API，如 https://api.openai.com/v1</small></label>
-              <label>API Key <input id="s-ai_api_key" placeholder="sk-..." type="password" autocomplete="off" /></label>
-              <label>模型 <input id="s-ai_model" placeholder="gpt-4o-mini" /><small>默认 gpt-4o-mini</small></label>
-              <div class="form-actions"><button class="btn btn-ghost" id="btn-test-ai">测试连接</button><span class="hint" id="ai-test-status"></span></div>
-            </div>
-          </div>
-          <div class="card">
-            <div class="card-head"><h2>账户</h2></div>
-            <div class="form">
-              <div class="row2">
-                <label>原密码<input type="password" id="p-old" autocomplete="off" /></label>
-                <label>新密码<input type="password" id="p-new" autocomplete="off" /></label>
+              <div class="settings-row">
+                <div class="settings-label"><label for="s-proxy_fallback">失败回退直连</label><small>代理不通时自动尝试直连</small></div>
+                <label class="switch"><input type="checkbox" id="s-proxy_fallback" checked /><span class="switch-slider"></span></label>
               </div>
-              <div class="form-actions">
-                <button class="btn btn-ghost" id="btn-change-pwd">修改密码</button>
+            </div>
+          </div>
+
+          <!-- 超话推送 -->
+          <div class="settings-section">
+            <div class="settings-section-head">
+              <span class="settings-section-ico">📢</span>
+              <h2>超话推送</h2>
+            </div>
+            <div class="settings-section-body">
+              <div class="settings-row">
+                <div class="settings-label"><label for="s-topics_daily_push">启用每日推送</label><small>每天定时推送超话 AI 摘要到 TG</small></div>
+                <label class="switch"><input type="checkbox" id="s-topics_daily_push" /><span class="switch-slider"></span></label>
+              </div>
+              <div class="settings-row">
+                <div class="settings-label"><label for="s-topics_daily_push_cron">推送 Cron</label></div>
+                <input id="s-topics_daily_push_cron" class="input-modern" placeholder="0 8 * * *" />
+              </div>
+              <div class="settings-row">
+                <div class="settings-label"><label for="s-topics_daily_push_mode">推送范围</label><small>全部超话 或 仅勾选推送的超话</small></div>
+                <select id="s-topics_daily_push_mode" class="input-modern">
+                  <option value="all">全部超话</option>
+                  <option value="selected">仅勾选推送的超话</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <!-- AI 总结 -->
+          <div class="settings-section">
+            <div class="settings-section-head">
+              <span class="settings-section-ico">🤖</span>
+              <h2>AI 总结</h2>
+            </div>
+            <div class="settings-section-body">
+              <div class="settings-row">
+                <div class="settings-label"><label for="s-ai_base_url">API Base URL</label><small>OpenAI 兼容 API</small></div>
+                <input id="s-ai_base_url" class="input-modern" placeholder="https://api.openai.com/v1" autocomplete="off" />
+              </div>
+              <div class="settings-row">
+                <div class="settings-label"><label for="s-ai_api_key">API Key</label></div>
+                <input id="s-ai_api_key" class="input-modern" type="password" placeholder="sk-..." autocomplete="off" />
+              </div>
+              <div class="settings-row">
+                <div class="settings-label"><label for="s-ai_model">模型</label></div>
+                <input id="s-ai_model" class="input-modern" placeholder="gpt-4o-mini" />
+              </div>
+              <div class="settings-row">
+                <div class="settings-label"><label>测试连接</label><small>发送测试请求验证 API 可用</small></div>
+                <button class="btn btn-ghost" id="btn-test-ai">测试连接</button>
+                <span class="hint" id="ai-test-status"></span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Telegram -->
+          <div class="settings-section">
+            <div class="settings-section-head">
+              <span class="settings-section-ico">✈️</span>
+              <h2>Telegram 通知</h2>
+            </div>
+            <div class="settings-section-body">
+              <div class="settings-row">
+                <div class="settings-label"><label for="s-tg_enabled">启用 TG 推送</label></div>
+                <label class="switch"><input type="checkbox" id="s-tg_enabled" /><span class="switch-slider"></span></label>
+              </div>
+              <div class="settings-row">
+                <div class="settings-label"><label for="s-tg_bot_token">Bot Token</label></div>
+                <input id="s-tg_bot_token" class="input-modern" placeholder="123456:ABC-DEF..." autocomplete="off" />
+              </div>
+              <div class="settings-row">
+                <div class="settings-label"><label for="s-tg_user_id">Chat / User ID</label></div>
+                <input id="s-tg_user_id" class="input-modern" placeholder="987654321" />
+              </div>
+              <div class="settings-row">
+                <div class="settings-label"><label for="s-tg_quote_enabled">附带每日一言</label><small>签到报告末尾追加随机一言</small></div>
+                <label class="switch"><input type="checkbox" id="s-tg_quote_enabled" /><span class="switch-slider"></span></label>
+              </div>
+              <div class="settings-row">
+                <div class="settings-label"><label for="s-tg_only_on_change">仅异常时推送</label><small>只有出错时才发送通知</small></div>
+                <label class="switch"><input type="checkbox" id="s-tg_only_on_change" /><span class="switch-slider"></span></label>
+              </div>
+              <div class="settings-row">
+                <div class="settings-label"><label for="s-tg_silent">静默推送</label><small>不触发手机通知声音</small></div>
+                <label class="switch"><input type="checkbox" id="s-tg_silent" /><span class="switch-slider"></span></label>
+              </div>
+              <div class="settings-row">
+                <div class="settings-label"><label>测试推送</label></div>
+                <button class="btn btn-ghost" id="btn-test-tg">发送测试消息</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 日志与账户 -->
+          <div class="settings-section">
+            <div class="settings-section-head">
+              <span class="settings-section-ico">🔧</span>
+              <h2>日志 & 账户</h2>
+            </div>
+            <div class="settings-section-body">
+              <div class="settings-row">
+                <div class="settings-label"><label for="s-log_retention_days">日志保留天数</label><small>0 = 不自动清理</small></div>
+                <input id="s-log_retention_days" class="input-modern" type="number" min="0" placeholder="30" />
+              </div>
+              <div class="settings-row">
+                <div class="settings-label"><label>修改密码</label></div>
+                <div class="input-row">
+                  <input id="p-old" class="input-modern" type="password" placeholder="原密码" autocomplete="off" />
+                  <input id="p-new" class="input-modern" type="password" placeholder="新密码" autocomplete="off" />
+                  <button class="btn btn-ghost" id="btn-change-pwd">修改</button>
+                </div>
+              </div>
+              <div class="settings-row">
+                <div class="settings-label"><label>退出登录</label></div>
                 <button class="btn btn-danger" id="btn-logout">退出登录</button>
               </div>
-              <small class="hint" id="pwd-status"></small>
             </div>
           </div>
         </div>

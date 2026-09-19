@@ -161,6 +161,17 @@ def _download_image(url: str) -> Path | None:
 
 # ========================= 单账号关注超话缓存 =========================
 
+class TopicPushIn(BaseModel):
+    push_enabled: int = 0
+
+
+@router.patch("/push/{topic_id}")
+def set_topic_push(topic_id: str, data: TopicPushIn, user=Depends(auth.require_admin)):
+    """设置超话是否启用每日推送"""
+    database.upsert_all_topic(topic_id=topic_id, push_enabled=data.push_enabled)
+    return {"ok": True, "topic_id": topic_id, "push_enabled": data.push_enabled}
+
+
 @router.get("/cache/{account_id}")
 def get_cached_topics(account_id: int, user=Depends(auth.require_admin)):
     acc = database.get_account(account_id)

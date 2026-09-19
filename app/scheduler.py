@@ -15,7 +15,10 @@ from apscheduler.triggers.cron import CronTrigger
 
 from . import database, notifier
 from .anti_ban import AntiBanPolicy
-from .weibo_client import CheckinOptions, cookie_to_string, normalize_cookie, run_account_checkin
+from .weibo_client import (
+    CheckinOptions, cookie_to_string, fetch_topic_posts,
+    get_followed_topics, normalize_cookie, run_account_checkin,
+)
 
 log = logging.getLogger("weibo.scheduler")
 
@@ -133,6 +136,11 @@ def run_checkin(trigger_type: str = "manual", account_ids: list[int] | None = No
                     "cookie": new_cookie_str,
                     "cookie_raw": new_cookie_str,
                 })
+
+            # 签到后自动刷新超话帖子缓存（如果启用）
+            auto_refresh = database.get_setting("auto_refresh_topics", "0") == "1"
+            if auto_refresh and result.get("status") in ("success", "partial"):
+                _auto_refresh_topics_for_account(acc, cookie_dict, proxy_url, channel)
 
             # 更新账号状态
             database.touch_account_result(
@@ -350,6 +358,45 @@ def start_scheduler() -> None:
     log.info("调度器已启动")
 
 
+def _auto_refresh_topics_for_account(acc: dict, cookie_dict: dict,
+                                         proxy_url: str | None,
+                                         channel: str) -> None:
+    """签到后自动刷新超话帖子缓存。"""
+    try:
+        log.info("🔄 自动刷新超话帖子：%s", acc.get("name"))
+        session = __import__("requests").Session()
+        session.headers.update({
+            "User-Agent": (
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) "
+                "AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148"
+            ),
+            "Referer": "https://m.weibo.cn/",
+            "Accept": "application/json, text/plain, */*",
+        })
+        topics = get_followed_topics(
+            session, cookie_dict, channel=channel, proxy=proxy_url,
+            force=False, allow_fallback=True,
+        )
+        count = 0
+        for topic in topics:
+            cid = topic.get("id")
+            if not cid:
+                continue
+            try:
+                fetch_topic_posts(
+                    session, cookies=cookie_dict, containerid=cid,
+                    channel=channel, proxy=proxy_url,
+                    force=False, allow_fallback=True,
+                )
+                count += 1
+                __import__("time").sleep(0.3)
+            except Exception as exc:
+                log.warning("  刷新超话 %s 失败：%s", cid, exc)
+        log.info("  ✓ 已刷新 %d/%d 个超话的帖子", count, len(topics))
+    except Exception as exc:
+        log.warning("自动刷新超话帖子异常：%s", exc)
+
+
 def _topics_daily_push_job() -> None:
     """每日自动推送超话总结到 TG。"""
     try:
@@ -361,8 +408,16 @@ def _topics_daily_push_job() -> None:
         if not topics.get("items"):
             log.info("每日超话推送：无超话数据，跳过")
             return
-        # 取前 5 个超话生成总结
-        items = topics["items"][:5]
+        # 优先使用用户勾选了「推送」的超话，未勾选时回退到全部
+        push_setting = database.get_setting("topics_daily_push_mode", "all")
+        if push_setting == "selected":
+            items = [t for t in topics["items"] if t.get("push_enabled") == 1]
+            if not items:
+                log.info("每日超话推送：没有勾选推送的超话，跳过")
+                return
+        else:
+            items = topics["items"]
+        items = items[:5]
         lines = []
         for t in items:
             name = t.get("name", "")

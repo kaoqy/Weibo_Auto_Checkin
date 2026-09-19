@@ -222,8 +222,31 @@ input[type="checkbox"]{accent-color:var(--accent);width:15px;height:15px;cursor:
 .form .row2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .form small,.form .hint{display:block;color:var(--muted);font-weight:400;margin-top:5px}
 .form-actions{margin-top:4px}
-.settings-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
-.settings-save{display:flex;align-items:center;gap:16px}
+/* ===== 现代化设置 ===== */
+.settings-modern{display:flex;flex-direction:column;gap:24px}
+.settings-section{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+.settings-section-head{display:flex;align-items:center;gap:10px;padding:18px 22px;border-bottom:1px solid var(--line);background:var(--surface-2)}
+.settings-section-ico{font-size:22px;width:36px;height:36px;display:flex;align-items:center;justify-content:center;background:var(--accent-soft);border-radius:10px}
+.settings-section-head h2{margin:0;font-size:16px;font-weight:600}
+.settings-section-body{padding:22px}
+.settings-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 0;border-bottom:1px solid var(--line)}
+.settings-row:last-child{border-bottom:none}
+.settings-label{flex:1;min-width:0}
+.settings-label label{display:block;font-size:14px;font-weight:600;color:var(--ink);margin-bottom:4px;cursor:pointer}
+.settings-label small{display:block;font-size:12px;color:var(--muted);line-height:1.4}
+.input-modern{width:220px;padding:8px 12px;border:1px solid var(--line);border-radius:9px;background:var(--surface-2);color:var(--ink);font-size:13px;outline:none;transition:border .18s,box-shadow .18s}
+.input-modern:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(224,36,94,.15)}
+.input-row{display:flex;align-items:center;gap:8px}
+.input-sep{color:var(--muted);font-weight:600}
+select.input-modern{cursor:pointer}
+/* Toggle Switch */
+.switch{position:relative;display:inline-block;width:44px;height:24px;flex-shrink:0}
+.switch input{opacity:0;width:0;height:0}
+.switch-slider{position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:var(--line);border-radius:24px;transition:.25s}
+.switch-slider:before{position:absolute;content:"";height:18px;width:18px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.25s;box-shadow:0 1px 3px rgba(0,0,0,.2)}
+.switch input:checked+.switch-slider{background:var(--accent)}
+.switch input:checked+.switch-slider:before{transform:translateX(20px)}
+.settings-save{display:flex;align-items:center;gap:16px;padding:18px 0 0}
 .save-status{color:var(--muted);font-size:13px}
 .save-status.ok{color:var(--success)}
 
@@ -577,6 +600,17 @@ html[data-theme="dark"] .topic-list-item:hover {
   border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
 }
 .topic-list-item.active::before { content: ''; position: absolute; left: 0; top: 20%; height: 60%; width: 3px; border-radius: 3px; background: var(--accent); }
+.topic-push-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.topic-push-toggle input { accent-color: var(--accent); cursor: pointer; }
 .topic-list-avatar { width: 40px; height: 40px; border-radius: 10px; background: var(--surface-2); object-fit: cover; flex-shrink: 0; border: 1px solid var(--line); }
 .topic-list-info { flex: 1; min-width: 0; }
 .topic-list-name { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

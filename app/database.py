@@ -165,6 +165,7 @@ def init_db() -> None:
             topic_url    TEXT NOT NULL DEFAULT '',
             member_count INTEGER NOT NULL DEFAULT 0,
             post_count   INTEGER NOT NULL DEFAULT 0,
+            push_enabled INTEGER NOT NULL DEFAULT 0,
             fetched_at   TEXT,
             created_at   TEXT NOT NULL,
             updated_at   TEXT NOT NULL
@@ -916,7 +917,7 @@ def clear_topic_caches() -> int:
 def upsert_all_topic(topic_id: str, name: str = "", avatar_url: str = "",
                      description: str = "", topic_url: str = "",
                      member_count: int = 0, post_count: int = 0,
-                     fetched_at: str = "") -> int:
+                     push_enabled: int = 0, fetched_at: str = "") -> int:
     """插入或更新一条全量超话（按 topic_id 去重）。返回 id。"""
     conn = _get_conn()
     now = _now()
@@ -926,19 +927,19 @@ def upsert_all_topic(topic_id: str, name: str = "", avatar_url: str = "",
     if row:
         conn.execute(
             "UPDATE all_topics SET name=?, avatar_url=?, description=?, topic_url=?,"
-            " member_count=?, post_count=?, fetched_at=?, updated_at=? WHERE id=?",
+            " member_count=?, post_count=?, push_enabled=?, fetched_at=?, updated_at=? WHERE id=?",
             (name, avatar_url, description, topic_url,
-             member_count, post_count, fetched_at or now, now, row["id"]),
+             member_count, post_count, push_enabled, fetched_at or now, now, row["id"]),
         )
         conn.commit()
         return row["id"]
     else:
         cur = conn.execute(
             "INSERT INTO all_topics (topic_id, name, avatar_url, description, topic_url,"
-            " member_count, post_count, fetched_at, created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " member_count, post_count, push_enabled, fetched_at, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (topic_id, name, avatar_url, description, topic_url,
-             member_count, post_count, fetched_at or now, now, now),
+             member_count, post_count, push_enabled, fetched_at or now, now, now),
         )
         conn.commit()
         return cur.lastrowid

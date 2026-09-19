@@ -17,6 +17,7 @@ const api = {
   get: (p) => fetch(p).then(r => handleResp(r, p)).then(r => r.json()),
   post: (p, b) => fetch(p, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(b||{})}).then(r => handleResp(r, p)).then(r => r.json()),
   put: (p, b) => fetch(p, {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(b)}).then(r => handleResp(r, p)).then(r => r.json()),
+  patch: (p, b) => fetch(p, {method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify(b||{})}).then(r => handleResp(r, p)).then(r => r.json()),
   del: (p) => fetch(p, {method:'DELETE'}).then(r => handleResp(r, p)).then(r => r.json()),
 };
 
@@ -879,6 +880,12 @@ async function loadSettings() {
     // 每日超话推送
     setVal('s-topics_daily_push', settingsCache.topics_daily_push==='1');
     $('#s-topics_daily_push_cron').value = settingsCache.topics_daily_push_cron||'0 8 * * *';
+    // 签到后自动刷新超话
+    setVal('s-auto_refresh_topics', settingsCache.auto_refresh_topics==='1');
+    // 推送模式：all / selected
+    if ($('#s-topics_daily_push_mode')) {
+      $('#s-topics_daily_push_mode').value = settingsCache.topics_daily_push_mode||'all';
+    }
   } catch(e){ toast('加载设置失败','err'); }
 }
 
@@ -911,6 +918,9 @@ function collectSettings() {
     // 每日超话推送
     topics_daily_push: chk('s-topics_daily_push'),
     topics_daily_push_cron: val('s-topics_daily_push_cron').trim() || '0 8 * * *',
+    topics_daily_push_mode: val('s-topics_daily_push_mode').trim() || 'all',
+    // 签到后自动刷新超话
+    auto_refresh_topics: chk('s-auto_refresh_topics'),
   };
 }
 $('#btn-save-all').onclick = async () => {
@@ -922,7 +932,8 @@ $('#btn-save-all').onclick = async () => {
     setTimeout(()=>status.textContent='',2500);
   } catch(e){ status.textContent='保存失败'; status.className='save-status'; }
 };
-$('#btn-save-schedule').onclick = async () => {
+var saveScheduleBtn = $('#btn-save-schedule');
+if (saveScheduleBtn) saveScheduleBtn.onclick = async () => {
   try {
     await api.post('/api/settings', collectSettings());
     toast('定时配置已保存','good');
@@ -1070,14 +1081,33 @@ function renderTopicList(topics) {
     const members = t.member_count ? `<span>👥 ${t.member_count}</span>` : '';
     const updated = t.updated_at ? `<span>${esc(t.updated_at.slice(5,16))}</span>` : '';
     const isActive = t.topic_id === currentTopicId ? ' active' : '';
+    const pushEnabled = t.push_enabled === 1;
     return `<div class="topic-list-item${isActive}" data-id="${esc(t.topic_id)}" data-name="${esc(name)}" onclick="openTopicDetail('${esc(t.topic_id)}', this)">
       ${avatarHtml}
       <div class="topic-list-info">
         <div class="topic-list-name" title="${esc(name)}">${esc(name)}</div>
         <div class="topic-list-meta">${[members, updated].filter(Boolean).join(' · ')}</div>
       </div>
+      <label class="topic-push-toggle" title="每日推送此超话" onclick="event.stopPropagation()">
+        <input type="checkbox" ${pushEnabled ? 'checked' : ''} onchange="toggleTopicPush('${esc(t.topic_id)}', this.checked)" />
+        <span class="dot ${pushEnabled ? 'a' : ''}"></span>
+      </label>
     </div>`;
   }).join('');
+}
+
+async function toggleTopicPush(topicId, enabled) {
+  try {
+    await api.patch('/api/topics/push/' + topicId, { push_enabled: enabled ? 1 : 0 });
+    // 更新本地数据
+    var item = (topicsCache.items || []).find(t => t.topic_id === topicId);
+    if (item) item.push_enabled = enabled ? 1 : 0;
+  } catch(e) {
+    toast('保存失败', 'err');
+    // 回勾
+    var inp = document.querySelector('.topic-list-item[data-id="' + topicId + '"] input');
+    if (inp) inp.checked = !enabled;
+  }
 }
 
 async function openTopicDetail(topicId, el, forceRefresh = false) {
@@ -1244,7 +1274,7 @@ function renderPosts(posts) {
         '<span class="topic-post-time">' + time + '</span>' +
       '</div>' +
       '<div class="topic-post-text' + (isLong ? ' topic-post-collapsed' : '') + '" id="' + textId + '">' +
-        (isLong ? truncated : text) +
+        (isLong ? linkifyText(esc(rawText.slice(0, 120))) : text) +
       '</div>' +
       (isLong ? '<button class="btn btn-ghost btn-sm topic-post-expand" onclick="toggleExpand(\'' + textId + '\')">展开全文</button>' : '') +
       picsHtml +
@@ -1266,24 +1296,19 @@ function toggleExpand(id) {
     btn = el.parentElement.querySelector('.topic-post-expand');
   }
   var isCollapsed = el.classList.contains('topic-post-collapsed');
+  var idx = parseInt(id.replace('post-text-', ''));
+  var p = window.__currentPosts && window.__currentPosts[idx];
+  if (!p) return;
   if (isCollapsed) {
-    // 展开：移除截断，显示完整内容
+    // 展开：显示完整内容（带链接）
     el.classList.remove('topic-post-collapsed');
-    // 从原始数据重新渲染完整文本
-    var idx = parseInt(id.replace('post-text-', ''));
-    if (window.__currentPosts && window.__currentPosts[idx]) {
-      var p = window.__currentPosts[idx];
-      el.innerHTML = linkifyText(esc(p.text || ''));
-    }
+    el.innerHTML = linkifyText(esc(p.text || ''));
     if (btn) btn.textContent = '收起';
   } else {
-    // 收起：截断显示
+    // 收起：截断显示（同样带链接，保持视觉一致）
     el.classList.add('topic-post-collapsed');
-    var idx2 = parseInt(id.replace('post-text-', ''));
-    if (window.__currentPosts && window.__currentPosts[idx2]) {
-      var p2 = window.__currentPosts[idx2];
-      el.innerHTML = esc(p2.text.slice(0, 120)) + '<span class="topic-ellipsis">…</span>';
-    }
+    var truncated = p.text.length > 120 ? p.text.slice(0, 120) : p.text;
+    el.innerHTML = linkifyText(esc(truncated)) + '<span class="topic-ellipsis">…</span>';
     if (btn) btn.textContent = '展开全文';
   }
 }
