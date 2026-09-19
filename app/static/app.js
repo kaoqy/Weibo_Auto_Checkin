@@ -878,8 +878,8 @@ function renderLogs() {
   });
   const countBox = $('#logCount');
   // "加载更多"按钮：先创建 DOM，再绑定事件（不依赖 logOffset 状态）
-  if (countBox) {
-    var moreBtn = logOffset < logTotal ? ' · <button class="btn btn-ghost btn-sm" id="btn-load-more">加载更多</button>' : '';
+  var hasFilter = kw || st; var showMoreBtn = logOffset < logTotal && !hasFilter; if (countBox) {
+    var moreBtn = showMoreBtn ? ' · <button class="btn btn-ghost btn-sm" id="btn-load-more">加载更多</button>' : '';
     countBox.innerHTML = '共 ' + logTotal + ' 条，当前显示 ' + rows.length + ' 条' + moreBtn;
     var loadMoreBtn = document.getElementById('btn-load-more');
     if (loadMoreBtn) {
@@ -1126,6 +1126,7 @@ var currentTopicName = '';
 var currentPosts = [];
 var isLoadingPosts = false;
 var isLoadingList = false;
+var currentRequestId = 0;
 
 async function loadTopics(reset = true) {
   if (reset) {
@@ -1222,6 +1223,7 @@ async function toggleTopicPush(topicId, enabled) {
 
 async function openTopicDetail(topicId, el, forceRefresh = false) {
   currentTopicId = topicId;
+  var requestId = ++currentRequestId;
   
   // 从 data-name 属性获取名称
   var nameFromAttr = el ? el.getAttribute('data-name') : '';
@@ -1288,6 +1290,7 @@ async function openTopicDetail(topicId, el, forceRefresh = false) {
   try {
     const url = '/api/topics/posts/' + encodeURIComponent(topicId) + '?count=20' + (forceRefresh ? '&force=true' : '');
     const data = await api.get(url);
+    if (requestId !== currentRequestId) return;
     currentPosts = data.posts || [];
     window.__currentPosts = currentPosts;
     if (!currentPosts.length) {
@@ -1322,11 +1325,16 @@ async function openTopicDetail(topicId, el, forceRefresh = false) {
 
 function filterPosts() {
   const kw = ($('#topicSearch') || {}).value?.trim().toLowerCase() || '';
-  if (!kw) { renderPosts(currentPosts); return; }
+  if (!kw) { 
+    window.__currentPosts = currentPosts;
+    renderPosts(currentPosts); 
+    return; 
+  }
   const filtered = currentPosts.filter(p => {
     return (p.text || '').toLowerCase().includes(kw) ||
            (p.user?.screen_name || '').toLowerCase().includes(kw);
   });
+  window.__currentPosts = filtered;
   renderPosts(filtered);
 }
 

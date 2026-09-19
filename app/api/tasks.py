@@ -157,6 +157,9 @@ def update_settings(values: dict, user: dict = Depends(auth.require_admin)):
         "log_retention_days",
         # v1.0.0 AI 总结
         "ai_base_url", "ai_api_key", "ai_model",
+        # v1.3.0 超话推送 & 自动刷新
+        "topics_daily_push", "topics_daily_push_cron", "topics_daily_push_mode",
+        "auto_refresh_topics",
     }
     updates = {k: v for k, v in values.items() if k in known}
     database.set_settings(updates)
