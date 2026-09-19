@@ -164,7 +164,7 @@ def update_settings(values: dict, user: dict = Depends(auth.require_admin)):
     updates = {k: v for k, v in values.items() if k in known}
     database.set_settings(updates)
     # 若涉及调度，重建定时任务
-    if "schedule_enabled" in updates or "schedule_cron" in updates:
+    if "schedule_enabled" in updates or "schedule_cron" in updates or "topics_daily_push" in updates or "topics_daily_push_cron" in updates or "topics_daily_push_mode" in updates or "auto_refresh_topics" in updates:
         scheduler.reload_schedule()
     return database.get_settings()
 

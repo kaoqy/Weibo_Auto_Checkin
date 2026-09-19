@@ -344,25 +344,24 @@ async function populateProxySelect(sel, selectedId=null) {
   sel.innerHTML = opt('', '自动 / 直连') + proxies.map(p => opt(p.id, p.label)).join('');
 }
 
+var accModalLoadPromise = null;
 function openAccModal(id=null) {
   editingId = id;
   $('#accModalTitle').textContent = id ? '编辑账号' : '添加账号';
-  $('#m-name').value = ''; $('#m-cookie').value = ''; $('#m-remark').value='';
+  $('#m-name').value = ''; $('#m-cookie').value = ''; $('#m-remark').value = '';
   $('#m-enabled').checked = true;
   populateProxySelect($('#m-proxy'), null);
-  // 重置超话选择模块
   accountTopicsCache = [];
   $('#m-topic-checkboxes').innerHTML = '';
   $('#m-topic-status').textContent = '加载中…';
   $('#m-topic-status').className = '';
   if (id) {
-    api.get('/api/accounts/'+id).then(a=>{
+    accModalLoadPromise = api.get('/api/accounts/'+id).then(a=>{
       $('#m-name').value = a.name;
       $('#m-cookie').value = a.cookie_raw || a.cookie || '';
       $('#m-remark').value = a.remark||'';
       $('#m-enabled').checked = !!a.enabled;
       populateProxySelect($('#m-proxy'), a.proxy_id ?? null);
-      // 加载缓存的超话
       loadAccountTopicsForEdit(id);
     });
   }
@@ -379,9 +378,11 @@ $('#accModalClose').onclick = $('#accModalCancel').onclick = ()=> {
 document.addEventListener('click', function(e) {
   if (e.target.classList.contains('modal-mask') && !e.target.hidden) {
     e.target.hidden = true;
+    document.body.classList.remove('modal-open');
   }
 });
 $('#accModalSave').onclick = async () => {
+  if (accModalLoadPromise) await accModalLoadPromise;
   const body = {
     name: $('#m-name').value.trim() || '未命名账号',
     cookie_raw: $('#m-cookie').value.trim(),
@@ -394,6 +395,7 @@ $('#accModalSave').onclick = async () => {
     else await api.post('/api/accounts', body);
     toast('保存成功', 'good');
     $('#accModal').hidden = true;
+    document.body.classList.remove('modal-open');
     loadAccounts(); loadDashboard();
   } catch(e){ toast('保存失败', 'err'); }
 };
@@ -740,6 +742,7 @@ $('#btn-batch-import').onclick = () => {
   $('#batchImportModal').hidden = false; document.body.classList.add('modal-open');
   $('#batchImportContent').value = '';
   $('#batchImportResult').innerHTML = '';
+  $('#batchImportModalSave').disabled = false;
 };
 $('#batchImportModalClose').onclick = $('#batchImportModalCancel').onclick = () => {
   $('#batchImportModal').hidden = true;
@@ -1001,6 +1004,7 @@ $('#btn-save-all').onclick = async () => {
   status.textContent = '保存中…'; status.className='save-status';
   try {
     settingsCache = await api.post('/api/settings', collectSettings());
+    await api.post('/api/settings/reload-schedule', {});
     status.textContent = '✅ 已保存'; status.className='save-status ok';
     setTimeout(()=>status.textContent='',2500);
   } catch(e){ status.textContent='保存失败'; status.className='save-status'; }
@@ -1062,7 +1066,7 @@ function pollRun() {
       });
       clearTimeout(pollTimer);
     }
-  }).catch(()=>{});
+  }).catch(()=>{ clearTimeout(pollTimer); });
 }
 function addRunLine(txt){
   const box = $('#runLines');
@@ -1101,6 +1105,8 @@ $('#btn-user').onclick = () => {
   document.querySelector('.nav-item[data-view="settings"]').click();
 };
 $('#btn-logout').onclick = async () => {
+  if (window._dashInterval) { clearInterval(window._dashInterval); window._dashInterval = null; }
+  if (schedTimer) { clearInterval(schedTimer); schedTimer = null; }
   try { await api.post('/api/auth/logout', {}); } catch(e){}
   location.href = '/login.html';
 };
@@ -1619,7 +1625,7 @@ $('#btn-test-ai').onclick = async () => {
   const st = $('#ai-test-status');
   st.textContent = '测试中…';
   try {
-    const r = await api.post('/api/topics/ai_summary', { text: '测试连接', topic_name: '测试' });
+    const r = await api.post('/api/topics/ai_summary', { text: '测试连接', topic_name: '测试', stream: false });
     if (r.ok) {
       st.textContent = '✅ 连接正常';
       st.style.color = 'var(--success)';
