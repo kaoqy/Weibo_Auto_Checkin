@@ -49,6 +49,11 @@ $$('.nav-item').forEach(btn => {
     $$('.view').forEach(v=>v.hidden = true);
     $('#view-' + btn.dataset.view).hidden = false;
     $('#view-title').textContent = VIEW_TITLES[btn.dataset.view];
+    // 离开仪表盘时清理定时器
+    if (btn.dataset.view !== 'dashboard') {
+      if (schedTimer) { clearInterval(schedTimer); schedTimer = null; }
+      if (window._dashInterval) { clearInterval(window._dashInterval); window._dashInterval = null; }
+    }
     if (btn.dataset.view === 'dashboard') loadDashboard();
     if (btn.dataset.view === 'accounts') loadAccounts();
     if (btn.dataset.view === 'topics') loadTopics();
@@ -228,13 +233,24 @@ async function loadAccounts() {
         <td style="color:var(--muted)">${a.cookie_length} 字符</td>
         <td>${a.proxy_label ? '<span class="badge">'+esc(a.proxy_label)+'</span>' : (a.proxy ? '<span class="badge">'+esc(a.proxy)+'</span>' : '<span class="badge gray">直连</span>')}</td>
         <td>${a.last_checkin||'从未'}</td>
-        <td>
-          <button class="btn btn-ghost btn-sm" onclick="toggleAccEnabled(${a.id})">${a.enabled?'停用':'启用'}</button>
-          <button class="btn btn-ghost btn-sm" onclick="openAccModal(${a.id})">编辑</button>
-          <button class="btn btn-ghost btn-sm" onclick="verifyAcc(${a.id})">校验</button>
-          <button class="btn btn-danger btn-sm" onclick="delAcc(${a.id})">删除</button>
+        <td class="acc-actions">
+          <button class="btn btn-ghost btn-sm" data-action="toggle" data-id="${a.id}">${a.enabled?'停用':'启用'}</button>
+          <button class="btn btn-ghost btn-sm" data-action="edit" data-id="${a.id}">编辑</button>
+          <button class="btn btn-ghost btn-sm" data-action="verify" data-id="${a.id}">校验</button>
+          <button class="btn btn-danger btn-sm" data-action="delete" data-id="${a.id}">删除</button>
         </td>
       </tr>`).join('') : '<tr><td colspan="7" style="color:var(--muted)">暂无账号</td></tr>';
+    // Event delegation for account actions
+    tb.onclick = function(e) {
+      var btn = e.target.closest('button[data-action]');
+      if (!btn) return;
+      var id = parseInt(btn.dataset.id);
+      var action = btn.dataset.action;
+      if (action === 'toggle') toggleAccEnabled(id);
+      else if (action === 'edit') openAccModal(id);
+      else if (action === 'verify') verifyAcc(id);
+      else if (action === 'delete') delAcc(id);
+    };
     $('#accCheckAll').checked = false;
     updateSelCount();
     $('#btn-checkin-selected').disabled = true;
@@ -300,7 +316,15 @@ async function toggleAccEnabled(id) {
     loadAccounts();
   } catch(e){ toast('操作失败','err'); }
 }
-function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function esc(s) {
+  if (s == null) return '';
+  var str = String(s);
+  // Fast path: nothing to escape
+  if (!/[&<>"]/.test(str) && !/'/.test(str)) return str;
+  return str.replace(/[&<>"']/g, function(c) {
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
 
 let accModal = (()=>{})();
 async function populateProxySelect(sel, selectedId=null) {
@@ -342,10 +366,21 @@ function openAccModal(id=null) {
       loadAccountTopicsForEdit(id);
     });
   }
-  $('#accModal').hidden = false;
+  $('#accModal').hidden = false; document.body.classList.add('modal-open');
 }
 $('#btn-add-acc').onclick = () => openAccModal();
-$('#accModalClose').onclick = $('#accModalCancel').onclick = ()=> $('#accModal').hidden = true;
+$('#accModalClose').onclick = $('#accModalCancel').onclick = ()=> {
+  $('#accModal').hidden = true;
+  document.body.classList.remove('modal-open');
+  editingId = null;
+  accountTopicsCache = [];
+};
+// Modal backdrop click-to-close
+document.addEventListener('click', function(e) {
+  if (e.target.classList.contains('modal-mask') && !e.target.hidden) {
+    e.target.hidden = true;
+  }
+});
 $('#accModalSave').onclick = async () => {
   const body = {
     name: $('#m-name').value.trim() || '未命名账号',
@@ -406,7 +441,7 @@ async function loadProxies() {
       const host = p.ip || ((p.url||'').replace(/socks5.*@/,'').replace(/^socks5:\/\//,''));
       const has = p.ip || (p.url||'').includes('socks5');
       const geoHtml = p.geo_country ? `<div class="proxy-geo-line">${flag} ${esc(p.geo_country)} ${esc(p.geo_region||'')}${p.geo_ip?' · '+esc(p.geo_ip):''}</div>` : (has ? '<div class="proxy-geo-line"><span class="badge gray">归属地未识别</span></div>' : '');
-      return `<div class="proxy-card ${p.enabled===false?'proxy-disabled':''}">
+      return `<div class="proxy-card ${p.enabled===false?'proxy-disabled':''}" data-id="${p.id}">
         <div class="proxy-top">
           <div class="proxy-flag">${flag}</div>
           <div class="proxy-main">
@@ -414,9 +449,9 @@ async function loadProxies() {
             <div class="proxy-meta">${esc(has? host : '请编辑补全')}${p.port?':'+p.port:''}</div>
           </div>
           <div class="proxy-actions">
-            <button class="btn btn-ghost btn-sm" onclick="testProxy(${p.id})">测试</button>
-            <button class="btn btn-ghost btn-sm" onclick="openProxyModal(${p.id})">编辑</button>
-            <button class="btn btn-danger btn-sm" onclick="delProxy(${p.id})">删除</button>
+            <button class="btn btn-ghost btn-sm" data-action="proxy-test" data-id="${p.id}">测试</button>
+            <button class="btn btn-ghost btn-sm" data-action="proxy-edit" data-id="${p.id}">编辑</button>
+            <button class="btn btn-danger btn-sm" data-action="proxy-delete" data-id="${p.id}">删除</button>
           </div>
         </div>
         ${geoHtml}
@@ -424,6 +459,19 @@ async function loadProxies() {
       </div>`;
     }).join('');
   } catch(e){ toast('加载代理失败','err'); }
+  // Event delegation for proxy actions
+  var proxyList = $('#proxyList');
+  if (proxyList) {
+    proxyList.onclick = function(e) {
+      var btn = e.target.closest('button[data-action]');
+      if (!btn) return;
+      var id = parseInt(btn.dataset.id);
+      var action = btn.dataset.action;
+      if (action === 'proxy-test') testProxy(id);
+      else if (action === 'proxy-edit') openProxyModal(id);
+      else if (action === 'proxy-delete') delProxy(id);
+    };
+  }
 }
 
 function openProxyModal(id=null) {
@@ -444,7 +492,7 @@ function openProxyModal(id=null) {
       $('#p-geo').innerHTML = p.geo_country ? `<div class="geo-preview-item">${flagEmoji(p.geo_country_code)} ${esc(p.geo_country)} ${esc(p.geo_region||'')}</div>` : '';
     });
   }
-  $('#proxyModal').hidden = false;
+  $('#proxyModal').hidden = false; document.body.classList.add('modal-open');
 }
 $('#btn-proxy-add').onclick = () => openProxyModal();
 $('#proxyModalClose').onclick = $('#proxyModalCancel').onclick = ()=> $('#proxyModal').hidden = true;
@@ -452,6 +500,7 @@ $('#proxyModalClose').onclick = $('#proxyModalCancel').onclick = ()=> $('#proxyM
 $('#p-url').oninput = () => {
   const url = $('#p-url').value.trim();
   if (!url.includes('socks5://')) return;
+  // 使用更宽松的解析：支持 user:pass@host:port 格式
   const m = url.match(/socks5:\/\/(?:([^:@\/]+):([^@\/]*))?@?([^:\/\s]+):(\d+)/);
   if (m) {
     $('#p-ip').value = m[3]; $('#p-port').value = m[4];
@@ -509,6 +558,7 @@ $('#proxyModalSave').onclick = async () => {
     if (editingProxyId) await api.put('/api/proxies/'+editingProxyId, body);
     else await api.post('/api/proxies', body);
     $('#proxyModal').hidden = true;
+  document.body.classList.remove('modal-open');
     toast('保存成功', 'good');
     loadProxies();
   } catch(e){ toast('保存失败：'+e.message, 'err'); }
@@ -520,7 +570,7 @@ async function delProxy(id) {
 }
 async function testProxy(id) {
   const el = $('#ptest-'+id);
-  const btn = document.querySelector(`button[onclick="testProxy(${id})"]`);
+  const btn = document.querySelector(`button[data-action="proxy-test"][data-id="${id}"]`);
   if (el) el.innerHTML = '<span class="ptest-running"><i></i> 正在测速…</span>';
   if (btn) { btn.disabled = true; btn.textContent = '测速中'; }
   try {
@@ -552,14 +602,21 @@ const qrModal = $('#qrModal');
 
 function qrOpen() {
   qrModal.hidden = false;
+  document.body.classList.add('modal-open');
   qrTimer && clearInterval(qrTimer);
   loadQr();
 }
 function qrClose() {
   qrModal.hidden = true;
-  qrTimer && clearInterval(qrTimer);
+  document.body.classList.remove('modal-open');
+  if (qrTimer) { clearTimeout(qrTimer); qrTimer = null; }
   qrId = null;
   qrImporting = false;
+  $('#qrImage').src = '';
+  $('#qrBox').classList.remove('loading');
+  $('#qrLoading').hidden = true;
+  $('#qrStatus').textContent = '正在获取二维码…';
+  $('#qrStatus').className = 'qr-status';
 }
 async function loadQr() {
   qrTimer && clearTimeout(qrTimer);
@@ -680,12 +737,15 @@ $('#qrImportBtn').onclick = doQrImport;
 /* ===== 批量导入 ===== */
 let batchImportModal = (()=>{})();
 $('#btn-batch-import').onclick = () => {
-  $('#batchImportModal').hidden = false;
+  $('#batchImportModal').hidden = false; document.body.classList.add('modal-open');
   $('#batchImportContent').value = '';
   $('#batchImportResult').innerHTML = '';
 };
 $('#batchImportModalClose').onclick = $('#batchImportModalCancel').onclick = () => {
   $('#batchImportModal').hidden = true;
+  document.body.classList.remove('modal-open');
+  $('#batchImportContent').value = '';
+  $('#batchImportResult').innerHTML = '';
 };
 $('#batchImportModalSave').onclick = async () => {
   const content = $('#batchImportContent').value.trim();
@@ -732,11 +792,14 @@ $('#btn-import').onclick = () => {
   $('#importFile').value = '';
   $('#importResult').innerHTML = '';
   $('#importModalSave').disabled = true;
-  $('#importModal').hidden = false;
+  $('#importModal').hidden = false; document.body.classList.add('modal-open');
 };
 $('#importModalClose').onclick = $('#importModalCancel').onclick = () => {
   $('#importModal').hidden = true;
+  document.body.classList.remove('modal-open');
   importData = null;
+  $('#importFile').value = '';
+  $('#importResult').innerHTML = '';
 };
 $('#importFile').onchange = (e) => {
   const file = e.target.files[0];
@@ -814,7 +877,17 @@ function renderLogs() {
     return ((l.account_name||'') + ' ' + (l.message||'')).toLowerCase().includes(kw);
   });
   const countBox = $('#logCount');
-  if (countBox) countBox.textContent = `共 ${logTotal} 条，当前显示 ${rows.length} 条${logOffset < logTotal ? ' · <button class="btn btn-ghost btn-sm" onclick="loadLogs(false)">加载更多</button>' : ''}`;
+  // "加载更多"按钮：先创建 DOM，再绑定事件（不依赖 logOffset 状态）
+  if (countBox) {
+    var moreBtn = logOffset < logTotal ? ' · <button class="btn btn-ghost btn-sm" id="btn-load-more">加载更多</button>' : '';
+    countBox.innerHTML = '共 ' + logTotal + ' 条，当前显示 ' + rows.length + ' 条' + moreBtn;
+    var loadMoreBtn = document.getElementById('btn-load-more');
+    if (loadMoreBtn) {
+      loadMoreBtn.addEventListener('click', function() {
+        loadLogs(false);
+      });
+    }
+  }
   if (!rows.length) {
     list.innerHTML = '<div style="color:var(--muted);padding:20px">' + (logTotal ? '没有匹配的日志' : '暂无签到日志') + '</div>';
     return;
@@ -952,6 +1025,7 @@ $('#btn-test-tg').onclick = async () => {
 $('#btn-run').onclick = async () => {
   try {
     $('#runModal').hidden = false;
+    document.body.classList.add('modal-open');
     $('#runBar').style.width='0%';
     $('#runInfo').textContent='正在启动…';
     $('#runLines').innerHTML='';
@@ -959,7 +1033,11 @@ $('#btn-run').onclick = async () => {
     pollRun();
   } catch(e){ toast('启动失败','err'); $('#runModal').hidden=true; }
 };
-$('#runModalClose').onclick = ()=> $('#runModal').hidden=true;
+$('#runModalClose').onclick = ()=> {
+  $('#runModal').hidden=true;
+  document.body.classList.remove('modal-open');
+  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+};
 
 let pollTimer;
 function pollRun() {
@@ -1077,36 +1155,68 @@ function renderTopicList(topics) {
       ? '<img src="' + avatar + '" class="topic-list-avatar" alt="" onerror="this.onerror=null;this.src=\'/default-avatar.svg\'" />'
       : '<div class="topic-list-avatar">💬</div>';
     const name = t.name || t.topic_id;
-    const safeName = esc(name).replace(/'/g, "\\'");
     const members = t.member_count ? `<span>👥 ${t.member_count}</span>` : '';
     const updated = t.updated_at ? `<span>${esc(t.updated_at.slice(5,16))}</span>` : '';
     const isActive = t.topic_id === currentTopicId ? ' active' : '';
     const pushEnabled = t.push_enabled === 1;
-    return `<div class="topic-list-item${isActive}" data-id="${esc(t.topic_id)}" data-name="${esc(name)}" onclick="openTopicDetail('${esc(t.topic_id)}', this)">
-      ${avatarHtml}
-      <div class="topic-list-info">
-        <div class="topic-list-name" title="${esc(name)}">${esc(name)}</div>
-        <div class="topic-list-meta">${[members, updated].filter(Boolean).join(' · ')}</div>
-      </div>
-      <label class="topic-push-toggle" title="每日推送此超话" onclick="event.stopPropagation()">
-        <input type="checkbox" ${pushEnabled ? 'checked' : ''} onchange="toggleTopicPush('${esc(t.topic_id)}', this.checked)" />
-        <span class="dot ${pushEnabled ? 'a' : ''}"></span>
-      </label>
-    </div>`;
+    // 使用 data-id 属性存储，通过事件委托绑定点击，避免 JS 注入
+    const div = document.createElement('div');
+    div.className = 'topic-list-item' + isActive;
+    div.dataset.id = t.topic_id;
+    div.dataset.name = name;
+    div.innerHTML =
+      avatarHtml +
+      '<div class="topic-list-info">' +
+        '<div class="topic-list-name" title="' + esc(name) + '">' + esc(name) + '</div>' +
+        '<div class="topic-list-meta">' + [members, updated].filter(Boolean).join(' · ') + '</div>' +
+      '</div>' +
+      '<label class="topic-push-toggle" title="每日推送此超话">' +
+        '<input type="checkbox" ' + (pushEnabled ? 'checked' : '') + ' />' +
+        '<span class="dot ' + (pushEnabled ? 'a' : '') + '"></span>' +
+      '</label>';
+    return div.outerHTML;
   }).join('');
+  // 事件委托：点击列表项打开详情
+  box.onclick = function(e) {
+    const item = e.target.closest('.topic-list-item');
+    if (!item) return;
+    const toggle = e.target.closest('.topic-push-toggle');
+    if (toggle) return; // 推送开关有自己的处理
+    openTopicDetail(item.dataset.id, item);
+  };
+  // 绑定推送开关事件
+  box.querySelectorAll('.topic-push-toggle input').forEach(function(inp) {
+    inp.onchange = function() {
+      const item = inp.closest('.topic-list-item');
+      toggleTopicPush(item.dataset.id, inp.checked);
+      const dot = inp.nextElementSibling;
+      if (dot) dot.className = 'dot ' + (inp.checked ? 'a' : '');
+    };
+  });
 }
 
 async function toggleTopicPush(topicId, enabled) {
+  // 先更新本地数据（topicsCache 是数组）
+  var item = (topicsCache || []).find(t => t.topic_id === topicId);
+  var oldValue = item ? item.push_enabled : 0;
+  if (item) item.push_enabled = enabled ? 1 : 0;
   try {
-    await api.patch('/api/topics/push/' + topicId, { push_enabled: enabled ? 1 : 0 });
-    // 更新本地数据（topicsCache 是数组）
-    var item = (topicsCache || []).find(t => t.topic_id === topicId);
-    if (item) item.push_enabled = enabled ? 1 : 0;
+    await api.patch('/api/topics/push/' + encodeURIComponent(topicId), { push_enabled: enabled ? 1 : 0 });
   } catch(e) {
     toast('保存失败', 'err');
-    // 回勾
-    var inp = document.querySelector('.topic-list-item[data-id="' + topicId + '"] input');
-    if (inp) inp.checked = !enabled;
+    // 回滚本地数据
+    if (item) item.push_enabled = oldValue;
+    // 回勾：通过遍历找到对应的 checkbox
+    var items = document.querySelectorAll('.topic-list-item');
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].dataset.id === topicId) {
+        var inp = items[i].querySelector('input[type=checkbox]');
+        if (inp) inp.checked = !enabled;
+        var dot = inp ? inp.nextElementSibling : null;
+        if (dot) dot.className = 'dot ' + (!enabled ? 'a' : '');
+        break;
+      }
+    }
   }
 }
 
@@ -1120,7 +1230,7 @@ async function openTopicDetail(topicId, el, forceRefresh = false) {
 
   // 高亮当前选中
   document.querySelectorAll('.topic-list-item').forEach(item => {
-    item.classList.toggle('active', item.getAttribute('data-id') === topicId);
+    item.classList.toggle('active', item.dataset.id === topicId);
   });
 
   $('#topicDetailTitle').textContent = currentTopicName;
@@ -1164,7 +1274,11 @@ async function openTopicDetail(topicId, el, forceRefresh = false) {
       if (!currentTopicId) { toast('请先选择超话', 'warn'); return; }
       if (isLoadingPosts) return;
       isLoadingPosts = true;
-      var el = document.querySelector('.topic-list-item[data-id="' + currentTopicId + '"]');
+      var items = document.querySelectorAll('.topic-list-item');
+      var el = null;
+      for (var k=0; k<items.length; k++) {
+        if (items[k].dataset.id === currentTopicId) { el = items[k]; break; }
+      }
       openTopicDetail(currentTopicId, el, true).then(function() {
         toast('已刷新', 'good');
         isLoadingPosts = false;
@@ -1224,19 +1338,18 @@ function linkifyText(text) {
     return '<a href="https://s.weibo.com/weibo?q=' + encodeURIComponent(match) + '" target="_blank" rel="noopener noreferrer" class="topic-link">' + match + '</a>';
   });
   // URL → 短链接显示（完整 URL 保留在 href）
-  html = html.replace(/(?<!['"])https?:\/\/[^\s<>"]+/g, function(url) {
+  // 先转义 HTML 特殊字符，避免 < > 等破坏链接
+  html = html.replace(/(?<!['"=])https?:\/\/[^\s<>"]+/g, function(url) {
+    // 去掉尾部标点（但不包括 URL 内部的可能属于地址的字符）
     var trimmed = url.replace(/[.,;!?)]+$/, '');
     var extra = url.slice(trimmed.length);
-    // 截取域名作为显示文本
     var display = trimmed;
     try {
       var u = new URL(trimmed);
-      var path = u.pathname;
-      // 如果路径较长，只显示域名+省略号
+      var path = u.pathname + u.search;
       if (path.length > 20) {
         display = u.host + '/…';
       } else {
-        // 显示完整 URL 但截断尾部
         display = trimmed.length > 60 ? trimmed.slice(0, 30) + '…' : trimmed;
       }
     } catch(e) {
@@ -1259,12 +1372,15 @@ function renderPosts(posts) {
     const text = linkifyText(esc(rawText));
     const isLong = rawText.length > 120;
     const textId = 'post-text-' + idx;
-    const pics = (p.pics || []).map((url) => '<img src="' + esc(url) + '" alt="" loading="lazy" referrerpolicy="no-referrer" onclick="openLightbox(\'' + url + '\')" onerror="this.style.display=\'none\'" />').join('');
+    // 图片 URL 通过 data-src 存储，避免 onclick 字符串注入
+    const pics = (p.pics || []).map((url) => {
+      const safeUrl = esc(url);
+      return '<img src="' + safeUrl + '" alt="" loading="lazy" referrerpolicy="no-referrer" data-lightbox="' + safeUrl + '" onerror="this.style.display=\'none\'" />';
+    }).join('');
     const picsHtml = pics ? '<div class="topic-post-pics">' + pics + '</div>' : '';
     const source = esc(p.source || '');
     const sourceHtml = source ? '<span class="topic-post-source">来自 ' + source + '</span>' : '';
-    const truncated = isLong ? esc(rawText.slice(0, 120)) + '<span class="topic-ellipsis">…</span>' : '';
-    return '<div class="topic-post">' +
+    return '<div class="topic-post" data-idx="' + idx + '">' +
       '<div class="topic-post-header">' +
         '<img class="topic-post-avatar" src="' + avatar + '" alt="" onerror="this.onerror=null;this.src=\'/default-avatar.svg\'" />' +
         '<div class="topic-post-user-info">' +
@@ -1276,7 +1392,7 @@ function renderPosts(posts) {
       '<div class="topic-post-text' + (isLong ? ' topic-post-collapsed' : '') + '" id="' + textId + '">' +
         (isLong ? linkifyText(esc(rawText.slice(0, 120))) : text) +
       '</div>' +
-      (isLong ? '<button class="btn btn-ghost btn-sm topic-post-expand" onclick="toggleExpand(\'' + textId + '\')">展开全文</button>' : '') +
+      (isLong ? '<button class="btn btn-ghost btn-sm topic-post-expand" data-target="' + textId + '">展开全文</button>' : '') +
       picsHtml +
       '<div class="topic-post-actions">' +
         '<span>🔁 ' + (p.reposts_count || 0) + '</span>' +
@@ -1291,10 +1407,7 @@ function renderPosts(posts) {
 function toggleExpand(id) {
   var el = document.getElementById(id);
   if (!el) return;
-  var btn = el.nextElementSibling;
-  if (!btn || !btn.classList.contains('topic-post-expand')) {
-    btn = el.parentElement.querySelector('.topic-post-expand');
-  }
+  var btn = el.parentElement.querySelector('.topic-post-expand');
   var isCollapsed = el.classList.contains('topic-post-collapsed');
   var idx = parseInt(id.replace('post-text-', ''));
   var p = window.__currentPosts && window.__currentPosts[idx];
@@ -1313,21 +1426,27 @@ function toggleExpand(id) {
   }
 }
 
-var lightboxUrl = '';
 function openLightbox(url) {
-  lightboxUrl = url;
+  if (!url) return;
   var lb = document.createElement('div');
   lb.className = 'lightbox';
-  var imgUrl = url.replace(/'/g, "\'");
-  lb.innerHTML = '<div class="lightbox-img" style="background-image:url(\'' + imgUrl + '\')" onclick="closeLightbox()"></div><button class="lightbox-close" onclick="closeLightbox()">×</button>';
+  lb.innerHTML = '<div class="lightbox-img" style="--img-url:url(\'' + url.replace(/'/g, "\\'") + '\')"></div><button class="lightbox-close">×</button>';
   document.body.appendChild(lb);
+  lb.addEventListener('click', closeLightbox);
   setTimeout(function() { lb.classList.add('show'); }, 10);
+  document._activeLightbox = lb;
 }
 function closeLightbox() {
-  var lb = document.querySelector('.lightbox');
-  if (lb) { lb.classList.remove('show'); setTimeout(function() { lb.remove(); }, 200); }
+  var lb = document._activeLightbox || document.querySelector('.lightbox');
+  if (lb) {
+    lb.classList.remove('show');
+    document._activeLightbox = null;
+    setTimeout(function() { lb.remove(); }, 200);
+  }
 }
-document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeLightbox(); });
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape' && document._activeLightbox) closeLightbox();
+});
 
 
 // TG 推送按钮事件已在 openTopicDetail 内绑定
@@ -1434,16 +1553,10 @@ function formatAiSummary(text) {
   if (!text) return '';
   var html = esc(text);
   // Bold (handle incomplete ** during streaming)
-  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  // If there's an unclosed **, don't render it
-  var boldCount = (html.match(/\*\*/g) || []).length;
-  if (boldCount % 2 !== 0) {
-    // Remove the last unclosed **
-    var lastIndex = html.lastIndexOf('**');
-    if (lastIndex >= 0) {
-      html = html.substring(0, lastIndex) + html.substring(lastIndex + 2);
-    }
-  }
+  // Only render ** when both opening and closing are present
+  html = html.replace(/\*\*([^*]+?)\*\*/g, '<strong>$1</strong>');
+  // Remove any remaining unclosed ** to avoid rendering artifacts
+  html = html.replace(/\*\*/g, '');
   // Headers (process ### before ##)
   html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
   html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
@@ -1526,7 +1639,7 @@ async function loadAccountTopicsForEdit(accountId) {
     const r = await api.get('/api/topics/cache/' + accountId);
     if (r.cached && r.topics && r.topics.length) {
       accountTopicsCache = r.topics;
-      statusEl.textContent = `缓存于 ${r.cached_at ? r.cached_at.slice(5,16) : '未知'}，共 ${r.topics.length} 个超话`;
+      statusEl.textContent = '缓存于 ' + (r.cached_at ? r.cached_at.slice(5,16) : '未知') + '，共 ' + r.topics.length + ' 个超话';
       statusEl.className = 'ok';
       renderTopicCheckboxes();
     } else {
@@ -1535,8 +1648,9 @@ async function loadAccountTopicsForEdit(accountId) {
       accountTopicsCache = [];
     }
   } catch(e) {
-    statusEl.textContent = '加载失败：' + e.message;
+    statusEl.textContent = '加载失败：' + (e.message || '未知错误');
     statusEl.className = 'err';
+    accountTopicsCache = [];
   }
 }
 
@@ -1598,4 +1712,15 @@ function collectSelectedTopics() {
 loadVersion();
 loadMe();
 loadDashboard();
-setInterval(()=>{ if (!$('#view-dashboard').hidden) loadDashboard(); }, 30000);
+window._dashInterval = setInterval(()=>{ if (!$('#view-dashboard').hidden) loadDashboard(); }, 30000);
+
+// 一次性事件委托：超话帖子 Lightbox + 展开按钮
+var topicPostsBox = document.getElementById('topicPosts');
+if (topicPostsBox) {
+  topicPostsBox.addEventListener('click', function(e) {
+    var img = e.target.closest('[data-lightbox]');
+    if (img) openLightbox(img.dataset.lightbox);
+    var expandBtn = e.target.closest('.topic-post-expand');
+    if (expandBtn) toggleExpand(expandBtn.dataset.target);
+  });
+}

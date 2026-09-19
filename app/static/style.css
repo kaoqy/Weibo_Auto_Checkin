@@ -58,6 +58,9 @@ body {
   transition: background .22s, color .22s;
   -webkit-font-smoothing: antialiased;
 }
+body.modal-open {
+  overflow: hidden;
+}
 /* body 渐变底纹，用于纯色模式下增加视觉层次 */
 body::before {
   content: '';
@@ -304,6 +307,7 @@ select.input-modern{cursor:pointer}
 /* ===== 弹窗 ===== */
 .modal-mask{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:100}
 .modal-mask[hidden]{display:none !important}
+.modal-mask-close-area{position:absolute;inset:0;z-index:-1}
 .modal{background:var(--surface);border:1px solid var(--line);border-radius:16px;width:520px;max-width:92vw;max-height:88vh;display:flex;flex-direction:column;box-shadow:var(--shadow)}
 .modal.modal-sm{width:420px}
 .modal-head{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--line)}
@@ -439,7 +443,7 @@ select.input-modern{cursor:pointer}
 .proxy-flag{font-size:26px;width:36px;text-align:center}
 .proxy-main{flex:1;min-width:0}
 .proxy-name{font-weight:700;font-size:14px}
-.proxy-meta{font-size:12px;color:var(--muted);margin-top:2px;word-break:break-all}
+.proxy-meta{font-size:12px;color:var(--muted);margin-top:2px;word-break:break-all;overflow-wrap:break-word}
 .proxy-actions{display:flex;gap:6px;flex-shrink:0}
 .proxy-geo-line{font-size:12px;color:var(--muted);margin-top:8px;padding-top:8px;border-top:1px dashed var(--line)}
 .proxy-test{font-size:12px;margin-top:9px;min-height:20px;display:flex;align-items:center;gap:6px}.proxy-test .t-ok,.proxy-test .t-bad,.ptest-idle,.ptest-running{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border-radius:7px}.proxy-test .t-ok{color:var(--success);background:var(--success-soft)}.proxy-test .t-bad{color:var(--danger);background:var(--danger-soft)}.ptest-idle{color:var(--muted);background:var(--surface-2)}.ptest-running{color:var(--accent);background:var(--accent-soft)}.ptest-running i{width:10px;height:10px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:proxySpin .7s linear infinite}@keyframes proxySpin{to{transform:rotate(360deg)}}
@@ -760,6 +764,7 @@ html[data-theme="dark"] .topic-post-collapsed::after {
 .lightbox.show { opacity: 1; }
 .lightbox-img {
   width: 85vmin; height: 85vmin;
+  background-image: var(--img-url);
   background-size: contain;
   background-repeat: no-repeat;
   background-position: center;
@@ -1032,6 +1037,11 @@ html[data-theme="dark"] .ai-reasoning pre { background: var(--surface-2); }
 .loading-progress {
   padding: 24px 12px;
   text-align: center;
+  min-height: 120px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
 }
 .loading-bar {
   height: 6px;

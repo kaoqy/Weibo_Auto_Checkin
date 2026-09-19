@@ -176,8 +176,8 @@ def _format_weibo_time(raw_time: str) -> str:
     now = _dt.now()
 
     try:
-        # 标准格式
-        if len(raw_time) >= 10 and raw_time[4] == '-':
+        # 标准格式 YYYY-MM-DD HH:MM 或更长
+        if len(raw_time) >= 10 and raw_time[4] == '-' and raw_time[7] == '-':
             return raw_time[:16]
         # "今天 HH:MM"
         if raw_time.startswith("今天"):
@@ -209,6 +209,29 @@ def _format_weibo_time(raw_time: str) -> str:
         # "YYYY-MM-DD" 纯日期
         if len(raw_time) == 10 and raw_time[4] == '-':
             return f"{raw_time} 00:00"
+        # "刚刚" → 当前时间
+        if raw_time.strip() == "刚刚":
+            return now.strftime("%Y-%m-%d %H:%M")
+        # "X秒前" → 当前时间
+        if "秒前" in raw_time:
+            return now.strftime("%Y-%m-%d %H:%M")
+        # "X个月前" → 近似计算
+        if "个月前" in raw_time:
+            n = int(raw_time.replace("个月前", "").strip())
+            out = now - _td(days=n * 30)
+            return out.strftime("%Y-%m-%d %H:%M")
+        # "X年前" → 近似计算
+        if "年前" in raw_time:
+            n = int(raw_time.replace("年前", "").strip())
+            out = now - _td(days=n * 365)
+            return out.strftime("%Y-%m-%d %H:%M")
+        # "昨天" 单独出现（无时间）
+        if raw_time.strip() == "昨天":
+            yest = now - _td(days=1)
+            return yest.strftime("%Y-%m-%d %H:%M")
+        # "今天" 单独出现（无时间）
+        if raw_time.strip() == "今天":
+            return now.strftime("%Y-%m-%d %H:%M")
     except Exception:
         pass
     return raw_time
