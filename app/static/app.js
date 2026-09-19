@@ -1099,8 +1099,8 @@ function renderTopicList(topics) {
 async function toggleTopicPush(topicId, enabled) {
   try {
     await api.patch('/api/topics/push/' + topicId, { push_enabled: enabled ? 1 : 0 });
-    // 更新本地数据
-    var item = (topicsCache.items || []).find(t => t.topic_id === topicId);
+    // 更新本地数据（topicsCache 是数组）
+    var item = (topicsCache || []).find(t => t.topic_id === topicId);
     if (item) item.push_enabled = enabled ? 1 : 0;
   } catch(e) {
     toast('保存失败', 'err');

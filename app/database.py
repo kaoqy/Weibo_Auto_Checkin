@@ -216,6 +216,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
         if name not in proxy_cols:
             conn.execute(f"ALTER TABLE proxies ADD COLUMN {name} {definition}")
             log.info("proxies 表已迁移：新增 %s", name)
+
+    # v1.3.0：all_topics 表新增 push_enabled 列（每日推送选择）
+    all_topics_cols = [r["name"] for r in conn.execute("PRAGMA table_info(all_topics)").fetchall()]
+    if "push_enabled" not in all_topics_cols:
+        conn.execute("ALTER TABLE all_topics ADD COLUMN push_enabled INTEGER NOT NULL DEFAULT 0")
+        log.info("all_topics 表已迁移：新增 push_enabled 列")
     conn.commit()
 
 

@@ -124,6 +124,7 @@ def run_checkin(trigger_type: str = "manual", account_ids: list[int] | None = No
 
             log.info("👤 [%s] 账号：%s", log_label, acc.get("name"))
             result = run_account_checkin(cookie_dict, opts, proxy_url=proxy_url)
+            channel = "socks" if proxy_url else "direct"
 
             # 仅在 Session 实际获得 Cookie 更新时回写完整合并值。
             # cookie 与 cookie_raw 始终保持一致，且只使用客户端返回的原始值，
@@ -383,12 +384,16 @@ def _auto_refresh_topics_for_account(acc: dict, cookie_dict: dict,
             if not cid:
                 continue
             try:
-                fetch_topic_posts(
+                result = fetch_topic_posts(
                     session, cookies=cookie_dict, containerid=cid,
                     channel=channel, proxy=proxy_url,
                     force=False, allow_fallback=True,
                 )
-                count += 1
+                posts = result.get("posts", [])
+                if posts:
+                    from . import database as _db
+                    _db.set_topic_posts_cache(cid, posts)
+                    count += 1
                 __import__("time").sleep(0.3)
             except Exception as exc:
                 log.warning("  刷新超话 %s 失败：%s", cid, exc)

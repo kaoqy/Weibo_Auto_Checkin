@@ -611,6 +611,8 @@ html[data-theme="dark"] .topic-list-item:hover {
   color: var(--muted);
 }
 .topic-push-toggle input { accent-color: var(--accent); cursor: pointer; }
+.topic-push-toggle .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+.topic-push-toggle .dot.a { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .topic-list-avatar { width: 40px; height: 40px; border-radius: 10px; background: var(--surface-2); object-fit: cover; flex-shrink: 0; border: 1px solid var(--line); }
 .topic-list-info { flex: 1; min-width: 0; }
 .topic-list-name { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
