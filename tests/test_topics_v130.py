@@ -107,6 +107,43 @@ def test_all_topics_upsert_and_query(tmp_path, monkeypatch):
     db._local.conn = None
 
 
+def test_get_followed_topics_card_type_int(client):
+    """card_type 字段可能是 int 或 str，都应正确处理。"""
+    from unittest.mock import patch
+    from app.weibo_client import get_followed_topics
+
+    # 模拟 API 响应：card_type 是 int 8（不是字符串 "8"）
+    fake_payload = {
+        "ok": 1,
+        "data": {
+            "cards": [{
+                "card_group": [{
+                    "card_type": 8,
+                    "title_sub": "测试超话",
+                    "scheme": "sinaweibo://page/?containerid=100808test",
+                    "buttons": [{"name": "签到", "scheme": "sinaweibo://page/?containerid=100808test&act=checkin"}],
+                    "pic": "https://example.com/avatar.jpg",
+                    "desc": "描述",
+                    "member_count": 1000,
+                }]
+            }],
+            "cardlistInfo": {"since_id": ""},
+        },
+    }
+
+    import requests as _req
+    session = _req.Session()
+    cookies = {"SUB": "test"}
+
+    with patch("app.weibo_client.request_json", return_value=fake_payload):
+        topics = get_followed_topics(session, cookies)
+
+    assert len(topics) == 1
+    assert topics[0]["name"] == "测试超话"
+    assert topics[0]["id"] == "100808test"
+    assert topics[0]["done"] is False
+    assert topics[0]["member_count"] == 1000
+
 def test_topics_api_cache_and_refresh(client):
     """超话缓存和刷新接口。"""
     # 创建一个账号

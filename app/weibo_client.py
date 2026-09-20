@@ -521,13 +521,14 @@ def get_followed_topics(session, cookies, channel="auto", proxy=None,
             channel=channel, proxy=proxy, force=force,
             allow_fallback=allow_fallback,
         )
-        if payload.get("ok") != 1:
+        ok_val = payload.get("ok")
+        if ok_val != 1 and ok_val != "1":
             break
         data = payload.get("data") or {}
         for card in data.get("cards", []):
             items = card.get("card_group") or [card]
             for item in items:
-                if item.get("card_type") != "8" or not item.get("buttons"):
+                if str(item.get("card_type", "")) != "8" or not item.get("buttons"):
                     continue
                 name = item.get("title_sub", "").strip()
                 scheme = item.get("scheme", "")
