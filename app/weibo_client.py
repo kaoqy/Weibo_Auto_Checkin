@@ -512,6 +512,7 @@ def get_followed_topics(session, cookies, channel="auto", proxy=None,
     """获取关注超话列表，返回 [{name,id,scheme,done,avatar,description,member_count}]。"""
     topics = []
     since_id = ""
+    seen_pages = set()
     while True:
         params = {"containerid": FOLLOWED_CONTAINER}
         if since_id:
@@ -523,6 +524,11 @@ def get_followed_topics(session, cookies, channel="auto", proxy=None,
         )
         ok_val = payload.get("ok")
         if ok_val != 1 and ok_val != "1":
+            # 不要把登录过期、风控或微博接口错误误报成「没有关注超话」。
+            detail = payload.get("msg") or payload.get("errmsg") or payload.get("error") or ok_val
+            if not topics:
+                raise RuntimeError(f"微博未能返回关注超话列表：{detail}")
+            log.warning("关注超话翻页提前结束：%s", detail)
             break
         data = payload.get("data") or {}
         for card in data.get("cards", []):
@@ -558,8 +564,9 @@ def get_followed_topics(session, cookies, channel="auto", proxy=None,
                         "member_count": member,
                     })
         since_id = (data.get("cardlistInfo") or {}).get("since_id", "")
-        if not since_id:
+        if not since_id or since_id in seen_pages:
             break
+        seen_pages.add(since_id)
         time.sleep(0.5)
     return topics
 

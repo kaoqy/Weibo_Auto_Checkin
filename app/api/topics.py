@@ -379,7 +379,13 @@ def refresh_all_topics(user=Depends(auth.require_admin)):
 @router.get("/all")
 def list_all_topics(limit: int = 50, offset: int = 0,
                     user=Depends(auth.require_admin)):
-    return database.get_all_topics(limit=limit, offset=offset)
+    result = database.get_all_topics(limit=limit, offset=offset)
+    # 通过本站图片代理加载超话头像，避免微博图床的防盗链影响列表显示。
+    for topic in result.get("items", []):
+        avatar = topic.get("avatar_url", "")
+        if avatar.startswith(("http://", "https://")):
+            topic["avatar_url"] = f"/api/topics/img?url={escape(avatar)}"
+    return result
 
 
 @router.delete("/all")
@@ -620,67 +626,75 @@ def ai_summary(data: AISummaryIn, user=Depends(auth.require_admin)):
     try:
         if data.stream:
             # SSE streaming response
+            # 先建立上游连接，让鉴权/模型/网关错误仍由本接口转成 JSON 错误，
+            # 避免流已经开始后只剩一个空白面板。
+            resp_stream = requests.post(
+                f"{base_url}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "Accept": "text/event-stream",
+                },
+                json=payload,
+                timeout=120,
+                stream=True,
+            )
+            resp_stream.raise_for_status()
+
             def generate():
                 import json as _json
-                resp_stream = requests.post(
-                    f"{base_url}/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json",
-                        "Accept": "text/event-stream",
-                    },
-                    json=payload,
-                    timeout=120,
-                    stream=True,
-                )
-                resp_stream.raise_for_status()
                 buffer = b""
-                for chunk in resp_stream.iter_content(chunk_size=2048):
-                    if not chunk:
-                        continue
-                    buffer += chunk
-                    while b"\n\n" in buffer:
-                        message, buffer = buffer.split(b"\n\n", 1)
-                        for msg_line in message.split(b"\n"):
-                            msg_line = msg_line.strip()
-                            if not msg_line:
-                                continue
-                            try:
-                                line_str = msg_line.decode("utf-8")
-                            except UnicodeDecodeError:
-                                continue
-                            if line_str.startswith("data: "):
-                                data_str = line_str[6:].strip()
-                                if not data_str or data_str == "[DONE]":
-                                    break
+                try:
+                    for chunk in resp_stream.iter_content(chunk_size=2048):
+                        if not chunk:
+                            continue
+                        buffer += chunk
+                        while b"\n\n" in buffer:
+                            message, buffer = buffer.split(b"\n\n", 1)
+                            for msg_line in message.split(b"\n"):
+                                msg_line = msg_line.strip()
+                                if not msg_line:
+                                    continue
                                 try:
-                                    chunk_data = _json.loads(data_str)
-                                    choice = chunk_data.get("choices", [{}])[0]
-                                    delta = choice.get("delta", {})
-                                    text_piece = delta.get("content", "") or ""
-                                    if text_piece:
-                                        out = {"text": text_piece}
-                                        yield f"data: {_json.dumps(out, ensure_ascii=False)}\n\n"
-                                    if choice.get("finish_reason"):
-                                        out_done = {"finish": True}
-                                        try:
+                                    line_str = msg_line.decode("utf-8")
+                                except UnicodeDecodeError:
+                                    continue
+                                if line_str.startswith("data: "):
+                                    data_str = line_str[6:].strip()
+                                    if not data_str or data_str == "[DONE]":
+                                        break
+                                    try:
+                                        chunk_data = _json.loads(data_str)
+                                        choice = chunk_data.get("choices", [{}])[0]
+                                        delta = choice.get("delta", {})
+                                        text_piece = delta.get("content", "") or ""
+                                        if text_piece:
+                                            out = {"text": text_piece}
+                                            yield f"data: {_json.dumps(out, ensure_ascii=False)}\n\n"
+                                        if choice.get("finish_reason"):
+                                            out_done = {"finish": True}
                                             usage = chunk_data.get("usage")
                                             if usage:
                                                 out_done["usage"] = usage
                                             mdl = chunk_data.get("model")
                                             if mdl:
                                                 out_done["model"] = mdl
-                                        except Exception:
-                                            pass
-                                        yield f"data: {_json.dumps(out_done, ensure_ascii=False)}\n\n"
+                                            yield f"data: {_json.dumps(out_done, ensure_ascii=False)}\n\n"
+                                            break
+                                    except _json.JSONDecodeError:
+                                        buffer = msg_line + b"\n" + buffer
                                         break
-                                except _json.JSONDecodeError:
-                                    buffer = msg_line + b"\n" + buffer
-                                    break
-                                except Exception as exc:
-                                    out_err = {"error": str(exc)}
-                                    yield f"data: {_json.dumps(out_err, ensure_ascii=False)}\n\n"
-                                    break
+                                    except Exception as exc:
+                                        out_err = {"error": str(exc)}
+                                        yield f"data: {_json.dumps(out_err, ensure_ascii=False)}\n\n"
+                                        break
+                except Exception as exc:
+                    out_err = {"error": f"流式读取失败：{exc}"}
+                    yield f"data: {_json.dumps(out_err, ensure_ascii=False)}\n\n"
+                finally:
+                    close = getattr(resp_stream, "close", None)
+                    if close:
+                        close()
 
             from fastapi.responses import StreamingResponse
             return StreamingResponse(generate(), media_type="text/event-stream")

@@ -1144,6 +1144,11 @@ async function loadTopics(reset = true) {
     topicsCache = data.items || [];
     var hint = $('#topicsHint');
     if (hint) hint.textContent = '共 ' + (data.total || 0) + ' 个去重超话';
+    var search = $('#topicsSearch');
+    if (search && !search.dataset.bound) {
+      search.dataset.bound = '1';
+      search.addEventListener('input', function() { filterTopicList(); });
+    }
     if (!topicsCache.length) {
       $('#topicsList').innerHTML = '<div style="color:var(--muted);padding:20px;text-align:center">暂无超话记录。<br>点击「↻ 刷新」从账号关注列表拉取。</div>';
       return;
@@ -1154,6 +1159,18 @@ async function loadTopics(reset = true) {
     toast('加载超话失败: ' + (e.message || ''), 'err');
     $('#topicsList').innerHTML = '<div style="color:var(--danger);padding:20px;text-align:center">加载失败<br><span style="font-size:11px">' + esc(e.message || '') + '</span></div>';
   }
+}
+
+function filterTopicList() {
+  var query = ($('#topicsSearch') || {}).value;
+  query = (query || '').trim().toLocaleLowerCase();
+  var filtered = !query ? topicsCache : topicsCache.filter(function(topic) {
+    return (topic.name || '').toLocaleLowerCase().includes(query) ||
+      (topic.topic_id || '').toLocaleLowerCase().includes(query);
+  });
+  renderTopicList(filtered);
+  var hint = $('#topicsHint');
+  if (hint) hint.textContent = query ? '匹配 ' + filtered.length + ' / ' + topicsCache.length + ' 个超话' : '共 ' + topicsCache.length + ' 个去重超话';
 }
 
 function renderTopicList(topics) {
@@ -1176,6 +1193,8 @@ function renderTopicList(topics) {
     var pushEnabled = t.push_enabled === 1;
     var div = document.createElement('div');
     div.className = 'topic-list-item' + isActive;
+    div.setAttribute('role', 'button');
+    div.tabIndex = 0;
     div.dataset.id = t.topic_id || '';
     div.dataset.name = name;
     div.innerHTML =
@@ -1197,6 +1216,12 @@ function renderTopicList(topics) {
     const toggle = e.target.closest('.topic-push-toggle');
     if (toggle) return; // 推送开关有自己的处理
     openTopicDetail(item.dataset.id, item);
+  };
+  box.onkeydown = function(e) {
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('.topic-list-item')) {
+      e.preventDefault();
+      openTopicDetail(e.target.dataset.id, e.target);
+    }
   };
   // 绑定推送开关事件
   box.querySelectorAll('.topic-push-toggle input').forEach(function(inp) {
@@ -1332,6 +1357,7 @@ async function openTopicDetail(topicId, el, forceRefresh = false) {
       header.appendChild(srcHint);
     }
   } catch(e) {
+    if (requestId !== currentRequestId) return;
     $('#topicPosts').innerHTML = '<div style="color:var(--danger);padding:20px;text-align:center">拉取失败：' + esc(e.message || '') + '</div>';
   }
 }
@@ -1479,10 +1505,16 @@ $('#btn-ai-summary').onclick = async () => {
     return;
   }
   var box = $('#aiSummaryContent');
+  var button = $('#btn-ai-summary');
   var question = ($('#ai-question') || {}).value || '';
   question = question.trim();
-  var text = currentPosts.map(function(p, i) { return '[' + (i+1) + '] ' + (p.user?.screen_name || '未知') + ': ' + (p.text || ''); }).join('\n');
+  var text = currentPosts.map(function(p, i) {
+    return '[' + (i+1) + '] ' + (p.user?.screen_name || '未知') + ': ' + (p.text || '') +
+      '（转发 ' + (p.reposts_count || 0) + '，评论 ' + (p.comments_count || 0) + '，点赞 ' + (p.attitudes_count || 0) + '）';
+  }).join('\n');
 
+  button.disabled = true;
+  button.textContent = question ? '分析中…' : '总结中…';
   box.innerHTML = '<div class="ai-summary-loading"><span class="qr-spinner" style="width:16px;height:16px;border-width:2px"></span> AI 正在思考…</div>';
 
   try {
@@ -1498,9 +1530,29 @@ $('#btn-ai-summary').onclick = async () => {
       return;
     }
 
+    // 配置缺失、反向代理错误等情况下后端会返回 JSON，而非 SSE。
+    var contentType = (resp.headers && resp.headers.get('content-type') || '').toLowerCase();
+    if (!contentType.includes('text/event-stream')) {
+      var result = await resp.json();
+      if (!result.ok) {
+        box.innerHTML = '<div class="ai-summary-error">❌ ' + esc(result.error || 'AI 请求失败') + '</div>';
+        return;
+      }
+      var resultText = result.summary || '';
+      box.innerHTML = '<div class="ai-summary-text">' + formatAiSummary(resultText) + '</div>';
+      if (result.model) {
+        var resultHint = document.createElement('div');
+        resultHint.className = 'ai-model-hint';
+        resultHint.textContent = '模型: ' + result.model;
+        box.appendChild(resultHint);
+      }
+      return;
+    }
+
     var reader = resp.body.getReader();
     var decoder = new TextDecoder();
     var accumulated = '';
+    var streamError = '';
     var buffer = '';
     box.innerHTML = '';
     var summaryDiv = document.createElement('div');
@@ -1532,7 +1584,7 @@ $('#btn-ai-summary').onclick = async () => {
               summaryDiv.innerHTML = formatAiSummary(accumulated);
             }
             if (chunkData.error) {
-              summaryDiv.innerHTML += '<span style="color:var(--danger)">' + esc(chunkData.error) + '</span>';
+              streamError = chunkData.error;
             }
             if (chunkData.finish) {
               done = true;
@@ -1564,10 +1616,33 @@ $('#btn-ai-summary').onclick = async () => {
       } catch (e) { /* ignore */ }
     }
 
+    if (!accumulated.trim()) {
+      box.innerHTML = '<div class="ai-summary-error">❌ ' + esc(streamError || 'AI 没有返回内容，请检查模型配置后重试。') + '</div>';
+    } else if (streamError) {
+      var streamErrorEl = document.createElement('div');
+      streamErrorEl.className = 'ai-summary-error';
+      streamErrorEl.textContent = streamError;
+      box.appendChild(streamErrorEl);
+    }
+
   } catch(e) {
     box.innerHTML = '<div class="ai-summary-error">❌ ' + esc(e.message || '请求失败') + '</div>';
+  } finally {
+    button.disabled = false;
+    button.textContent = question ? '✨ 生成回答' : '✨ 生成总结';
   }
 };
+
+$('#ai-question').addEventListener('input', function() {
+  var button = $('#btn-ai-summary');
+  if (button && !button.disabled) button.textContent = this.value.trim() ? '✨ 生成回答' : '✨ 生成总结';
+});
+$('#ai-question').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    $('#btn-ai-summary').click();
+  }
+});
 
 // 格式化 AI 总结文本（Markdown → HTML，支持流式逐字显示）
 function formatAiSummary(text) {
@@ -1605,12 +1680,12 @@ $('#btn-topics-refresh').onclick = async () => {
   if (list) list.innerHTML = '<div class="loading-progress"><div class="loading-bar"><div class="loading-bar-inner" style="width:20%"></div></div><div class="loading-text">正在刷新超话列表...</div></div>';
   try {
     const r = await api.post('/api/topics/refresh_all', {});
-    if (r.ok) {
+    if (r.ok && !(r.errors && r.total === 0)) {
       var msg = r.message || '刷新完成';
       if (r.errors) msg += '（' + r.errors + ' 个账号失败）';
       toast(msg, 'good');
     } else {
-      toast(r.error || '刷新失败', 'err');
+      toast(r.message || r.error || '刷新失败', 'err');
     }
   } catch(e) {
     console.error('refresh_all error:', e);
