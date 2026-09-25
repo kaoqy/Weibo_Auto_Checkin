@@ -602,18 +602,7 @@ html[data-theme="dark"] .topic-detail-header {
 .topic-detail-header .meta a:hover { text-decoration: underline; }
 .topic-desc { font-size: 12px; color: var(--muted); margin-top: 6px; line-height: 1.6; }
 
-.topic-toolbar { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
-.topic-search {
-  flex: 1;
-  padding: 8px 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
-  color: var(--ink);
-  font-size: 13px;
-  transition: border-color .18s, box-shadow .18s;
-}
-.topic-search:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.topic-toolbar { display: flex; gap: 8px; margin-top: 10px; align-items: center; justify-content: flex-end; }
 
 #btn-push-tg { white-space: nowrap; }
 
@@ -874,7 +863,6 @@ html[data-theme="dark"] .lightbox-close { background: rgba(255, 255, 255, 0.15);
   .topic-post-time { white-space: normal; text-align: right; }
   .topic-post-pics { grid-template-columns: repeat(2, 1fr); }
   .topic-toolbar { flex-wrap: wrap; }
-  .topic-search { width: 100%; }
   #btn-push-tg { width: 100%; }
   .lightbox-img { width: 95vmin; height: 95vmin; }
   .ai-panel { padding: 10px; }
@@ -1121,7 +1109,7 @@ td.acc-actions .btn { margin:1px 2px 1px 0; }
 /* 触屏 / 手机细节优化 */
 @media(max-width:640px){
   /* 防止 iOS/Android 聚焦输入时自动放大页面（16px 以下会触发缩放） */
-  .form input, .form textarea, .input-modern, .topics-search, .topic-search,
+  .form input, .form textarea, .input-modern, .topics-search,
   .log-search, .log-filter, .qr-name input, .modal input, .modal select { font-size:16px; }
   /* Toast 抬高，避开底部导航 */
   .toast { bottom:calc(84px + env(safe-area-inset-bottom)); max-width:92vw; text-align:center; }

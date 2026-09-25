@@ -1287,7 +1287,6 @@ async function openTopicDetail(topicId, el, forceRefresh = false) {
   headerHtml += '</div>';
   if (topicDesc) headerHtml += '<div class="topic-desc">' + topicDesc + '</div>';
   headerHtml += '<div class="topic-toolbar">';
-  headerHtml += '<input type="text" class="topic-search" id="topicSearch" placeholder="🔍 搜索帖子..." />';
   headerHtml += '<button class="btn btn-ghost btn-sm" id="btn-push-tg" title="推送 AI 总结到 TG">📮 推送到 TG</button>';
   headerHtml += '</div>';
   $('#topicDetailHeader').innerHTML = headerHtml;
@@ -1296,11 +1295,6 @@ async function openTopicDetail(topicId, el, forceRefresh = false) {
   currentPosts = [];
 
   // 绑定动态按钮事件（必须在 innerHTML 设置后）
-  var searchInput = $('#topicSearch');
-  if (searchInput) {
-    searchInput.oninput = function() { filterPosts(); };
-    searchInput.onkeydown = function(e) { if (e.key === 'Escape') { this.value = ''; filterPosts(); } };
-  }
   var pushTgBtn = $('#btn-push-tg');
   if (pushTgBtn) {
     pushTgBtn.onclick = function() {
@@ -1364,22 +1358,6 @@ async function openTopicDetail(topicId, el, forceRefresh = false) {
     if (requestId !== currentRequestId) return;
     $('#topicPosts').innerHTML = '<div style="color:var(--danger);padding:20px;text-align:center">拉取失败：' + esc(e.message || '') + '</div>';
   }
-}
-
-function filterPosts() {
-  const kw = ($('#topicSearch') || {}).value?.trim().toLowerCase() || '';
-  if (!kw) { 
-    window.__currentPosts = currentPosts;
-    renderPosts(currentPosts); 
-    return; 
-  }
-  const filtered = currentPosts.filter(p => {
-    return (p.text || '').toLowerCase().includes(kw) ||
-      ((p.retweeted && p.retweeted.text) || '').toLowerCase().includes(kw) ||
-           (p.user?.screen_name || '').toLowerCase().includes(kw);
-  });
-  window.__currentPosts = filtered;
-  renderPosts(filtered);
 }
 
 function linkifyText(text) {

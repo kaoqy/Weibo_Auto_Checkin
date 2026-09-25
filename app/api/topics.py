@@ -19,6 +19,15 @@ from ..weibo_client import (
     normalize_cookie,
 )
 
+def _extract_ai_content(result: dict) -> str:
+    """安全提取 API 响应中的正文；部分网关在内容审核或仅回 usage 时会返回空 choices。"""
+    choices = result.get("choices") or []
+    if not choices:
+        return ""
+    msg = (choices[0] or {}).get("message") or {}
+    return (msg.get("content") or "").strip()
+
+
 def call_ai_summary(text: str, topic_name: str = "超话", stream: bool = False) -> dict:
     """直接调用 AI 总结（不依赖 FastAPI 路由）。"""
     base_url = (database.get_setting("ai_base_url", "") or "").strip().rstrip("/")
@@ -59,8 +68,10 @@ def call_ai_summary(text: str, topic_name: str = "超话", stream: bool = False)
         )
         resp.raise_for_status()
         result = resp.json()
-        msg = result["choices"][0]["message"]
-        summary = msg.get("content", "").strip()
+        summary = _extract_ai_content(result)
+        if not summary:
+            log.warning("AI 返回空内容 (model=%s)", result.get("model", model))
+            return {"ok": False, "summary": "", "error": "AI 服务未返回有效内容，请稍后重试"}
         return {"ok": True, "summary": summary, "model": result.get("model", model)}
     except requests.exceptions.Timeout:
         return {"ok": False, "summary": "", "error": "请求超时"}
@@ -92,27 +103,24 @@ def _detect_image_ext(content: bytes) -> str | None:
 
 
 # 硬编码的 AI 提示词
-AI_TOPIC_PROMPT = """你是一个专业的微博超话内容分析助手。请根据以下超话帖子内容进行深度总结分析。
+AI_TOPIC_PROMPT = """你是微博「{topic_name}」超话的内容分析助手。请基于用户提供的最新帖子，输出一份简洁、信息密度高的中文摘要。
 
-请按照以下结构输出总结内容（使用 Markdown 格式）：
+按以下结构输出（Markdown）：
 
 ## 📋 内容概览
-（50字以内）：概括本期超话的核心话题与讨论焦点
+用 1-2 句话点明本期超话具体在讨论什么，直接说清话题本身，不要泛泛而谈。
 
 ## 🔥 热门话题
-（100字以内）：提取2-3个最受关注的具体话题或事件，附带相关数据（如转发量、评论数等）
+列出 2-3 个最受关注的话题，每条一行：话题名称 —— 受关注的原因，尽量引用帖子中的具体内容或数据（转发/评论/点赞量）。
 
-## 💬 互动分析
-（50字以内）：分析粉丝互动特点，包括转发、评论、点赞的趋势
+## 💬 互动与氛围
+用 2-3 句话概括粉丝互动特点与社区整体情绪走向。
 
-## 🎭 整体氛围
-（50字以内）：总结超话社区的整体情感倾向和活跃程度
-
-注意事项：
-- 保持客观中立，不要添加个人观点
-- 使用简洁流畅的中文表达
-- 直接输出总结内容，不要任何前缀或格式标记
-- 如果帖子内容较少或质量不高，请如实说明"""
+要求：
+- 只依据所给帖子内容，严禁编造；若帖子稀少、重复或内容空洞，如实说明即可，不要硬凑
+- 人名、作品名、事件名等专有名词保留原文
+- 客观中立、简洁流畅，全文控制在 300 字以内
+- 直接从「## 📋 内容概览」开始输出，不要开场白和结尾客套"""
 
 
 def _download_image(url: str) -> Path | None:
@@ -628,8 +636,9 @@ def ai_summary(data: AISummaryIn, user=Depends(auth.require_admin)):
                                         break
                                     try:
                                         chunk_data = _json.loads(data_str)
-                                        choice = chunk_data.get("choices", [{}])[0]
-                                        delta = choice.get("delta", {})
+                                        choices = chunk_data.get("choices") or []
+                                        choice = choices[0] if choices else {}
+                                        delta = choice.get("delta") or {}
                                         text_piece = delta.get("content", "") or ""
                                         if text_piece:
                                             out = {"text": text_piece}
@@ -674,8 +683,10 @@ def ai_summary(data: AISummaryIn, user=Depends(auth.require_admin)):
             )
             resp.raise_for_status()
             result = resp.json()
-            msg = result["choices"][0]["message"]
-            summary = msg.get("content", "").strip()
+            summary = _extract_ai_content(result)
+            if not summary:
+                log.warning("AI 返回空内容 (model=%s)", result.get("model", model))
+                return {"ok": False, "summary": "", "error": "AI 服务未返回有效内容（可能被内容审核拦截），请稍后重试"}
             out = {
                 "ok": True,
                 "summary": summary,
@@ -735,7 +746,10 @@ def push_topic_summary(data: TopicSummaryPushIn, user=Depends(auth.require_admin
         )
         resp.raise_for_status()
         result = resp.json()
-        summary = result["choices"][0]["message"].get("content", "").strip()
+        summary = _extract_ai_content(result)
+        if not summary:
+            log.warning("推送超话摘要：AI 返回空内容")
+            return {"ok": False, "error": "AI 服务未返回有效内容，推送已取消"}
 
         # 推送到 TG
         from ..notifier import send_telegram
