@@ -638,6 +638,76 @@ def get_followed_topics(session, cookies, channel="auto", proxy=None,
     return topics
 
 
+def _positive_int(value) -> int | None:
+    """微博各版本接口把排名字段返回成 int / '12' / '第12名' 都有可能。"""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, str):
+        match = re.search(r"\d+", value)
+        if match:
+            number = int(match.group())
+            return number if number > 0 else None
+    return None
+
+
+def extract_checkin_rank(response) -> int | None:
+    """从签到响应中提取超话签到排名，取不到时返回 None。"""
+    if not isinstance(response, (dict, list)):
+        return None
+
+    # 越具体的键优先，避免误取榜单总长度或粉丝团等级里的数字
+    rank_keys = (
+        "rank", "today_rank", "sign_rank", "checkin_rank",
+        "cur_rank", "rank_index", "rank_num", "position",
+    )
+    # 微博接口排名散落在不同嵌套层级，按可能性从高到低逐层查找
+    containers = (
+        ("data",),
+        ("result",),
+        ("data", "result"),
+        ("data", "sign_data"),
+        ("data", "checkin_data"),
+        ("data", "extra"),
+        ("sign_data",),
+        ("checkin_data",),
+        ("extra",),
+        (),
+    )
+    for level in containers:
+        for key in rank_keys:
+            for path in _iter_rank_candidates(response, level, key):
+                rank = _positive_int(path)
+                if rank is not None:
+                    return rank
+    return None
+
+
+def _iter_rank_candidates(node, path: tuple, wanted_key: str):
+    """按给定容器路径查找目标键，并递归展开 JSON 字符串。"""
+    if isinstance(node, str):
+        text = node.strip()
+        if text.startswith(("{", "[")):
+            try:
+                node = json.loads(text)
+            except (ValueError, TypeError):
+                return
+        else:
+            return
+    if isinstance(node, dict):
+        if not path:
+            if wanted_key in node:
+                yield node[wanted_key]
+            return
+        head, rest = path[0], path[1:]
+        if head in node:
+            yield from _iter_rank_candidates(node[head], rest, wanted_key)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _iter_rank_candidates(item, path, wanted_key)
+
+
 def checkin_topic(session, cookies, scheme, st, channel="auto", proxy=None,
                   force=False, allow_fallback=True):
     if not scheme:
@@ -770,8 +840,17 @@ def run_account_checkin(cookie_dict: dict, opts: CheckinOptions,
                 or "已签到" in message
                 or "已簽到" in message
             )
-            results.append({"name": topic["name"], "success": success,
-                            "message": message or str(response)[:100]})
+            entry = {"name": topic["name"], "success": success,
+                     "message": message or str(response)[:100]}
+            if success:
+                entry["rank"] = extract_checkin_rank(response)
+                if entry["rank"] is not None:
+                    log.info("  🏆 %s 签到成功，今日第 %s 名",
+                             topic["name"], entry["rank"])
+                else:
+                    log.info("  %s 签到成功，但响应中未找到排名：%.200s",
+                             topic["name"], resp_text)
+            results.append(entry)
         except NetworkError:
             merged, changed = merge_refreshed_cookies(session, cookie_dict)
             return _bundle("failed", "签到过程中网络失败", total,
@@ -788,8 +867,25 @@ def run_account_checkin(cookie_dict: dict, opts: CheckinOptions,
     success_count = sum(1 for r in results if r["success"])
     fail_count = total - success_count
     status = "success" if fail_count == 0 else "partial"
-    return _bundle(status, "签到完成", total, success_count, fail_count,
-                   results, merged, changed, channel)
+    return _bundle(status, _checkin_summary_message(results), total,
+                   success_count, fail_count, results, merged, changed, channel)
+
+
+def _checkin_summary_message(results: list) -> str:
+    """汇总本次签到：有排名时在消息里带上，供日志与 TG 直接展示。"""
+    ranked = [(r["name"], r["rank"]) for r in results
+              if r.get("success") and isinstance(r.get("rank"), int)]
+    if not ranked:
+        return "签到完成"
+    ranked.sort(key=lambda item: item[1])
+    fastest, best_rank = ranked[0]
+    worst_name, worst_rank = ranked[-1]
+    average = round(sum(rank for _, rank in ranked) / len(ranked))
+    detail = "、".join(f"{name} #{rank}" for name, rank in ranked[:5])
+    if len(ranked) > 5:
+        detail += f" …（共 {len(ranked)} 个）"
+    return (f"签到完成 · 排名 {len(ranked)} 个：{detail}"
+            f" ｜ 最快 {fastest} #{best_rank}，最慢 {worst_name} #{worst_rank}，平均 #{average}")
 
 
 def _bundle(status, message, total, success, fail, results, cookie,
