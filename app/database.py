@@ -920,22 +920,46 @@ def clear_topic_caches() -> int:
 
 # ---------- all_topics 表（全量超话去重列表） ----------
 
-def upsert_all_topic(topic_id: str, name: str = "", avatar_url: str = "",
-                     description: str = "", topic_url: str = "",
-                     member_count: int = 0, post_count: int = 0,
-                     push_enabled: int = 0, fetched_at: str = "") -> int:
-    """插入或更新一条全量超话（按 topic_id 去重）。返回 id。"""
+def upsert_all_topic(topic_id: str, name: str | None = None,
+                     avatar_url: str | None = None,
+                     description: str | None = None,
+                     topic_url: str | None = None,
+                     member_count: int | None = None,
+                     post_count: int | None = None,
+                     push_enabled: int | None = None,
+                     fetched_at: str = "") -> int:
+    """插入或更新一条全量超话（按 topic_id 去重）。返回 id。
+
+    更新采用「只覆盖非空字段」语义：空字符串 / None / 非正数一律保留库里的旧值，
+    防止刷新某个局部信息时把名称、头像或推送勾选冲掉。
+    """
     conn = _get_conn()
     now = _now()
     row = conn.execute(
         "SELECT id FROM all_topics WHERE topic_id = ?", (topic_id,)
     ).fetchone()
     if row:
+        sets, params = [], []
+        for col, val in (("name", name), ("avatar_url", avatar_url),
+                         ("description", description), ("topic_url", topic_url)):
+            if isinstance(val, str) and val.strip():
+                sets.append(f"{col} = ?")
+                params.append(val.strip() if col == "name" else val)
+        for col, val in (("member_count", member_count), ("post_count", post_count)):
+            if isinstance(val, int) and val > 0:
+                sets.append(f"{col} = ?")
+                params.append(val)
+        if push_enabled in (0, 1):
+            sets.append("push_enabled = ?")
+            params.append(push_enabled)
+        if fetched_at:
+            sets.append("fetched_at = ?")
+            params.append(fetched_at)
+        sets.append("updated_at = ?")
+        params.append(now)
+        params.append(row["id"])
         conn.execute(
-            "UPDATE all_topics SET name=?, avatar_url=?, description=?, topic_url=?,"
-            " member_count=?, post_count=?, push_enabled=?, fetched_at=?, updated_at=? WHERE id=?",
-            (name, avatar_url, description, topic_url,
-             member_count, post_count, push_enabled, fetched_at or now, now, row["id"]),
+            f"UPDATE all_topics SET {', '.join(sets)} WHERE id = ?", params
         )
         conn.commit()
         return row["id"]
@@ -944,8 +968,11 @@ def upsert_all_topic(topic_id: str, name: str = "", avatar_url: str = "",
             "INSERT INTO all_topics (topic_id, name, avatar_url, description, topic_url,"
             " member_count, post_count, push_enabled, fetched_at, created_at, updated_at)"
             " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (topic_id, name, avatar_url, description, topic_url,
-             member_count, post_count, push_enabled, fetched_at or now, now, now),
+            (topic_id, (name or "").strip(), avatar_url or "", description or "",
+             topic_url or "", member_count if isinstance(member_count, int) and member_count > 0 else 0,
+             post_count if isinstance(post_count, int) and post_count > 0 else 0,
+             push_enabled if push_enabled in (0, 1) else 0,
+             fetched_at or now, now, now),
         )
         conn.commit()
         return cur.lastrowid

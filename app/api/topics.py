@@ -230,34 +230,22 @@ def refresh_topics(data: RefreshIn, user=Depends(auth.require_admin)):
 
     database.set_topic_cache(data.account_id, topics)
 
-    # 合并进全量去重表，但不覆盖已有名称
+    # 合并进全量去重表；upsert 只覆盖非空字段，刷新不会冲掉已有名称/头像/推送勾选
     for t in topics:
         cid = t.get("id", "")
         if not cid:
             continue
-        new_name = t.get("name", "").strip()
-        existing = database.get_all_topic(cid)
-        avatar = t.get("avatar", "")
-        desc = t.get("description", "")
-        member = t.get("member_count", 0)
-        if new_name:
-            database.upsert_all_topic(
-                topic_id=cid,
-                name=new_name,
-                topic_url=f"https://weibo.com/page/{cid}",
-                avatar_url=avatar,
-                description=desc,
-                member_count=member,
-            )
-        elif existing:
-            database.upsert_all_topic(
-                topic_id=cid,
-                name=existing.get("name", ""),
-                topic_url=f"https://weibo.com/page/{cid}",
-                avatar_url=avatar,
-                description=desc,
-                member_count=member,
-            )
+        new_name = (t.get("name") or "").strip()
+        if not new_name and not database.get_all_topic(cid):
+            continue
+        database.upsert_all_topic(
+            topic_id=cid,
+            name=new_name,
+            topic_url=f"https://weibo.com/page/{cid}",
+            avatar_url=t.get("avatar", ""),
+            description=t.get("description", ""),
+            member_count=t.get("member_count", 0),
+        )
 
     return {"ok": True, "count": len(topics), "topics": topics}
 
@@ -318,29 +306,17 @@ def refresh_all_topics(user=Depends(auth.require_admin)):
                 cid = t.get("id", "")
                 if not cid:
                     continue
-                new_name = t.get("name", "").strip()
-                existing = database.get_all_topic(cid)
-                avatar = t.get("avatar", "")
-                desc = t.get("description", "")
-                member = t.get("member_count", 0)
-                if new_name:
-                    database.upsert_all_topic(
-                        topic_id=cid,
-                        name=new_name,
-                        topic_url=f"https://weibo.com/page/{cid}",
-                        avatar_url=avatar,
-                        description=desc,
-                        member_count=member,
-                    )
-                elif existing:
-                    database.upsert_all_topic(
-                        topic_id=cid,
-                        name=existing.get("name", ""),
-                        topic_url=f"https://weibo.com/page/{cid}",
-                        avatar_url=avatar,
-                        description=desc,
-                        member_count=member,
-                    )
+                new_name = (t.get("name") or "").strip()
+                if not new_name and not database.get_all_topic(cid):
+                    continue
+                database.upsert_all_topic(
+                    topic_id=cid,
+                    name=new_name,
+                    topic_url=f"https://weibo.com/page/{cid}",
+                    avatar_url=t.get("avatar", ""),
+                    description=t.get("description", ""),
+                    member_count=t.get("member_count", 0),
+                )
 
             results.append({
                 "account_id": acc["id"],
@@ -488,10 +464,8 @@ def get_topic_posts(topic_id: str, count: int = 20,
                 user_obj["profile_image_url"] = f"/api/topics/img?url={escape(avatar)}"
 
         database.set_topic_posts_cache(topic_id, posts)
-        existing_topic = database.get_all_topic(topic_id)
-        if existing_topic and existing_topic.get("name"):
-            database.upsert_all_topic(topic_id=topic_id, name=existing_topic["name"], fetched_at=database._now())
-        else:
+        # 只给已收录的超话更新抓取时间；未收录时不建空记录（否则列表会出现无名条目）
+        if database.get_all_topic(topic_id):
             database.upsert_all_topic(topic_id=topic_id, fetched_at=database._now())
 
         return {
