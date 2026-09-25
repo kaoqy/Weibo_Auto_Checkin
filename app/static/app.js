@@ -27,8 +27,9 @@ function toast(msg, type='') {
   const t = $('#toast');
   t.textContent = msg;
   t.className = 'toast show ' + type;
+  if (type === 'err') { t.classList.remove('shake'); void t.offsetWidth; t.classList.add('shake'); }
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(()=> t.className = 'toast', 2600);
+  toastTimer = setTimeout(()=> { t.className = 'toast'; }, 2600);
 }
 
 /* ===== 主题 ===== */
@@ -168,6 +169,10 @@ function renderStats(stats, accounts) {
     card('成功率', stats.success_rate || 0, '', '%'),
     card('今日记录', stats.today || 0, '', '条'),
   ].join('');
+  var gridEl = document.getElementById('statGrid');
+  var stats2 = gridEl.querySelectorAll('.stat');
+  for (var ri = 0; ri < stats2.length; ri++){ stats2[ri].classList.add('reveal','counting'); stats2[ri].style.setProperty('--reveal-i', ri); }
+  observeNewReveal(gridEl);
 }
 function card(lbl, num, cls, suffix='') {
   return `<div class="stat ${cls}"><div class="num">${num}<span style="font-size:14px">${suffix}</span></div><div class="lbl">${lbl}</div></div>`;
@@ -1556,7 +1561,7 @@ $('#btn-ai-summary').onclick = async () => {
     var buffer = '';
     box.innerHTML = '';
     var summaryDiv = document.createElement('div');
-    summaryDiv.className = 'ai-summary-text';
+    summaryDiv.className = 'ai-summary-text streaming';
     box.appendChild(summaryDiv);
 
     var done = false;
@@ -1630,6 +1635,7 @@ $('#btn-ai-summary').onclick = async () => {
   } finally {
     button.disabled = false;
     button.textContent = question ? '✨ 生成回答' : '✨ 生成总结';
+    if (summaryDiv) summaryDiv.classList.remove('streaming');
   }
 };
 
@@ -1810,10 +1816,57 @@ function collectSelectedTopics() {
   return Array.from(checked).map(cb => cb.value);
 }
 
+
+/* ===== 交互微动效 ===== */
+// 按钮涟漪反馈
+document.addEventListener('click', function(e){
+  var btn = e.target.closest('.btn');
+  if (!btn || btn.disabled) return;
+  var r = btn.querySelector('.ripple');
+  if (!r) { r = document.createElement('span'); r.className='ripple'; btn.appendChild(r); }
+  r.classList.remove('go');
+  var rect = btn.getBoundingClientRect();
+  r.style.left = (e.clientX - rect.left) + 'px';
+  r.style.top  = (e.clientY - rect.top) + 'px';
+  void r.offsetWidth;
+  r.classList.add('go');
+});
+
+// 弹窗通用 Esc 关闭
+document.addEventListener('keydown', function(e){
+  if (e.key === 'Escape') {
+    var open = document.querySelectorAll('.modal-mask:not([hidden])');
+    if (open.length) {
+      open[open.length-1].hidden = true;
+      document.body.classList.remove('modal-open');
+    }
+  }
+});
+
+// 滚动揭示
+var revealObserver = null;
+function setupReveal() {
+  if (revealObserver) return;
+  if (!window.IntersectionObserver) {
+    document.querySelectorAll('.reveal').forEach(function(el){ el.classList.add('in'); });
+    return;
+  }
+  revealObserver = new IntersectionObserver(function(entries){
+    entries.forEach(function(en){ if (en.isIntersecting) { en.target.classList.add('in'); revealObserver.unobserve(en.target); } });
+  }, {threshold:0.12});
+  document.querySelectorAll('.reveal').forEach(function(el){ revealObserver.observe(el); });
+}
+function observeNewReveal(root){
+  if (!window.IntersectionObserver) { (root||document).querySelectorAll('.reveal:not(.in)').forEach(function(el){ el.classList.add('in'); }); return; }
+  if (!revealObserver) { setupReveal(); return; }
+  (root||document).querySelectorAll('.reveal:not(.in)').forEach(function(el){ revealObserver.observe(el); });
+}
+
 /* ===== 初始化 ===== */
 loadVersion();
 loadMe();
 loadDashboard();
+setupReveal();
 window._dashInterval = setInterval(()=>{ if (!$('#view-dashboard').hidden) loadDashboard(); }, 30000);
 
 // 一次性事件委托：超话帖子 Lightbox + 展开按钮

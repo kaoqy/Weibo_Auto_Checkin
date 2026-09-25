@@ -277,6 +277,10 @@ select.input-modern{cursor:pointer}
 .trend-col:hover .trend-bars{box-shadow:0 0 0 2px var(--accent-soft)}
 .trend-lbl{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
 @keyframes barGrow{from{transform:scaleY(.05);transform-origin:bottom}to{transform:scaleY(1);transform-origin:bottom}}
+@keyframes countUp{from{opacity:.4;transform:translateY(6px)}to{opacity:1;transform:none}}
+.stat.counting .num{animation:countUp .5s ease both}
+.topic-post{animation:postIn .3s ease both}
+@keyframes postIn{from{transform:translateY(10px)}to{transform:none}}
 .quote{margin:2px 0 8px;padding:12px 14px;border-left:3px solid var(--accent);background:var(--surface-2);border-radius:0 10px 10px 0;font-size:14px;line-height:1.65;animation:softPop .3s ease both}
 .quote-from{color:var(--muted);font-size:12px;text-align:right;margin-bottom:10px}
 
@@ -329,6 +333,28 @@ select.input-modern{cursor:pointer}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 .toast.good{background:var(--success)}
 .toast.err{background:var(--danger)}
+/* ===== 增强入场与微动效 ===== */
+.modal-mask:not([hidden]){animation:maskIn .25s ease both}
+.modal-mask:not([hidden]) .modal{animation:modalIn .32s cubic-bezier(.2,.8,.2,1) both}
+@keyframes maskIn{from{opacity:0}to{opacity:1}}
+@keyframes modalIn{from{opacity:0;transform:translateY(16px) scale(.96)}to{opacity:1;transform:none}}
+.reveal{opacity:0;transform:translateY(14px);transition:opacity .45s cubic-bezier(.2,.8,.2,1),transform .45s cubic-bezier(.2,.8,.2,1);transition-delay:calc(var(--reveal-i,0) * .05s)}
+.reveal.in{opacity:1;transform:none}
+
+.skeleton-shimmer{background:linear-gradient(90deg,var(--surface-2) 25%,color-mix(in srgb,var(--surface-2) 75%,var(--ink) 6%) 50%,var(--surface-2) 75%);background-size:200% 100%;animation:shimmer 1.6s linear infinite;border-radius:8px}
+@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.btn{overflow:visible}
+.btn .ripple{position:absolute;width:60px;height:60px;margin-left:-30px;margin-top:-30px;border-radius:50%;transform:scale(0);pointer-events:none;z-index:1}
+.btn .ripple.go{background:radial-gradient(circle,rgba(255,255,255,.32) 0%,rgba(255,255,255,.12) 45%,transparent 70%);animation:rippleGo .55s ease-out forwards}
+.btn-primary .ripple.go,.btn-danger .ripple.go{background:radial-gradient(circle,rgba(255,255,255,.26) 0%,rgba(255,255,255,.08) 45%,transparent 70%)}
+@keyframes rippleGo{from{transform:scale(0);opacity:.9}to{transform:scale(1);opacity:0}}
+.shake{animation:shake .42s cubic-bezier(.4,0,.4,1) both}
+@keyframes shake{0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-7px)}40%,80%{transform:translateX(7px)}}
+.ai-summary-text.streaming:after{content:"▍";display:inline-block;color:var(--accent);animation:blink 1s steps(1) infinite;margin-left:1px;vertical-align:-1px}
+@keyframes blink{50%{opacity:0}}
+.stat .num{transition:color .3s ease}
+.nav-item.active::before{transition:opacity .2s ease,height .2s ease}
+
 
 /* ===== 响应式 ===== */
 
@@ -394,7 +420,7 @@ select.input-modern{cursor:pointer}
   .qr-box img{width:170px;height:170px}
 }
 
-@media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}}
+@media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}.reveal,.reveal.in{opacity:1!important;transform:none!important}}
 
 /* ===== 扫码登录 ===== */
 .qr-body{text-align:center}
