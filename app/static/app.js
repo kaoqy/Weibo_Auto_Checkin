@@ -724,7 +724,7 @@ async function doQrImport() {
       session_id: qrId,
       name: $('#qrName').value.trim()
     });
-    toast('✅ 账号已导入：' + r.name, 'good');
+    toast(r.updated ? '✅ 已覆盖同微博号的原账号：' + r.name : '✅ 账号已导入：' + r.name, 'good');
     qrClose();
     await Promise.all([loadAccounts(), loadDashboard()]);
   } catch(e) {
@@ -1292,7 +1292,7 @@ async function openTopicDetail(topicId, el, forceRefresh = false) {
   headerHtml += '</div>';
   $('#topicDetailHeader').innerHTML = headerHtml;
   $('#topicPosts').innerHTML = '<div class="loading-progress"><div class="loading-bar"><div class="loading-bar-inner" style="width:60%"></div></div><div class="loading-text">正在加载帖子…</div></div>';
-  $('#aiSummaryContent').innerHTML = '<div class="ai-placeholder"><span class="ai-placeholder-icon">✨</span><p>点击「生成总结」按钮，AI 将自动分析超话帖子内容</p><p class="hint">也可输入问题进行个性化问答</p></div>';
+  $('#aiSummaryContent').innerHTML = '<div class="ai-placeholder"><span class="ai-placeholder-icon">✨</span><p>点击「生成总结」按钮，AI 将自动分析超话帖子内容</p></div>';
   currentPosts = [];
 
   // 绑定动态按钮事件（必须在 innerHTML 设置后）
@@ -1305,10 +1305,9 @@ async function openTopicDetail(topicId, el, forceRefresh = false) {
   if (pushTgBtn) {
     pushTgBtn.onclick = function() {
       if (!currentPosts || !currentPosts.length) { toast('没有帖子数据', 'warn'); return; }
-      var text = currentPosts.map(function(p, i) { return '[' + (i+1) + '] ' + (p.user?.screen_name || '未知') + ': ' + (p.text || ''); }).join('\n');
-      var question = ($('#ai-question') || {}).value || '';
+      var text = currentPosts.map(function(p, i) { return '[' + (i+1) + '] ' + (p.user?.screen_name || '未知') + ': ' + postFullText(p); }).join('\n');
       toast('推送中…');
-      api.post('/api/topics/push_tg', { text: text, topic_name: currentTopicName, question: question }).then(function(r) {
+      api.post('/api/topics/push_tg', { text: text, topic_name: currentTopicName }).then(function(r) {
         toast(r.ok ? '✅ 已推送到 TG' : ('❌ ' + (r.error || '推送失败')), r.ok ? 'good' : 'err');
       }).catch(function() { toast('推送失败', 'err'); });
     };
@@ -1376,6 +1375,7 @@ function filterPosts() {
   }
   const filtered = currentPosts.filter(p => {
     return (p.text || '').toLowerCase().includes(kw) ||
+      ((p.retweeted && p.retweeted.text) || '').toLowerCase().includes(kw) ||
            (p.user?.screen_name || '').toLowerCase().includes(kw);
   });
   window.__currentPosts = filtered;
@@ -1412,6 +1412,29 @@ function linkifyText(text) {
   return html;
 }
 
+function postDisplayText(p) {
+  // 后端会把纯转发（"转发微博"）合并为 "//@原作者: 原博内容"；
+  // 这种合并结果不再重复展示，改由引用框呈现。
+  var rt = p.retweeted;
+  var raw = p.text || '';
+  if (rt && rt.text) {
+    var merged = (rt.user && rt.user.screen_name ? '//@' + rt.user.screen_name + ': ' : '') + rt.text;
+    if (raw === merged) return '';
+  }
+  return raw;
+}
+
+// 供 AI 总结 / TG 推送使用：正文 + 被转发原博内容
+function postFullText(p) {
+  var t = p.text || '';
+  var rt = p.retweeted;
+  if (rt && rt.text && t.indexOf(rt.text) === -1) {
+    var quote = (rt.user && rt.user.screen_name ? '@' + rt.user.screen_name + '：' : '') + rt.text;
+    t = t ? (t + '【原博：' + quote + '】') : quote;
+  }
+  return t;
+}
+
 function renderPosts(posts) {
   const box = $('#topicPosts');
   if (!box) return;
@@ -1420,7 +1443,7 @@ function renderPosts(posts) {
     const userName = esc(p.user?.screen_name || '未知');
     const time = esc(p.created_at || '');
     const mid = esc(p.mid || '');
-    const rawText = p.text || '';
+    const rawText = postDisplayText(p);
     const text = linkifyText(esc(rawText));
     const isLong = rawText.length > 120;
     const textId = 'post-text-' + idx;
@@ -1432,6 +1455,12 @@ function renderPosts(posts) {
     const picsHtml = pics ? '<div class="topic-post-pics">' + pics + '</div>' : '';
     const source = esc(p.source || '');
     const sourceHtml = source ? '<span class="topic-post-source">来自 ' + source + '</span>' : '';
+    const rt = p.retweeted;
+    const quoteHtml = (rt && rt.text) ?
+      '<div class="topic-post-quote">' +
+        (rt.user && rt.user.screen_name ? '<span class="topic-post-quote-user">@' + esc(rt.user.screen_name) + '</span>' : '') +
+        '<div class="topic-post-quote-text">' + linkifyText(esc(rt.text)) + '</div>' +
+      '</div>' : '';
     return '<div class="topic-post" data-idx="' + idx + '">' +
       '<div class="topic-post-header">' +
         '<img class="topic-post-avatar" src="' + avatar + '" alt="" onerror="this.onerror=null;this.src=\'/default-avatar.svg\'" />' +
@@ -1441,10 +1470,13 @@ function renderPosts(posts) {
         '</div>' +
         '<span class="topic-post-time">' + time + '</span>' +
       '</div>' +
-      '<div class="topic-post-text' + (isLong ? ' topic-post-collapsed' : '') + '" id="' + textId + '">' +
-        (isLong ? linkifyText(esc(rawText.slice(0, 120))) : text) +
-      '</div>' +
-      (isLong ? '<button class="btn btn-ghost btn-sm topic-post-expand" data-target="' + textId + '">展开全文</button>' : '') +
+      (rawText ?
+        '<div class="topic-post-text' + (isLong ? ' topic-post-collapsed' : '') + '" id="' + textId + '">' +
+          (isLong ? linkifyText(esc(rawText.slice(0, 120))) : text) +
+        '</div>' +
+        (isLong ? '<button class="btn btn-ghost btn-sm topic-post-expand" data-target="' + textId + '">展开全文</button>' : '')
+        : '') +
+      quoteHtml +
       picsHtml +
       '<div class="topic-post-actions">' +
         '<span>🔁 ' + (p.reposts_count || 0) + '</span>' +
@@ -1467,12 +1499,13 @@ function toggleExpand(id) {
   if (isCollapsed) {
     // 展开：显示完整内容（带链接）
     el.classList.remove('topic-post-collapsed');
-    el.innerHTML = linkifyText(esc(p.text || ''));
+    el.innerHTML = linkifyText(esc(postDisplayText(p)));
     if (btn) btn.textContent = '收起';
   } else {
     // 收起：截断显示（同样带链接，保持视觉一致）
+    var full = postDisplayText(p);
     el.classList.add('topic-post-collapsed');
-    var truncated = p.text.length > 120 ? p.text.slice(0, 120) : p.text;
+    var truncated = full.length > 120 ? full.slice(0, 120) : full;
     el.innerHTML = linkifyText(esc(truncated)) + '<span class="topic-ellipsis">…</span>';
     if (btn) btn.textContent = '展开全文';
   }
@@ -1503,7 +1536,7 @@ document.addEventListener('keydown', function(e) {
 
 // TG 推送按钮事件已在 openTopicDetail 内绑定
 
-// AI 总结 / Q&A（仅流式输出）
+// AI 总结（仅流式输出）
 $('#btn-ai-summary').onclick = async () => {
   if (!currentPosts || !currentPosts.length) {
     toast('请先选择超话并拉取帖子', 'warn');
@@ -1511,22 +1544,20 @@ $('#btn-ai-summary').onclick = async () => {
   }
   var box = $('#aiSummaryContent');
   var button = $('#btn-ai-summary');
-  var question = ($('#ai-question') || {}).value || '';
-  question = question.trim();
   var text = currentPosts.map(function(p, i) {
-    return '[' + (i+1) + '] ' + (p.user?.screen_name || '未知') + ': ' + (p.text || '') +
+    return '[' + (i+1) + '] ' + (p.user?.screen_name || '未知') + ': ' + postFullText(p) +
       '（转发 ' + (p.reposts_count || 0) + '，评论 ' + (p.comments_count || 0) + '，点赞 ' + (p.attitudes_count || 0) + '）';
   }).join('\n');
 
   button.disabled = true;
-  button.textContent = question ? '分析中…' : '总结中…';
+  button.textContent = '总结中…';
   box.innerHTML = '<div class="ai-summary-loading"><span class="qr-spinner" style="width:16px;height:16px;border-width:2px"></span> AI 正在思考…</div>';
 
   try {
     var resp = await fetch('/api/topics/ai_summary', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: text, topic_name: currentTopicName, question: question, stream: true }),
+      body: JSON.stringify({ text: text, topic_name: currentTopicName, stream: true }),
     });
 
     if (!resp.ok) {
@@ -1634,21 +1665,10 @@ $('#btn-ai-summary').onclick = async () => {
     box.innerHTML = '<div class="ai-summary-error">❌ ' + esc(e.message || '请求失败') + '</div>';
   } finally {
     button.disabled = false;
-    button.textContent = question ? '✨ 生成回答' : '✨ 生成总结';
+    button.textContent = '✨ 生成总结';
     if (summaryDiv) summaryDiv.classList.remove('streaming');
   }
 };
-
-$('#ai-question').addEventListener('input', function() {
-  var button = $('#btn-ai-summary');
-  if (button && !button.disabled) button.textContent = this.value.trim() ? '✨ 生成回答' : '✨ 生成总结';
-});
-$('#ai-question').addEventListener('keydown', function(e) {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    $('#btn-ai-summary').click();
-  }
-});
 
 // 格式化 AI 总结文本（Markdown → HTML，支持流式逐字显示）
 function formatAiSummary(text) {

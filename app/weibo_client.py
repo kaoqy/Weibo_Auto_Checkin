@@ -52,19 +52,11 @@ _RETRYABLE = (
 # ========================= 超话页面（v1.3.0） =========================
 
 
-def _normalize_mblog(mblog_raw):
-    """将 mblog 对象（PC 或移动端格式）标准化为统一输出格式。"""
-    if not mblog_raw or not isinstance(mblog_raw, dict):
-        return None
-    if not mblog_raw.get("id"):
-        return None
+def _clean_mblog_text(raw_text):
+    """去掉微博文本里的 HTML 标签、实体与截断尾巴（…全文 / 展开等）。"""
     import re as _re, html as _html
-    text = mblog_raw.get("text", "")
-    text = _re.sub(r'<[^>]+>', '', text).strip()
-    # 解码 HTML 实体（&amp; -> &, &lt; -> < 等）
+    text = _re.sub(r'<[^>]+>', '', str(raw_text or '')).strip()
     text = _html.unescape(text)
-    # 去掉微博文本尾部的「来自 XXX」和「转发了」等重复内容
-    # 这些内容已经单独存在于 source / retweeted_status 字段中
     if text:
         # 先去掉尾部的时间戳行（如 "Thu Sep 17 21:13:15 +0800 2026"）
         text = _re.sub(r'\n[A-Z][a-z]{2}\s[A-Z][a-z]{2}\s\d{1,2}\s\d{2}:\d{2}:\d{2}\s[+-]\d{4}\s\d{4}\s*$', '', text)
@@ -72,8 +64,40 @@ def _normalize_mblog(mblog_raw):
         text = _re.sub(r'(?:^|\n)来自\s+\S+\s*$', '', text)
         # 去掉尾部的「转发了」等无意义结尾
         text = _re.sub(r'(?:^|\n)(转发了|轉發了|Repost)\s*$', '', text)
+        # 去掉截断链接残留的「…全文」「展开」「收起」尾巴
+        text = _re.sub(r'(?:\s*(?:\.{3}|…)?\s*(?:全文|展开|收起))+$', '', text)
         text = text.strip()
+    return text
+
+
+_REPOST_NOISE = ("转发微博", "轉發微博", "Repost", "分享微博", "转发了", "轉發了")
+
+
+def _normalize_mblog(mblog_raw):
+    """将 mblog 对象（PC 或移动端格式）标准化为统一输出格式。"""
+    if not mblog_raw or not isinstance(mblog_raw, dict):
+        return None
+    if not mblog_raw.get("id"):
+        return None
+    text = _clean_mblog_text(mblog_raw.get("text", ""))
     user = mblog_raw.get("user") or {}
+    if not isinstance(user, dict):
+        user = {}
+    # 转发帖：真实内容在被转发的原博里，主文本只剩「转发微博」等噪声时用原博替换
+    retweeted = None
+    rt_raw = mblog_raw.get("retweeted_status")
+    if isinstance(rt_raw, dict) and rt_raw.get("id"):
+        rt_user_obj = rt_raw.get("user") or {}
+        rt_user_name = rt_user_obj.get("screen_name", "") if isinstance(rt_user_obj, dict) else ""
+        retweeted = {
+            "mid": rt_raw.get("idstr") or str(rt_raw.get("id", "")),
+            "text": _clean_mblog_text(rt_raw.get("text", "")),
+            "user": {"screen_name": rt_user_name},
+            "created_at": rt_raw.get("created_at", ""),
+        }
+        if (not text or text in _REPOST_NOISE
+                or any(text.startswith(n) for n in _REPOST_NOISE)):
+            text = f"//@{rt_user_name}: {retweeted['text']}" if rt_user_name else retweeted["text"]
     # pics: pic_ids (list of str) or pic_infos (dict)
     pics = []
     pic_infos = mblog_raw.get("pic_infos") or {}
@@ -105,10 +129,11 @@ def _normalize_mblog(mblog_raw):
         "comments_count": mblog_raw.get("comments_count", 0),
         "attitudes_count": mblog_raw.get("attitudes_count", 0),
         "pics": pics,
+        "retweeted": retweeted,
         "user": {
             "id": user.get("idstr") or str(user.get("id", "")),
             "screen_name": user.get("screen_name", ""),
-            "profile_image_url": user.get("profile_image_url", "").replace("http://", "https://"),
+            "profile_image_url": str(user.get("profile_image_url", "") or "").replace("http://", "https://"),
         },
     }
 
@@ -121,31 +146,56 @@ def _extract_posts_from_payload(payload):
 
     # 格式 1: PC chaohua/page - items[].data 直接是 mblog
     items = payload.get("items") or []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        if item.get("category") == "feed":
+    if isinstance(items, list):
+        for item in items:
+            if not isinstance(item, dict):
+                continue
             mblog = item.get("data")
-            normalized = _normalize_mblog(mblog)
-            if normalized:
-                results.append(normalized)
+            if not isinstance(mblog, dict):
+                mblog = item.get("mblog")
+            if isinstance(mblog, dict) and (item.get("category") == "feed" or mblog.get("id") or mblog.get("idstr")):
+                normalized = _normalize_mblog(mblog)
+                if normalized:
+                    results.append(normalized)
     if results:
         return results
 
-    # 格式 2: 移动端 container/getIndex - data.cards[].card_group[].mblog
-    data = payload.get("data") or {}
+    # 格式 2: 移动端 container/getIndex - data.cards[].card_group[].mblog（含嵌套一层）
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return results
     cards = data.get("cards") or []
+    if not isinstance(cards, list):
+        cards = []
+
+    def _collect_from_group(group, depth=0):
+        found = []
+        if not isinstance(group, list):
+            return found
+        for entry in group:
+            if not isinstance(entry, dict):
+                continue
+            nested = entry.get("card_group")
+            if isinstance(nested, list) and depth < 2:
+                found.extend(_collect_from_group(nested, depth + 1))
+                continue
+            mblog = entry.get("mblog")
+            if isinstance(mblog, dict):
+                normalized = _normalize_mblog(mblog)
+                if normalized:
+                    found.append(normalized)
+        return found
+
     for card in cards:
-        card_group = card.get("card_group") or []
-        for item in card_group:
-            mblog = item.get("mblog")
-            normalized = _normalize_mblog(mblog)
-            if normalized:
-                results.append(normalized)
+        if not isinstance(card, dict):
+            continue
+        results.extend(_collect_from_group(card.get("card_group")))
 
     # 格式 3: data.cards 直接是 mblog 列表（无 card_group 包装）
     if not results:
         for card in cards:
+            if not isinstance(card, dict):
+                continue
             mblog = card.get("mblog") or card
             normalized = _normalize_mblog(mblog)
             if normalized:
@@ -154,11 +204,14 @@ def _extract_posts_from_payload(payload):
     # 格式 4: data.list[] / data.items[] 直接是 mblog 列表
     if not results:
         direct_list = data.get("list") or data.get("items") or []
-        for entry in direct_list:
-            mblog = entry.get("mblog") or entry
-            normalized = _normalize_mblog(mblog)
-            if normalized:
-                results.append(normalized)
+        if isinstance(direct_list, list):
+            for entry in direct_list:
+                if not isinstance(entry, dict):
+                    continue
+                mblog = entry.get("mblog") or entry
+                normalized = _normalize_mblog(mblog)
+                if normalized:
+                    results.append(normalized)
 
     return results
 
@@ -176,6 +229,10 @@ def _format_weibo_time(raw_time: str) -> str:
     now = _dt.now()
 
     try:
+        # PC 端英文格式 "Fri Sep 25 21:13:15 +0800 2026"
+        if len(raw_time) >= 25 and raw_time[0] in "MonTueWedThuFriSat" and " " in raw_time[:4]:
+            dt = _dt.strptime(raw_time, "%a %b %d %H:%M:%S %z %Y")
+            return dt.astimezone().strftime("%Y-%m-%d %H:%M")
         # 标准格式 YYYY-MM-DD HH:MM 或更长
         if len(raw_time) >= 10 and raw_time[4] == '-' and raw_time[7] == '-':
             return raw_time[:16]
@@ -298,16 +355,15 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
                 params["page"] = page
             if since_id:
                 params["since_id"] = since_id
+            old_headers = dict(session.headers)
             try:
-                # 合并自定义 headers
-                old_headers = dict(session.headers)
+                # 合并自定义 headers（请求后无论成败都恢复，避免污染后续端点）
                 session.headers.update(ep.get("headers", {}))
                 payload = request_json(
                     session, "GET", ep["url"], params=params, cookies=cookies,
                     channel=channel, proxy=proxy, force=force,
                     allow_fallback=allow_fallback,
                 )
-                session.headers = old_headers
             except NetworkError as exc:
                 errors.append(f"[{tried}] {ep['url']} p{page}: 网络错误 {exc}")
                 break
@@ -317,6 +373,9 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
             except Exception as exc:
                 errors.append(f"[{tried}] {ep['url']} p{page}: 未知错误 {exc}")
                 break
+            finally:
+                session.headers.clear()
+                session.headers.update(old_headers)
 
             # 检查响应状态（PC 端没有 ok 字段，直接有 items）
             if "items" in payload:
@@ -342,8 +401,8 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
                 break
 
             # 翻页
-            data = payload.get("data") or {}
-            cardlist_info = data.get("cardlistInfo") or {}
+            data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+            cardlist_info = data.get("cardlistInfo") if isinstance(data.get("cardlistInfo"), dict) else {}
             next_since = cardlist_info.get("since_id", "")
             if next_since:
                 since_id = next_since

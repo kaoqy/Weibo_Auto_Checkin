@@ -698,23 +698,8 @@ html[data-theme="dark"] .topic-post:hover {
   color: var(--ink);
   word-break: break-word;
   white-space: pre-wrap;
-  max-height: 200px;
-  overflow: hidden;
   position: relative;
 }
-.topic-post-text.expanded { max-height: none; }
-.topic-post-text::after {
-  content: '';
-  position: absolute;
-  bottom: 0; left: 0; right: 0;
-  height: 40px;
-  background: linear-gradient(to bottom, transparent, var(--surface));
-  pointer-events: none;
-}
-html[data-theme="dark"] .topic-post-text::after {
-  background: linear-gradient(to bottom, transparent, var(--surface));
-}
-.topic-post-text.expanded::after { display: none; }
 
 /* 帖子链接样式 */
 .topic-link { color: var(--accent); text-decoration: none; }
@@ -740,6 +725,34 @@ html[data-theme="dark"] .topic-post-collapsed::after {
 .topic-ellipsis { color: var(--muted); }
 
 .topic-post-expand { margin-top: 6px; }
+
+/* 转发引用框 */
+.topic-post-quote {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 12px;
+}
+.topic-post-quote-user {
+  display: inline-block;
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 12px;
+  margin-bottom: 3px;
+}
+.topic-post-quote-text {
+  line-height: 1.6;
+  color: var(--muted);
+  word-break: break-word;
+  white-space: pre-wrap;
+  max-height: 96px;
+  overflow: hidden;
+  position: relative;
+}
+.topic-post-quote-text:hover { max-height: none; }
 
 .topic-post-pics {
   display: grid;
@@ -885,62 +898,6 @@ html[data-theme="dark"] .ai-panel {
   box-shadow: var(--shadow-sm);
 }
 
-.ai-toolbar {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.ai-question-input {
-  width: 100%;
-  padding: 12px 16px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  font-size: 13px;
-  background: var(--surface);
-  color: var(--ink);
-  transition: all .2s;
-}
-html[data-theme="dark"] .ai-question-input { background: var(--surface); }
-.ai-question-input:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.15);
-  background: var(--surface);
-}
-html[data-theme="dark"] .ai-question-input:focus { background: var(--surface); }
-
-.ai-options { display: flex; gap: 8px; flex-wrap: wrap; }
-
-.ai-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 14px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  font-size: 12px;
-  color: var(--muted);
-  cursor: pointer;
-  transition: all .2s;
-  user-select: none;
-  background: var(--surface-2);
-}
-html[data-theme="dark"] .ai-chip { background: var(--surface-2); }
-.ai-chip:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-  background: var(--accent-soft);
-}
-html[data-theme="dark"] .ai-chip:hover { background: var(--accent-soft); }
-.ai-chip input[type="checkbox"] { accent-color: var(--accent); width: 14px; height: 14px; margin: 0; }
-.ai-chip:has(input:checked) {
-  background: rgba(var(--accent-rgb), 0.1);
-  border-color: var(--accent);
-  color: var(--accent);
-  font-weight: 600;
-}
-
 /* AI 总结内容区 */
 .ai-summary-content {
   padding: 14px;
@@ -1025,42 +982,6 @@ html[data-theme="dark"] .ai-summary-text pre { background: rgba(255, 255, 255, 0
   text-align: right;
   opacity: 0.7;
 }
-
-/* AI 推理过程 */
-.ai-reasoning {
-  margin-bottom: 14px;
-  padding: 12px 16px;
-  background: var(--surface);
-  border-radius: 10px;
-  border: 1px solid var(--line);
-}
-html[data-theme="dark"] .ai-reasoning {
-  background: var(--surface);
-  border: 1px solid var(--line);
-}
-.ai-reasoning summary {
-  cursor: pointer;
-  font-size: 12px;
-  color: var(--accent);
-  margin-bottom: 8px;
-  font-weight: 600;
-  user-select: none;
-}
-.ai-reasoning summary:hover { opacity: 0.8; }
-.ai-reasoning pre {
-  font-size: 11px;
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: var(--muted);
-  margin: 0;
-  max-height: 200px;
-  overflow-y: auto;
-  line-height: 1.6;
-  padding: 8px;
-  background: var(--surface-2);
-  border-radius: 6px;
-}
-html[data-theme="dark"] .ai-reasoning pre { background: var(--surface-2); }
 
 /* Placeholder */
 .ai-placeholder {
@@ -1151,4 +1072,67 @@ html[data-theme="dark"] .ai-reasoning pre { background: var(--surface-2); }
 @media (max-width: 900px) {
   .topics-col-left { height: 38vh; min-height: 240px; }
   .topics-col-left .card { height: 100%; }
+}
+
+/* ===== v1.3.0 UI 显示优化：补齐组件样式 ===== */
+/* 账号操作按钮组 */
+.account-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
+.account-action-group { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+td.acc-actions { white-space:normal; min-width:150px; }
+td.acc-actions .btn { margin:1px 2px 1px 0; }
+
+/* 账号编辑弹窗中的超话勾选列表 */
+.topic-select-section { margin-top:10px; }
+.topic-checkboxes {
+  display:grid;
+  grid-template-columns:repeat(auto-fill, minmax(180px, 1fr));
+  gap:6px;
+  max-height:260px;
+  overflow-y:auto;
+  padding:6px;
+  margin-top:6px;
+  border:1px solid var(--line);
+  border-radius:10px;
+  background:var(--surface-2);
+}
+.topic-checkbox-item {
+  display:flex; align-items:center; gap:8px;
+  padding:7px 9px;
+  border:1px solid transparent;
+  border-radius:8px;
+  font-size:12px;
+  cursor:pointer;
+  min-width:0;
+  transition:background .15s, border-color .15s;
+}
+.topic-checkbox-item:hover { background:var(--surface); border-color:var(--line); }
+.topic-checkbox-item .tc-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tc-status {
+  font-size:10px; flex-shrink:0;
+  color:var(--success); background:var(--success-soft);
+  padding:2px 6px; border-radius:999px;
+}
+
+/* 大屏：内容居中限宽，避免三列布局过度拉伸 */
+@media(min-width:1700px){
+  .main { max-width:1580px; margin:0 auto; width:100%; }
+}
+
+/* 触屏 / 手机细节优化 */
+@media(max-width:640px){
+  /* 防止 iOS/Android 聚焦输入时自动放大页面（16px 以下会触发缩放） */
+  .form input, .form textarea, .input-modern, .topics-search, .topic-search,
+  .log-search, .log-filter, .qr-name input, .modal input, .modal select { font-size:16px; }
+  /* Toast 抬高，避开底部导航 */
+  .toast { bottom:calc(84px + env(safe-area-inset-bottom)); max-width:92vw; text-align:center; }
+  .card-head { flex-wrap:wrap; gap:8px; }
+  .account-actions { width:100%; justify-content:flex-start; }
+  .batch-bar { flex-wrap:wrap; }
+  .batch-bar .btn { flex:1 1 auto; }
+  .settings-row { flex-wrap:wrap; }
+  .settings-row .input-modern { width:100%; }
+  .modal-foot .btn { flex:1 1 auto; }
+  .topic-checkboxes { grid-template-columns:1fr; }
+  .ai-panel { padding:10px; }
+  .modal.modal-sm { width:96vw; }
 }
