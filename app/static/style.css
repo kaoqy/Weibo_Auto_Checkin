@@ -688,8 +688,8 @@ html[data-theme="dark"] .topic-post:hover {
 .topic-post-header { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
 .topic-post-avatar { width: 36px; height: 36px; border-radius: 50%; background: var(--surface-2); object-fit: cover; border: 1px solid var(--line); }
 .topic-post-user-info { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
-.topic-post-user { font-weight: 600; font-size: 13px; }
-.topic-post-source { font-size: 11px; color: var(--muted); }
+.topic-post-user { font-weight: 600; font-size: 13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:100%; }
+.topic-post-source { font-size: 11px; color: var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:100%; }
 .topic-post-time { font-size: 11px; color: var(--muted); white-space: nowrap; }
 
 .topic-post-text {
@@ -1136,3 +1136,37 @@ td.acc-actions .btn { margin:1px 2px 1px 0; }
   .ai-panel { padding:10px; }
   .modal.modal-sm { width:96vw; }
 }
+
+/* ===== v1.3.0 UI 动效增强 ===== */
+/* 帖子列表错峰入场 */
+#topicPosts .topic-post:nth-child(2) { animation-delay:.05s }
+#topicPosts .topic-post:nth-child(3) { animation-delay:.1s }
+#topicPosts .topic-post:nth-child(4) { animation-delay:.15s }
+#topicPosts .topic-post:nth-child(5) { animation-delay:.2s }
+#topicPosts .topic-post:nth-child(6) { animation-delay:.25s }
+#topicPosts .topic-post:nth-child(n+7) { animation-delay:.3s }
+/* 转发引用框滑入 */
+.topic-post-quote { animation:quoteIn .3s ease both; }
+@keyframes quoteIn{from{opacity:0;transform:translateY(6px) scale(.985)}to{opacity:1;transform:none}}
+/* 展开全文按钮微交互 */
+.topic-post-expand { transition:color .2s, background .2s, transform .15s; }
+.topic-post-expand:active { transform:scale(.95); }
+/* AI 加载呼吸 / 按钮进行中状态 */
+.ai-summary-loading { animation:loadPulse 1.6s ease-in-out infinite; }
+@keyframes loadPulse{0%,100%{opacity:.6}50%{opacity:1}}
+.btn-primary:disabled { opacity:.72; cursor:progress; }
+/* 超话头像悬停放大 */
+.topic-list-avatar { transition:transform .2s ease; }
+.topic-list-item:hover .topic-list-avatar { transform:scale(1.06); }
+/* 品牌徽章呼吸光晕 */
+.brand-mark { animation:brandGlow 4.5s ease-in-out infinite; }
+@keyframes brandGlow{0%,100%{box-shadow:0 4px 14px rgba(var(--accent-rgb),.35)}50%{box-shadow:0 4px 22px rgba(var(--accent-rgb),.55)}}
+/* 「原文」链接下划线展开 */
+.topic-post-link { position:relative; }
+.topic-post-link::after { content:''; position:absolute; left:0; bottom:-1px; width:0; height:1.5px; background:var(--accent); transition:width .22s ease; }
+.topic-post-link:hover::after { width:100%; }
+/* 灯箱图片入场 */
+.lightbox.show .lightbox-img { animation:lbIn .28s cubic-bezier(.2,.8,.2,1) both; }
+@keyframes lbIn{from{opacity:0;transform:scale(.92)}to{opacity:1;transform:none}}
+/* 引用框展开过渡 */
+.topic-post-quote-text { transition:max-height .3s ease; }

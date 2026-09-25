@@ -73,6 +73,14 @@ def _clean_mblog_text(raw_text):
 _REPOST_NOISE = ("转发微博", "轉發微博", "Repost", "分享微博", "转发了", "轉發了")
 
 
+def _clean_source(raw_source):
+    """source 字段常带 HTML（如 <a href="...">荣耀8X</a>），只留纯文本设备名。"""
+    import re as _re, html as _html
+    src = _re.sub(r'<[^>]+>', '', str(raw_source or '')).strip()
+    src = _html.unescape(src)
+    return _re.sub(r'\s+', ' ', src)[:30]
+
+
 def _normalize_mblog(mblog_raw):
     """将 mblog 对象（PC 或移动端格式）标准化为统一输出格式。"""
     if not mblog_raw or not isinstance(mblog_raw, dict):
@@ -124,7 +132,7 @@ def _normalize_mblog(mblog_raw):
         "mid": mblog_raw.get("idstr") or str(mblog_raw.get("id", "")),
         "text": text,
         "created_at": mblog_raw.get("created_at", ""),
-        "source": mblog_raw.get("source", ""),
+        "source": _clean_source(mblog_raw.get("source", "")),
         "reposts_count": mblog_raw.get("reposts_count", 0),
         "comments_count": mblog_raw.get("comments_count", 0),
         "attitudes_count": mblog_raw.get("attitudes_count", 0),
