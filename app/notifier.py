@@ -58,6 +58,12 @@ def send_telegram(text: str, title: str = "微博签到") -> bool:
         return False
 
 
+def _topic_with_rank(result: dict) -> str:
+    rank = result.get("rank")
+    name = result.get("name", "未知超话")
+    return f"{name}（第{rank}名）" if isinstance(rank, int) and rank > 0 else name
+
+
 def send_checkin_report(task_summary: dict) -> bool:
     """发送一份签到汇总报告。task_summary 由调度器构建。"""
     accounts = task_summary.get("detail", [])
@@ -103,7 +109,8 @@ def send_checkin_report(task_summary: dict) -> bool:
         icon = {"success": "✅", "partial": "⚠️", "failed": "❌"}.get(
             acc.get("status"), "ℹ️"
         )
-        signed = [r.get("name") for r in acc.get("results", [])
+        signed = [_topic_with_rank(r)
+                  for r in acc.get("results", [])
                   if r.get("success") and r.get("message") != "今日已签到"]
         already = [r.get("name") for r in acc.get("results", [])
                    if r.get("success") and r.get("message") == "今日已签到"]

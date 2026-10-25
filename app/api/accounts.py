@@ -1,7 +1,6 @@
 """账号管理 API。"""
 from __future__ import annotations
 
-import imghdr
 import logging
 import re
 from datetime import datetime
@@ -465,6 +464,21 @@ def _extract_weibo_profile(payload: object) -> dict:
     return profile
 
 
+def _detect_image_ext(content: bytes) -> str | None:
+    """从 magic bytes 检测图片扩展名（替代已弃用的 imghdr）。"""
+    if content[:8] == bytes([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]):
+        return ".png"
+    if content[:3] == bytes([0xFF, 0xD8, 0xFF]):
+        return ".jpg"
+    if content[:6] in (b'GIF87a', b'GIF89a'):
+        return ".gif"
+    if content[:4] == b'RIFF' and content[8:12] == b'WEBP':
+        return ".webp"
+    if content[:2] == b'BM':
+        return ".bmp"
+    return None
+
+
 def _cache_weibo_avatar(session, avatar_url: str, uid: str = "") -> str:
     """下载微博头像到持久化 data/avatars 目录并返回本地访问地址。"""
     if not avatar_url or not avatar_url.startswith(("http://", "https://")):
@@ -488,14 +502,7 @@ def _cache_weibo_avatar(session, avatar_url: str, uid: str = "") -> str:
 
         content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
         extension = AVATAR_CONTENT_TYPES.get(content_type)
-        detected = imghdr.what(None, content)
-        detected_extensions = {
-            "jpeg": ".jpg",
-            "png": ".png",
-            "webp": ".webp",
-            "gif": ".gif",
-        }
-        extension = detected_extensions.get(detected, extension)
+        extension = _detect_image_ext(content) or extension
         if not extension:
             return ""
 
@@ -577,9 +584,28 @@ def _fetch_weibo_username(session: requests.Session) -> str:
     return _fetch_weibo_profile(session)["name"]
 
 
+def _cookie_field(cookie: str, key: str) -> str:
+    """从 Cookie 字符串中取出指定键的值（不存在返回空串）。"""
+    m = re.search(r"(?:^|;)\s*" + re.escape(key) + r"=([^;]+)", cookie or "")
+    return m.group(1).strip() if m else ""
+
+
+def _find_same_weibo_account(uid: str, cookie: str) -> dict | None:
+    """查找同属一个微博号的已有账号：优先 weibo_uid，其次 SUB Cookie。"""
+    sub = _cookie_field(cookie, "SUB")
+    for acc in database.get_accounts():
+        if uid and acc.get("weibo_uid") and str(acc["weibo_uid"]) == str(uid):
+            return acc
+        if sub:
+            old_sub = _cookie_field(acc.get("cookie") or acc.get("cookie_raw") or "", "SUB")
+            if old_sub and old_sub == sub:
+                return acc
+    return None
+
+
 @router.post("/qr/finish")
 def finish_qr_login(data: QrLoginFinish, user: dict = Depends(auth.require_admin)):
-    """把扫码登录取得的 Cookie 保存为签到账号。"""
+    """把扫码登录取得的 Cookie 保存为签到账号；同一微博号已存在时直接覆盖。"""
     _cleanup_qr_sessions()
     item = _qr_sessions.get(data.session_id)
     if not item:
@@ -614,9 +640,27 @@ def finish_qr_login(data: QrLoginFinish, user: dict = Depends(auth.require_admin
         "avatar_url": profile.get("avatar_url", ""),
         "weibo_uid": profile.get("uid", ""),
     }
+    existing = _find_same_weibo_account(profile.get("uid", ""), cookie)
+    if existing:
+        upd = {"cookie": cookie, "cookie_raw": cookie}
+        if account["weibo_uid"]:
+            upd["weibo_uid"] = account["weibo_uid"]
+        if account["avatar_url"]:
+            upd["avatar_url"] = account["avatar_url"]
+        if data.name.strip():
+            upd["name"] = data.name.strip()
+        database.update_account(existing["id"], upd)
+        _qr_sessions.pop(data.session_id, None)
+        merged = database.get_account(existing["id"]) or account
+        return {
+            "id": existing["id"],
+            "name": merged.get("name", account["name"]),
+            "ok": True,
+            "updated": True,
+        }
     account_id = database.add_account(account)
     _qr_sessions.pop(data.session_id, None)
-    return {"id": account_id, "name": account["name"], "ok": True}
+    return {"id": account_id, "name": account["name"], "ok": True, "updated": False}
 
 
 def _resolve_proxy(payload: dict, current: str = "") -> dict:
@@ -747,7 +791,7 @@ def export_accounts(user: dict = Depends(auth.require_admin)):
             "remark": acc.get("remark", ""),
         })
     return {
-        "version": "1.2.1",
+        "version": "1.3.0",
         "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "count": len(export_list),
         "accounts": export_list,
@@ -810,6 +854,21 @@ def import_accounts(data: AccountImportData, user: dict = Depends(auth.require_a
 @router.post("")
 def create_account(data: AccountIn, user: dict = Depends(auth.require_admin)):
     payload = _resolve_proxy(data.model_dump())
+    cookie = payload.get("cookie") or payload.get("cookie_raw") or ""
+    existing = _find_same_weibo_account("", cookie)
+    if existing:
+        # 同一微博号（SUB 相同）：直接覆盖已有记录，不再新增
+        upd = {"cookie": cookie, "cookie_raw": payload.get("cookie_raw") or cookie}
+        if (payload.get("name") or "").strip() and payload["name"].strip() != "未命名账号":
+            upd["name"] = payload["name"].strip()
+        if payload.get("proxy"):
+            upd["proxy"] = payload["proxy"]
+        if payload.get("remark"):
+            upd["remark"] = payload["remark"]
+        if payload.get("enabled") is not None:
+            upd["enabled"] = payload["enabled"]
+        database.update_account(existing["id"], upd)
+        return _public(database.get_account(existing["id"]))
     acc_id = database.add_account(payload)
     return _public(database.get_account(acc_id))
 

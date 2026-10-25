@@ -17,6 +17,7 @@ const api = {
   get: (p) => fetch(p).then(r => handleResp(r, p)).then(r => r.json()),
   post: (p, b) => fetch(p, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(b||{})}).then(r => handleResp(r, p)).then(r => r.json()),
   put: (p, b) => fetch(p, {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(b)}).then(r => handleResp(r, p)).then(r => r.json()),
+  patch: (p, b) => fetch(p, {method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify(b||{})}).then(r => handleResp(r, p)).then(r => r.json()),
   del: (p) => fetch(p, {method:'DELETE'}).then(r => handleResp(r, p)).then(r => r.json()),
 };
 
@@ -26,8 +27,9 @@ function toast(msg, type='') {
   const t = $('#toast');
   t.textContent = msg;
   t.className = 'toast show ' + type;
+  if (type === 'err') { t.classList.remove('shake'); void t.offsetWidth; t.classList.add('shake'); }
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(()=> t.className = 'toast', 2600);
+  toastTimer = setTimeout(()=> { t.className = 'toast'; }, 2600);
 }
 
 /* ===== 主题 ===== */
@@ -40,7 +42,7 @@ themeSel.onchange = () => {
 };
 
 /* ===== 导航 ===== */
-const VIEW_TITLES = {dashboard:'仪表盘', accounts:'账号管理', proxies:'代理', logs:'签到日志', settings:'设置'};
+const VIEW_TITLES = {dashboard:'仪表盘', accounts:'账号管理', topics:'超话', proxies:'代理', logs:'签到日志', settings:'设置'};
 $$('.nav-item').forEach(btn => {
   btn.onclick = () => {
     $$('.nav-item').forEach(b=>b.classList.remove('active'));
@@ -48,8 +50,14 @@ $$('.nav-item').forEach(btn => {
     $$('.view').forEach(v=>v.hidden = true);
     $('#view-' + btn.dataset.view).hidden = false;
     $('#view-title').textContent = VIEW_TITLES[btn.dataset.view];
+    // 离开仪表盘时清理定时器
+    if (btn.dataset.view !== 'dashboard') {
+      if (schedTimer) { clearInterval(schedTimer); schedTimer = null; }
+      if (window._dashInterval) { clearInterval(window._dashInterval); window._dashInterval = null; }
+    }
     if (btn.dataset.view === 'dashboard') loadDashboard();
     if (btn.dataset.view === 'accounts') loadAccounts();
+    if (btn.dataset.view === 'topics') loadTopics();
     if (btn.dataset.view === 'proxies') loadProxies();
     if (btn.dataset.view === 'logs') loadLogs();
     if (btn.dataset.view === 'settings') loadSettings();
@@ -161,6 +169,10 @@ function renderStats(stats, accounts) {
     card('成功率', stats.success_rate || 0, '', '%'),
     card('今日记录', stats.today || 0, '', '条'),
   ].join('');
+  var gridEl = document.getElementById('statGrid');
+  var stats2 = gridEl.querySelectorAll('.stat');
+  for (var ri = 0; ri < stats2.length; ri++){ stats2[ri].classList.add('reveal','counting'); stats2[ri].style.setProperty('--reveal-i', ri); }
+  observeNewReveal(gridEl);
 }
 function card(lbl, num, cls, suffix='') {
   return `<div class="stat ${cls}"><div class="num">${num}<span style="font-size:14px">${suffix}</span></div><div class="lbl">${lbl}</div></div>`;
@@ -226,14 +238,24 @@ async function loadAccounts() {
         <td style="color:var(--muted)">${a.cookie_length} 字符</td>
         <td>${a.proxy_label ? '<span class="badge">'+esc(a.proxy_label)+'</span>' : (a.proxy ? '<span class="badge">'+esc(a.proxy)+'</span>' : '<span class="badge gray">直连</span>')}</td>
         <td>${a.last_checkin||'从未'}</td>
-        <td>
-          <button class="btn btn-ghost btn-sm" onclick="toggleAccEnabled(${a.id})">${a.enabled?'停用':'启用'}</button>
-          <button class="btn btn-ghost btn-sm" onclick="openAccModal(${a.id})">编辑</button>
-          <button class="btn btn-ghost btn-sm" onclick="openTopicModal(${a.id})" title="选需要自动签到的超话">🎯 选超话</button>
-          <button class="btn btn-ghost btn-sm" onclick="verifyAcc(${a.id})">校验</button>
-          <button class="btn btn-danger btn-sm" onclick="delAcc(${a.id})">删除</button>
+        <td class="acc-actions">
+          <button class="btn btn-ghost btn-sm" data-action="toggle" data-id="${a.id}">${a.enabled?'停用':'启用'}</button>
+          <button class="btn btn-ghost btn-sm" data-action="edit" data-id="${a.id}">编辑</button>
+          <button class="btn btn-ghost btn-sm" data-action="verify" data-id="${a.id}">校验</button>
+          <button class="btn btn-danger btn-sm" data-action="delete" data-id="${a.id}">删除</button>
         </td>
       </tr>`).join('') : '<tr><td colspan="7" style="color:var(--muted)">暂无账号</td></tr>';
+    // Event delegation for account actions
+    tb.onclick = function(e) {
+      var btn = e.target.closest('button[data-action]');
+      if (!btn) return;
+      var id = parseInt(btn.dataset.id);
+      var action = btn.dataset.action;
+      if (action === 'toggle') toggleAccEnabled(id);
+      else if (action === 'edit') openAccModal(id);
+      else if (action === 'verify') verifyAcc(id);
+      else if (action === 'delete') delAcc(id);
+    };
     $('#accCheckAll').checked = false;
     updateSelCount();
     $('#btn-checkin-selected').disabled = true;
@@ -299,7 +321,15 @@ async function toggleAccEnabled(id) {
     loadAccounts();
   } catch(e){ toast('操作失败','err'); }
 }
-function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function esc(s) {
+  if (s == null) return '';
+  var str = String(s);
+  // Fast path: nothing to escape
+  if (!/[&<>"]/.test(str) && !/'/.test(str)) return str;
+  return str.replace(/[&<>"']/g, function(c) {
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
 
 let accModal = (()=>{})();
 async function populateProxySelect(sel, selectedId=null) {
@@ -319,26 +349,45 @@ async function populateProxySelect(sel, selectedId=null) {
   sel.innerHTML = opt('', '自动 / 直连') + proxies.map(p => opt(p.id, p.label)).join('');
 }
 
+var accModalLoadPromise = null;
 function openAccModal(id=null) {
   editingId = id;
   $('#accModalTitle').textContent = id ? '编辑账号' : '添加账号';
-  $('#m-name').value = ''; $('#m-cookie').value = ''; $('#m-remark').value='';
+  $('#m-name').value = ''; $('#m-cookie').value = ''; $('#m-remark').value = '';
   $('#m-enabled').checked = true;
   populateProxySelect($('#m-proxy'), null);
+  accountTopicsCache = [];
+  $('#m-topic-checkboxes').innerHTML = '';
+  $('#m-topic-status').textContent = '加载中…';
+  $('#m-topic-status').className = '';
   if (id) {
-    api.get('/api/accounts/'+id).then(a=>{
+    accModalLoadPromise = api.get('/api/accounts/'+id).then(a=>{
       $('#m-name').value = a.name;
       $('#m-cookie').value = a.cookie_raw || a.cookie || '';
       $('#m-remark').value = a.remark||'';
       $('#m-enabled').checked = !!a.enabled;
       populateProxySelect($('#m-proxy'), a.proxy_id ?? null);
+      loadAccountTopicsForEdit(id);
     });
   }
-  $('#accModal').hidden = false;
+  $('#accModal').hidden = false; document.body.classList.add('modal-open');
 }
 $('#btn-add-acc').onclick = () => openAccModal();
-$('#accModalClose').onclick = $('#accModalCancel').onclick = ()=> $('#accModal').hidden = true;
+$('#accModalClose').onclick = $('#accModalCancel').onclick = ()=> {
+  $('#accModal').hidden = true;
+  document.body.classList.remove('modal-open');
+  editingId = null;
+  accountTopicsCache = [];
+};
+// Modal backdrop click-to-close
+document.addEventListener('click', function(e) {
+  if (e.target.classList.contains('modal-mask') && !e.target.hidden) {
+    e.target.hidden = true;
+    document.body.classList.remove('modal-open');
+  }
+});
 $('#accModalSave').onclick = async () => {
+  if (accModalLoadPromise) await accModalLoadPromise;
   const body = {
     name: $('#m-name').value.trim() || '未命名账号',
     cookie_raw: $('#m-cookie').value.trim(),
@@ -351,6 +400,7 @@ $('#accModalSave').onclick = async () => {
     else await api.post('/api/accounts', body);
     toast('保存成功', 'good');
     $('#accModal').hidden = true;
+    document.body.classList.remove('modal-open');
     loadAccounts(); loadDashboard();
   } catch(e){ toast('保存失败', 'err'); }
 };
@@ -492,30 +542,31 @@ function flagEmoji(cc) {
   return String.fromCodePoint(0x1F1E6 + ccU.charCodeAt(0) - 65, 0x1F1E6 + ccU.charCodeAt(1) - 65);
 }
 function proxyTestHtml(p) {
-  if (!p.last_test) return '<span class="ptest-idle">尚未测速</span>';
-  const cls = p.last_test === 'ok' ? 't-ok' : 't-bad';
-  const icon = p.last_test === 'ok' ? '●' : '●';
-  const latency = Number(p.last_latency_ms || 0);
-  const detail = p.last_test_message || (p.last_test === 'ok' ? '测试成功' : '测试失败');
-  const tested = p.last_test_at ? ` · ${esc(p.last_test_at.slice(5,16))}` : '';
-  return `<span class="${cls}">${icon} ${esc(detail)}${latency && !detail.includes('ms') ? ` · ${latency} ms` : ''}${tested}</span>`;
+  if (!p || !p.last_test) return '<span class="ptest-idle">尚未测速</span>';
+  var cls = p.last_test === 'ok' ? 't-ok' : 't-bad';
+  var icon = p.last_test === 'ok' ? '●' : '●';
+  var latency = Number(p.last_latency_ms || 0);
+  var detail = p.last_test_message || (p.last_test === 'ok' ? '测试成功' : '测试失败');
+  var tested = p.last_test_at ? ' · ' + esc(String(p.last_test_at).slice(5,16)) : '';
+  var latencyStr = latency && String(detail).indexOf('ms') < 1 ? ' · ' + latency + ' ms' : '';
+  return '<span class="' + cls + '">' + icon + ' ' + esc(detail || '') + latencyStr + tested + '</span>';
 }
 
 async function loadProxies() {
   try {
     const list = await api.get('/api/proxies');
     $('#proxyListHint').textContent = list.length ? '' : '添加后，账号管理里可为每个账号指定对应代理（不同节点并行签到）。';
-    const box = $('#proxyList');
+    const proxyBox = $('#proxyList');
     if (!list.length) {
-      box.innerHTML = '<div style="color:var(--muted);padding:16px;text-align:center">尚未添加代理节点，点击「＋ 添加代理」</div>';
+      proxyBox.innerHTML = '<div style="color:var(--muted);padding:16px;text-align:center">尚未添加代理节点，点击「＋ 添加代理」</div>';
       return;
     }
-    box.innerHTML = list.map(p => {
+    proxyBox.innerHTML = list.map(p => {
       const flag = flagEmoji(p.geo_country_code);
       const host = p.ip || ((p.url||'').replace(/socks5.*@/,'').replace(/^socks5:\/\//,''));
       const has = p.ip || (p.url||'').includes('socks5');
       const geoHtml = p.geo_country ? `<div class="proxy-geo-line">${flag} ${esc(p.geo_country)} ${esc(p.geo_region||'')}${p.geo_ip?' · '+esc(p.geo_ip):''}</div>` : (has ? '<div class="proxy-geo-line"><span class="badge gray">归属地未识别</span></div>' : '');
-      return `<div class="proxy-card ${p.enabled===false?'proxy-disabled':''}">
+      return `<div class="proxy-card ${p.enabled===false?'proxy-disabled':''}" data-id="${p.id}">
         <div class="proxy-top">
           <div class="proxy-flag">${flag}</div>
           <div class="proxy-main">
@@ -523,9 +574,9 @@ async function loadProxies() {
             <div class="proxy-meta">${esc(has? host : '请编辑补全')}${p.port?':'+p.port:''}</div>
           </div>
           <div class="proxy-actions">
-            <button class="btn btn-ghost btn-sm" onclick="testProxy(${p.id})">测试</button>
-            <button class="btn btn-ghost btn-sm" onclick="openProxyModal(${p.id})">编辑</button>
-            <button class="btn btn-danger btn-sm" onclick="delProxy(${p.id})">删除</button>
+            <button class="btn btn-ghost btn-sm" data-action="proxy-test" data-id="${p.id}">测试</button>
+            <button class="btn btn-ghost btn-sm" data-action="proxy-edit" data-id="${p.id}">编辑</button>
+            <button class="btn btn-danger btn-sm" data-action="proxy-delete" data-id="${p.id}">删除</button>
           </div>
         </div>
         ${geoHtml}
@@ -533,6 +584,19 @@ async function loadProxies() {
       </div>`;
     }).join('');
   } catch(e){ toast('加载代理失败','err'); }
+  // Event delegation for proxy actions
+  var proxyListBox = $('#proxyList');
+  if (proxyListBox) {
+    proxyListBox.onclick = function(e) {
+      var btn = e.target.closest('button[data-action]');
+      if (!btn) return;
+      var id = parseInt(btn.dataset.id);
+      var action = btn.dataset.action;
+      if (action === 'proxy-test') testProxy(id);
+      else if (action === 'proxy-edit') openProxyModal(id);
+      else if (action === 'proxy-delete') delProxy(id);
+    };
+  }
 }
 
 function openProxyModal(id=null) {
@@ -553,7 +617,7 @@ function openProxyModal(id=null) {
       $('#p-geo').innerHTML = p.geo_country ? `<div class="geo-preview-item">${flagEmoji(p.geo_country_code)} ${esc(p.geo_country)} ${esc(p.geo_region||'')}</div>` : '';
     });
   }
-  $('#proxyModal').hidden = false;
+  $('#proxyModal').hidden = false; document.body.classList.add('modal-open');
 }
 $('#btn-proxy-add').onclick = () => openProxyModal();
 $('#proxyModalClose').onclick = $('#proxyModalCancel').onclick = ()=> $('#proxyModal').hidden = true;
@@ -561,6 +625,7 @@ $('#proxyModalClose').onclick = $('#proxyModalCancel').onclick = ()=> $('#proxyM
 $('#p-url').oninput = () => {
   const url = $('#p-url').value.trim();
   if (!url.includes('socks5://')) return;
+  // 使用更宽松的解析：支持 user:pass@host:port 格式
   const m = url.match(/socks5:\/\/(?:([^:@\/]+):([^@\/]*))?@?([^:\/\s]+):(\d+)/);
   if (m) {
     $('#p-ip').value = m[3]; $('#p-port').value = m[4];
@@ -618,6 +683,7 @@ $('#proxyModalSave').onclick = async () => {
     if (editingProxyId) await api.put('/api/proxies/'+editingProxyId, body);
     else await api.post('/api/proxies', body);
     $('#proxyModal').hidden = true;
+  document.body.classList.remove('modal-open');
     toast('保存成功', 'good');
     loadProxies();
   } catch(e){ toast('保存失败：'+e.message, 'err'); }
@@ -629,7 +695,7 @@ async function delProxy(id) {
 }
 async function testProxy(id) {
   const el = $('#ptest-'+id);
-  const btn = document.querySelector(`button[onclick="testProxy(${id})"]`);
+  const btn = document.querySelector(`button[data-action="proxy-test"][data-id="${id}"]`);
   if (el) el.innerHTML = '<span class="ptest-running"><i></i> 正在测速…</span>';
   if (btn) { btn.disabled = true; btn.textContent = '测速中'; }
   try {
@@ -661,14 +727,21 @@ const qrModal = $('#qrModal');
 
 function qrOpen() {
   qrModal.hidden = false;
+  document.body.classList.add('modal-open');
   qrTimer && clearInterval(qrTimer);
   loadQr();
 }
 function qrClose() {
   qrModal.hidden = true;
-  qrTimer && clearInterval(qrTimer);
+  document.body.classList.remove('modal-open');
+  if (qrTimer) { clearTimeout(qrTimer); qrTimer = null; }
   qrId = null;
   qrImporting = false;
+  $('#qrImage').src = '';
+  $('#qrBox').classList.remove('loading');
+  $('#qrLoading').hidden = true;
+  $('#qrStatus').textContent = '正在获取二维码…';
+  $('#qrStatus').className = 'qr-status';
 }
 async function loadQr() {
   qrTimer && clearTimeout(qrTimer);
@@ -768,7 +841,7 @@ async function doQrImport() {
       session_id: qrId,
       name: $('#qrName').value.trim()
     });
-    toast('✅ 账号已导入：' + r.name, 'good');
+    toast(r.updated ? '✅ 已覆盖同微博号的原账号：' + r.name : '✅ 账号已导入：' + r.name, 'good');
     qrClose();
     await Promise.all([loadAccounts(), loadDashboard()]);
   } catch(e) {
@@ -789,12 +862,16 @@ $('#qrImportBtn').onclick = doQrImport;
 /* ===== 批量导入 ===== */
 let batchImportModal = (()=>{})();
 $('#btn-batch-import').onclick = () => {
-  $('#batchImportModal').hidden = false;
+  $('#batchImportModal').hidden = false; document.body.classList.add('modal-open');
   $('#batchImportContent').value = '';
   $('#batchImportResult').innerHTML = '';
+  $('#batchImportModalSave').disabled = false;
 };
 $('#batchImportModalClose').onclick = $('#batchImportModalCancel').onclick = () => {
   $('#batchImportModal').hidden = true;
+  document.body.classList.remove('modal-open');
+  $('#batchImportContent').value = '';
+  $('#batchImportResult').innerHTML = '';
 };
 $('#batchImportModalSave').onclick = async () => {
   const content = $('#batchImportContent').value.trim();
@@ -841,11 +918,14 @@ $('#btn-import').onclick = () => {
   $('#importFile').value = '';
   $('#importResult').innerHTML = '';
   $('#importModalSave').disabled = true;
-  $('#importModal').hidden = false;
+  $('#importModal').hidden = false; document.body.classList.add('modal-open');
 };
 $('#importModalClose').onclick = $('#importModalCancel').onclick = () => {
   $('#importModal').hidden = true;
+  document.body.classList.remove('modal-open');
   importData = null;
+  $('#importFile').value = '';
+  $('#importResult').innerHTML = '';
 };
 $('#importFile').onchange = (e) => {
   const file = e.target.files[0];
@@ -926,7 +1006,17 @@ function renderLogs() {
     return hay.includes(kw);
   });
   const countBox = $('#logCount');
-  if (countBox) countBox.textContent = `共 ${logTotal} 条，当前显示 ${rows.length} 条${logOffset < logTotal ? ' · <button class="btn btn-ghost btn-sm" onclick="loadLogs(false)">加载更多</button>' : ''}`;
+  // "加载更多"按钮：先创建 DOM，再绑定事件（不依赖 logOffset 状态）
+  var hasFilter = kw || st; var showMoreBtn = logOffset < logTotal && !hasFilter; if (countBox) {
+    var moreBtn = showMoreBtn ? ' · <button class="btn btn-ghost btn-sm" id="btn-load-more">加载更多</button>' : '';
+    countBox.innerHTML = '共 ' + logTotal + ' 条，当前显示 ' + rows.length + ' 条' + moreBtn;
+    var loadMoreBtn = document.getElementById('btn-load-more');
+    if (loadMoreBtn) {
+      loadMoreBtn.addEventListener('click', function() {
+        loadLogs(false);
+      });
+    }
+  }
   if (!rows.length) {
     list.innerHTML = '<div style="color:var(--muted);padding:20px">' + (logTotal ? '没有匹配的日志' : '暂无签到日志') + '</div>';
     return;
@@ -1016,6 +1106,19 @@ async function loadSettings() {
     setVal('s-tg_silent', settingsCache.tg_silent==='1');
     const retEl = $('#s-log_retention_days');
     if (retEl) retEl.value = settingsCache.log_retention_days||'30';
+    // 1.3.0 AI
+    $('#s-ai_base_url').value = settingsCache.ai_base_url||'';
+    $('#s-ai_api_key').value = settingsCache.ai_api_key||'';
+    $('#s-ai_model').value = settingsCache.ai_model||'gpt-4o-mini';
+    // 每日超话推送
+    setVal('s-topics_daily_push', settingsCache.topics_daily_push==='1');
+    $('#s-topics_daily_push_cron').value = settingsCache.topics_daily_push_cron||'0 8 * * *';
+    // 签到后自动刷新超话
+    setVal('s-auto_refresh_topics', settingsCache.auto_refresh_topics==='1');
+    // 推送模式：all / selected
+    if ($('#s-topics_daily_push_mode')) {
+      $('#s-topics_daily_push_mode').value = settingsCache.topics_daily_push_mode||'all';
+    }
   } catch(e){ toast('加载设置失败','err'); }
 }
 
@@ -1041,6 +1144,16 @@ function collectSettings() {
     checkin_delay_min: val('s-checkin_delay_min'),
     checkin_delay_max: val('s-checkin_delay_max'),
     log_retention_days: val('s-log_retention_days','30'),
+    // 1.3.0 AI 总结
+    ai_base_url: val('s-ai_base_url').trim(),
+    ai_api_key: val('s-ai_api_key').trim(),
+    ai_model: val('s-ai_model').trim() || 'gpt-4o-mini',
+    // 每日超话推送
+    topics_daily_push: chk('s-topics_daily_push'),
+    topics_daily_push_cron: val('s-topics_daily_push_cron').trim() || '0 8 * * *',
+    topics_daily_push_mode: val('s-topics_daily_push_mode').trim() || 'all',
+    // 签到后自动刷新超话
+    auto_refresh_topics: chk('s-auto_refresh_topics'),
   };
 }
 $('#btn-save-all').onclick = async () => {
@@ -1048,11 +1161,13 @@ $('#btn-save-all').onclick = async () => {
   status.textContent = '保存中…'; status.className='save-status';
   try {
     settingsCache = await api.post('/api/settings', collectSettings());
+    await api.post('/api/settings/reload-schedule', {});
     status.textContent = '✅ 已保存'; status.className='save-status ok';
     setTimeout(()=>status.textContent='',2500);
   } catch(e){ status.textContent='保存失败'; status.className='save-status'; }
 };
-$('#btn-save-schedule').onclick = async () => {
+var saveScheduleBtn = $('#btn-save-schedule');
+if (saveScheduleBtn) saveScheduleBtn.onclick = async () => {
   try {
     await api.post('/api/settings', collectSettings());
     toast('定时配置已保存','good');
@@ -1071,6 +1186,7 @@ $('#btn-test-tg').onclick = async () => {
 $('#btn-run').onclick = async () => {
   try {
     $('#runModal').hidden = false;
+    document.body.classList.add('modal-open');
     $('#runBar').style.width='0%';
     $('#runInfo').textContent='正在启动…';
     $('#runLines').innerHTML='';
@@ -1078,7 +1194,11 @@ $('#btn-run').onclick = async () => {
     pollRun();
   } catch(e){ toast('启动失败','err'); $('#runModal').hidden=true; }
 };
-$('#runModalClose').onclick = ()=> $('#runModal').hidden=true;
+$('#runModalClose').onclick = ()=> {
+  $('#runModal').hidden=true;
+  document.body.classList.remove('modal-open');
+  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+};
 
 let pollTimer;
 function pollRun() {
@@ -1103,7 +1223,7 @@ function pollRun() {
       });
       clearTimeout(pollTimer);
     }
-  }).catch(()=>{});
+  }).catch(()=>{ clearTimeout(pollTimer); });
 }
 function addRunLine(txt){
   const box = $('#runLines');
@@ -1142,6 +1262,8 @@ $('#btn-user').onclick = () => {
   document.querySelector('.nav-item[data-view="settings"]').click();
 };
 $('#btn-logout').onclick = async () => {
+  if (window._dashInterval) { clearInterval(window._dashInterval); window._dashInterval = null; }
+  if (schedTimer) { clearInterval(schedTimer); schedTimer = null; }
   try { await api.post('/api/auth/logout', {}); } catch(e){}
   location.href = '/login.html';
 };
@@ -1160,8 +1282,749 @@ $('#btn-change-pwd').onclick = async () => {
   }
 };
 
+/* ===== 超话管理（1.3.0） ===== */
+var topicsCache = [];
+var currentTopicId = null;
+var currentTopicName = '';
+var currentPosts = [];
+var isLoadingPosts = false;
+var isLoadingList = false;
+var currentRequestId = 0;
+
+async function loadTopics(reset = true) {
+  if (reset) {
+    $('#topicsList').innerHTML = '<div class="loading-progress"><div class="loading-bar"><div class="loading-bar-inner" style="width:30%"></div></div><div class="loading-text">正在加载超话列表...</div></div>';
+  }
+  try {
+    const data = await api.get('/api/topics/all?limit=200');
+    topicsCache = data.items || [];
+    var hint = $('#topicsHint');
+    if (hint) hint.textContent = '共 ' + (data.total || 0) + ' 个去重超话';
+    var search = $('#topicsSearch');
+    if (search && !search.dataset.bound) {
+      search.dataset.bound = '1';
+      search.addEventListener('input', function() { filterTopicList(); });
+    }
+    if (!topicsCache.length) {
+      $('#topicsList').innerHTML = '<div style="color:var(--muted);padding:20px;text-align:center">暂无超话记录。<br>点击「↻ 刷新」从账号关注列表拉取。</div>';
+      return;
+    }
+    renderTopicList(topicsCache);
+  } catch(e) {
+    console.error('loadTopics error:', e);
+    toast('加载超话失败: ' + (e.message || ''), 'err');
+    $('#topicsList').innerHTML = '<div style="color:var(--danger);padding:20px;text-align:center">加载失败<br><span style="font-size:11px">' + esc(e.message || '') + '</span></div>';
+  }
+}
+
+function filterTopicList() {
+  var query = ($('#topicsSearch') || {}).value;
+  query = (query || '').trim().toLocaleLowerCase();
+  var filtered = !query ? topicsCache : topicsCache.filter(function(topic) {
+    return (topic.name || '').toLocaleLowerCase().includes(query) ||
+      (topic.topic_id || '').toLocaleLowerCase().includes(query);
+  });
+  renderTopicList(filtered);
+  var hint = $('#topicsHint');
+  if (hint) hint.textContent = query ? '匹配 ' + filtered.length + ' / ' + topicsCache.length + ' 个超话' : '共 ' + topicsCache.length + ' 个去重超话';
+}
+
+function renderTopicList(topics) {
+  const box = $('#topicsList');
+  if (!box) return;
+  if (!topics || !topics.length) {
+    box.innerHTML = '<div style="color:var(--muted);padding:20px;text-align:center">暂无超话记录</div>';
+    return;
+  }
+  box.innerHTML = topics.map(function(t) {
+    if (!t) return '';
+    var avatar = esc(t.avatar_url || '');
+    var avatarHtml = avatar
+      ? '<img src="' + avatar + '" class="topic-list-avatar" alt="" onerror="this.onerror=null;this.src=\'/default-avatar.svg\'" />'
+      : '<div class="topic-list-avatar">💬</div>';
+    var name = t.name || t.topic_id || '未知超话';
+    var members = t.member_count ? '<span>👥 ' + t.member_count + '</span>' : '';
+    var updated = t.updated_at ? '<span>' + esc(String(t.updated_at).slice(5,16)) + '</span>' : '';
+    var isActive = t.topic_id === currentTopicId ? ' active' : '';
+    var pushEnabled = t.push_enabled === 1;
+    var div = document.createElement('div');
+    div.className = 'topic-list-item' + isActive;
+    div.setAttribute('role', 'button');
+    div.tabIndex = 0;
+    div.dataset.id = t.topic_id || '';
+    div.dataset.name = name;
+    div.innerHTML =
+      avatarHtml +
+      '<div class="topic-list-info">' +
+        '<div class="topic-list-name" title="' + esc(name) + '">' + esc(name) + '</div>' +
+        '<div class="topic-list-meta">' + [members, updated].filter(Boolean).join(' · ') + '</div>' +
+      '</div>' +
+      '<label class="topic-push-toggle" title="每日推送此超话">' +
+        '<input type="checkbox" ' + (pushEnabled ? 'checked' : '') + ' />' +
+        '<span class="dot ' + (pushEnabled ? 'a' : '') + '"></span>' +
+      '</label>';
+    return div.outerHTML;
+  }).join('');
+  // 事件委托：点击列表项打开详情
+  box.onclick = function(e) {
+    const item = e.target.closest('.topic-list-item');
+    if (!item) return;
+    const toggle = e.target.closest('.topic-push-toggle');
+    if (toggle) return; // 推送开关有自己的处理
+    openTopicDetail(item.dataset.id, item);
+  };
+  box.onkeydown = function(e) {
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('.topic-list-item')) {
+      e.preventDefault();
+      openTopicDetail(e.target.dataset.id, e.target);
+    }
+  };
+  // 绑定推送开关事件
+  box.querySelectorAll('.topic-push-toggle input').forEach(function(inp) {
+    inp.onchange = function() {
+      const item = inp.closest('.topic-list-item');
+      toggleTopicPush(item.dataset.id, inp.checked);
+      const dot = inp.nextElementSibling;
+      if (dot) dot.className = 'dot ' + (inp.checked ? 'a' : '');
+    };
+  });
+}
+
+async function toggleTopicPush(topicId, enabled) {
+  // 先更新本地数据（topicsCache 是数组）
+  var item = (topicsCache || []).find(t => t.topic_id === topicId);
+  var oldValue = item ? item.push_enabled : 0;
+  if (item) item.push_enabled = enabled ? 1 : 0;
+  try {
+    await api.patch('/api/topics/push/' + encodeURIComponent(topicId), { push_enabled: enabled ? 1 : 0 });
+  } catch(e) {
+    toast('保存失败', 'err');
+    // 回滚本地数据
+    if (item) item.push_enabled = oldValue;
+    // 回勾：通过遍历找到对应的 checkbox
+    var items = document.querySelectorAll('.topic-list-item');
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].dataset.id === topicId) {
+        var inp = items[i].querySelector('input[type=checkbox]');
+        if (inp) inp.checked = !enabled;
+        var dot = inp ? inp.nextElementSibling : null;
+        if (dot) dot.className = 'dot ' + (!enabled ? 'a' : '');
+        break;
+      }
+    }
+  }
+}
+
+async function openTopicDetail(topicId, el, forceRefresh = false) {
+  currentTopicId = topicId;
+  var requestId = ++currentRequestId;
+  
+  // 从 data-name 属性获取名称
+  var nameFromAttr = el ? el.getAttribute('data-name') : '';
+  var cached = (topicsCache || []).find(function(t) { return t.topic_id === topicId; });
+  currentTopicName = nameFromAttr || (cached ? cached.name : topicId);
+
+  // 高亮当前选中
+  document.querySelectorAll('.topic-list-item').forEach(item => {
+    item.classList.toggle('active', item.dataset.id === topicId);
+  });
+
+  $('#topicDetailTitle').textContent = currentTopicName;
+  var topicDesc = (cached && cached.description) ? esc(cached.description) : '';
+  var topicMembers = (cached && cached.member_count) ? ('👥 ' + cached.member_count) : '';
+  var headerHtml = '<h3>' + esc(currentTopicName) + '</h3>';
+  headerHtml += '<div class="meta">ID: ' + esc(topicId) + ' · <a href="https://weibo.com/page/' + esc(topicId) + '" target="_blank" rel="noopener">在微博打开 ↗</a>';
+  if (topicMembers) headerHtml += ' · ' + topicMembers;
+  headerHtml += '</div>';
+  if (topicDesc) headerHtml += '<div class="topic-desc">' + topicDesc + '</div>';
+  headerHtml += '<div class="topic-toolbar">';
+  headerHtml += '<button class="btn btn-ghost btn-sm" id="btn-push-tg" title="推送 AI 总结到 TG">📮 推送到 TG</button>';
+  headerHtml += '</div>';
+  $('#topicDetailHeader').innerHTML = headerHtml;
+  $('#topicPosts').innerHTML = '<div class="loading-progress"><div class="loading-bar"><div class="loading-bar-inner" style="width:60%"></div></div><div class="loading-text">正在加载帖子…</div></div>';
+  $('#aiSummaryContent').innerHTML = '<div class="ai-placeholder"><span class="ai-placeholder-icon">✨</span><p>点击「生成总结」按钮，AI 将自动分析超话帖子内容</p></div>';
+  currentPosts = [];
+
+  // 绑定动态按钮事件（必须在 innerHTML 设置后）
+  var pushTgBtn = $('#btn-push-tg');
+  if (pushTgBtn) {
+    pushTgBtn.onclick = function() {
+      if (!currentPosts || !currentPosts.length) { toast('没有帖子数据', 'warn'); return; }
+      var text = currentPosts.map(function(p, i) { return '[' + (i+1) + '] ' + (p.user?.screen_name || '未知') + ': ' + postFullText(p); }).join('\n');
+      toast('推送中…');
+      api.post('/api/topics/push_tg', { text: text, topic_name: currentTopicName }).then(function(r) {
+        toast(r.ok ? '✅ 已推送到 TG' : ('❌ ' + (r.error || '推送失败')), r.ok ? 'good' : 'err');
+      }).catch(function() { toast('推送失败', 'err'); });
+    };
+  }
+  var topicRefreshBtn = $('#btn-topic-refresh');
+  if (topicRefreshBtn) {
+    topicRefreshBtn.onclick = function() {
+      if (!currentTopicId) { toast('请先选择超话', 'warn'); return; }
+      if (isLoadingPosts) return;
+      isLoadingPosts = true;
+      var items = document.querySelectorAll('.topic-list-item');
+      var el = null;
+      for (var k=0; k<items.length; k++) {
+        if (items[k].dataset.id === currentTopicId) { el = items[k]; break; }
+      }
+      openTopicDetail(currentTopicId, el, true).then(function() {
+        toast('已刷新', 'good');
+        isLoadingPosts = false;
+      }).catch(function() { isLoadingPosts = false; });
+    };
+  }
+  try {
+    const url = '/api/topics/posts/' + encodeURIComponent(topicId) + '?count=20' + (forceRefresh ? '&force=true' : '');
+    const data = await api.get(url);
+    if (requestId !== currentRequestId) return;
+    currentPosts = data.posts || [];
+    window.__currentPosts = currentPosts;
+    if (!currentPosts.length) {
+      const err = data.error || '未知错误';
+      const tried = data.tried ? `（已尝试 ${data.tried} 个端点）` : '';
+      $('#topicPosts').innerHTML = '<div style="color:var(--muted);padding:20px;text-align:center">暂无帖子数据<br><span style="font-size:11px">' + esc(err) + tried + '</span></div>';
+      return;
+    }
+    renderPosts(currentPosts);
+    // 显示缓存状态
+    if (data.cached) {
+      const header = $('#topicDetailHeader');
+      const cacheHint = document.createElement('span');
+      cacheHint.className = 'badge gray';
+      cacheHint.style.marginLeft = '8px';
+      cacheHint.textContent = '缓存: ' + (data.fetched_at ? data.fetched_at.slice(5,16) : '未知');
+      header.appendChild(cacheHint);
+    }
+    // 显示来源（公开访问 or 账号）
+    if (data.account_name) {
+      const header = $('#topicDetailHeader');
+      const srcHint = document.createElement('span');
+      srcHint.className = 'badge acc';
+      srcHint.style.marginLeft = '8px';
+      srcHint.textContent = '来源: ' + data.account_name;
+      header.appendChild(srcHint);
+    }
+  } catch(e) {
+    if (requestId !== currentRequestId) return;
+    $('#topicPosts').innerHTML = '<div style="color:var(--danger);padding:20px;text-align:center">拉取失败：' + esc(e.message || '') + '</div>';
+  }
+}
+
+function linkifyText(text) {
+  if (!text) return '';
+  let html = text;
+  // #话题# 标签 → 链接
+  html = html.replace(/#([^#\s]+)#/g, function(match, topic) {
+    return '<a href="https://s.weibo.com/weibo?q=' + encodeURIComponent(match) + '" target="_blank" rel="noopener noreferrer" class="topic-link">' + match + '</a>';
+  });
+  // URL → 短链接显示（完整 URL 保留在 href）
+  // 先转义 HTML 特殊字符，避免 < > 等破坏链接
+  html = html.replace(/(?<!['"=])https?:\/\/[^\s<>"]+/g, function(url) {
+    // 去掉尾部标点（但不包括 URL 内部的可能属于地址的字符）
+    var trimmed = url.replace(/[.,;!?)]+$/, '');
+    var extra = url.slice(trimmed.length);
+    var display = trimmed;
+    try {
+      var u = new URL(trimmed);
+      var path = u.pathname + u.search;
+      if (path.length > 20) {
+        display = u.host + '/…';
+      } else {
+        display = trimmed.length > 60 ? trimmed.slice(0, 30) + '…' : trimmed;
+      }
+    } catch(e) {
+      display = trimmed.length > 60 ? trimmed.slice(0, 30) + '…' : trimmed;
+    }
+    return '<a href="' + trimmed + '" target="_blank" rel="noopener noreferrer" class="topic-link">' + display + '</a>' + extra;
+  });
+  return html;
+}
+
+function postDisplayText(p) {
+  // 后端会把纯转发（"转发微博"）合并为 "//@原作者: 原博内容"；
+  // 这种合并结果不再重复展示，改由引用框呈现。
+  var rt = p.retweeted;
+  var raw = p.text || '';
+  if (rt && rt.text) {
+    var merged = (rt.user && rt.user.screen_name ? '//@' + rt.user.screen_name + ': ' : '') + rt.text;
+    if (raw === merged) return '';
+  }
+  return raw;
+}
+
+// 供 AI 总结 / TG 推送使用：正文 + 被转发原博内容
+function postFullText(p) {
+  var t = p.text || '';
+  var rt = p.retweeted;
+  if (rt && rt.text && t.indexOf(rt.text) === -1) {
+    var quote = (rt.user && rt.user.screen_name ? '@' + rt.user.screen_name + '：' : '') + rt.text;
+    t = t ? (t + '【原博：' + quote + '】') : quote;
+  }
+  return t;
+}
+
+function renderPosts(posts) {
+  const box = $('#topicPosts');
+  if (!box) return;
+  box.innerHTML = posts.map((p, idx) => {
+    const avatar = esc(p.user?.profile_image_url || '/default-avatar.svg');
+    const userName = esc(p.user?.screen_name || '未知');
+    const time = esc(p.created_at || '');
+    const mid = esc(p.mid || '');
+    const rawText = postDisplayText(p);
+    const text = linkifyText(esc(rawText));
+    const isLong = rawText.length > 120;
+    const textId = 'post-text-' + idx;
+    // 图片 URL 通过 data-src 存储，避免 onclick 字符串注入
+    const pics = (p.pics || []).map((url) => {
+      const safeUrl = esc(url);
+      return '<img src="' + safeUrl + '" alt="" loading="lazy" referrerpolicy="no-referrer" data-lightbox="' + safeUrl + '" onerror="this.style.display=\'none\'" />';
+    }).join('');
+    const picsHtml = pics ? '<div class="topic-post-pics">' + pics + '</div>' : '';
+    const source = esc(p.source || '');
+    const sourceHtml = source ? '<span class="topic-post-source">来自 ' + source + '</span>' : '';
+    const rt = p.retweeted;
+    const quoteHtml = (rt && rt.text) ?
+      '<div class="topic-post-quote">' +
+        (rt.user && rt.user.screen_name ? '<span class="topic-post-quote-user">@' + esc(rt.user.screen_name) + '</span>' : '') +
+        '<div class="topic-post-quote-text">' + linkifyText(esc(rt.text)) + '</div>' +
+      '</div>' : '';
+    return '<div class="topic-post" data-idx="' + idx + '">' +
+      '<div class="topic-post-header">' +
+        '<img class="topic-post-avatar" src="' + avatar + '" alt="" onerror="this.onerror=null;this.src=\'/default-avatar.svg\'" />' +
+        '<div class="topic-post-user-info">' +
+          '<span class="topic-post-user">' + userName + '</span>' +
+          sourceHtml +
+        '</div>' +
+        '<span class="topic-post-time">' + time + '</span>' +
+      '</div>' +
+      (rawText ?
+        '<div class="topic-post-text' + (isLong ? ' topic-post-collapsed' : '') + '" id="' + textId + '">' +
+          (isLong ? linkifyText(esc(rawText.slice(0, 120))) : text) +
+        '</div>' +
+        (isLong ? '<button class="btn btn-ghost btn-sm topic-post-expand" data-target="' + textId + '">展开全文</button>' : '')
+        : '') +
+      quoteHtml +
+      picsHtml +
+      '<div class="topic-post-actions">' +
+        '<span>🔁 ' + (p.reposts_count || 0) + '</span>' +
+        '<span>💬 ' + (p.comments_count || 0) + '</span>' +
+        '<span>❤️ ' + (p.attitudes_count || 0) + '</span>' +
+        (mid ? '<a href="https://weibo.com/detail/' + mid + '" target="_blank" rel="noopener" class="topic-post-link">原文 ↗</a>' : '') +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+function toggleExpand(id) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  var btn = el.parentElement.querySelector('.topic-post-expand');
+  var isCollapsed = el.classList.contains('topic-post-collapsed');
+  var idx = parseInt(id.replace('post-text-', ''));
+  var p = window.__currentPosts && window.__currentPosts[idx];
+  if (!p) return;
+  if (isCollapsed) {
+    // 展开：显示完整内容（带链接）
+    el.classList.remove('topic-post-collapsed');
+    el.innerHTML = linkifyText(esc(postDisplayText(p)));
+    if (btn) btn.textContent = '收起';
+  } else {
+    // 收起：截断显示（同样带链接，保持视觉一致）
+    var full = postDisplayText(p);
+    el.classList.add('topic-post-collapsed');
+    var truncated = full.length > 120 ? full.slice(0, 120) : full;
+    el.innerHTML = linkifyText(esc(truncated)) + '<span class="topic-ellipsis">…</span>';
+    if (btn) btn.textContent = '展开全文';
+  }
+}
+
+function openLightbox(url) {
+  if (!url) return;
+  var lb = document.createElement('div');
+  lb.className = 'lightbox';
+  lb.innerHTML = '<div class="lightbox-img" style="--img-url:url(\'' + url.replace(/'/g, "\\'") + '\')"></div><button class="lightbox-close">×</button>';
+  document.body.appendChild(lb);
+  lb.addEventListener('click', closeLightbox);
+  setTimeout(function() { lb.classList.add('show'); }, 10);
+  document._activeLightbox = lb;
+}
+function closeLightbox() {
+  var lb = document._activeLightbox || document.querySelector('.lightbox');
+  if (lb) {
+    lb.classList.remove('show');
+    document._activeLightbox = null;
+    setTimeout(function() { lb.remove(); }, 200);
+  }
+}
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape' && document._activeLightbox) closeLightbox();
+});
+
+
+// TG 推送按钮事件已在 openTopicDetail 内绑定
+
+// AI 总结（仅流式输出）
+$('#btn-ai-summary').onclick = async () => {
+  if (!currentPosts || !currentPosts.length) {
+    toast('请先选择超话并拉取帖子', 'warn');
+    return;
+  }
+  var box = $('#aiSummaryContent');
+  var button = $('#btn-ai-summary');
+  var text = currentPosts.map(function(p, i) {
+    return '[' + (i+1) + '] ' + (p.user?.screen_name || '未知') + ': ' + postFullText(p) +
+      '（转发 ' + (p.reposts_count || 0) + '，评论 ' + (p.comments_count || 0) + '，点赞 ' + (p.attitudes_count || 0) + '）';
+  }).join('\n');
+
+  button.disabled = true;
+  button.textContent = '总结中…';
+  box.innerHTML = '<div class="ai-summary-loading"><span class="qr-spinner" style="width:16px;height:16px;border-width:2px"></span> AI 正在思考…</div>';
+
+  try {
+    var resp = await fetch('/api/topics/ai_summary', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: text, topic_name: currentTopicName, stream: true }),
+    });
+
+    if (!resp.ok) {
+      var err = await resp.json();
+      box.innerHTML = '<div class="ai-summary-error">❌ ' + esc(err.error || '请求失败') + '</div>';
+      return;
+    }
+
+    // 配置缺失、反向代理错误等情况下后端会返回 JSON，而非 SSE。
+    var contentType = (resp.headers && resp.headers.get('content-type') || '').toLowerCase();
+    if (!contentType.includes('text/event-stream')) {
+      var result = await resp.json();
+      if (!result.ok) {
+        box.innerHTML = '<div class="ai-summary-error">❌ ' + esc(result.error || 'AI 请求失败') + '</div>';
+        return;
+      }
+      var resultText = result.summary || '';
+      box.innerHTML = '<div class="ai-summary-text">' + formatAiSummary(resultText) + '</div>';
+      if (result.model) {
+        var resultHint = document.createElement('div');
+        resultHint.className = 'ai-model-hint';
+        resultHint.textContent = '模型: ' + result.model;
+        box.appendChild(resultHint);
+      }
+      return;
+    }
+
+    var reader = resp.body.getReader();
+    var decoder = new TextDecoder();
+    var accumulated = '';
+    var streamError = '';
+    var buffer = '';
+    box.innerHTML = '';
+    var summaryDiv = document.createElement('div');
+    summaryDiv.className = 'ai-summary-text streaming';
+    box.appendChild(summaryDiv);
+
+    var done = false;
+    while (!done) {
+      var result = await reader.read();
+      var chunk = result.value;
+      done = result.done;
+
+      if (chunk && chunk.length > 0) {
+        buffer += decoder.decode(chunk, { stream: true });
+        var lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (var i = 0; i < lines.length; i++) {
+          var line = lines[i].trim();
+          if (!line || !line.startsWith('data: ')) continue;
+
+          var jsonStr = line.slice(6).trim();
+          if (!jsonStr || jsonStr === '[DONE]') { done = true; break; }
+
+          try {
+            var chunkData = JSON.parse(jsonStr);
+            if (chunkData.text) {
+              accumulated += chunkData.text;
+              summaryDiv.innerHTML = formatAiSummary(accumulated);
+            }
+            if (chunkData.error) {
+              streamError = chunkData.error;
+            }
+            if (chunkData.finish) {
+              done = true;
+              if (chunkData.model) {
+                var hint = document.createElement('div');
+                hint.className = 'ai-model-hint';
+                hint.textContent = '模型: ' + chunkData.model;
+                box.appendChild(hint);
+              }
+            }
+          } catch (e) {
+            // JSON 不完整，跳过
+          }
+        }
+      }
+    }
+
+    // 处理剩余的 buffer
+    if (buffer.trim().startsWith('data: ')) {
+      try {
+        var jsonStr = buffer.trim().slice(6).trim();
+        if (jsonStr !== '[DONE]') {
+          var chunkData = JSON.parse(jsonStr);
+          if (chunkData.text) {
+            accumulated += chunkData.text;
+            summaryDiv.innerHTML = formatAiSummary(accumulated);
+          }
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    if (!accumulated.trim()) {
+      box.innerHTML = '<div class="ai-summary-error">❌ ' + esc(streamError || 'AI 没有返回内容，请检查模型配置后重试。') + '</div>';
+    } else if (streamError) {
+      var streamErrorEl = document.createElement('div');
+      streamErrorEl.className = 'ai-summary-error';
+      streamErrorEl.textContent = streamError;
+      box.appendChild(streamErrorEl);
+    }
+
+  } catch(e) {
+    box.innerHTML = '<div class="ai-summary-error">❌ ' + esc(e.message || '请求失败') + '</div>';
+  } finally {
+    button.disabled = false;
+    button.textContent = '✨ 生成总结';
+    if (summaryDiv) summaryDiv.classList.remove('streaming');
+  }
+};
+
+// 格式化 AI 总结文本（Markdown → HTML，支持流式逐字显示）
+function formatAiSummary(text) {
+  if (!text) return '';
+  var html = esc(text);
+  // Bold (handle incomplete ** during streaming)
+  // Only render ** when both opening and closing are present
+  html = html.replace(/\*\*([^*]+?)\*\*/g, '<strong>$1</strong>');
+  // Remove any remaining unclosed ** to avoid rendering artifacts
+  html = html.replace(/\*\*/g, '');
+  // Headers (process ### before ##)
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  // List items: wrap consecutive <li> in <ul>
+  html = html.replace(/(<li>.*<\/li>(\n|$))+/gm, function(match) {
+    return '<ul>' + match.replace(/^\n|\n$/g, '') + '</ul>';
+  });
+  html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+  // Code
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // Line breaks
+  html = html.replace(/\n/g, '<br>');
+  return html;
+}
+
+// 刷新帖子事件已在 openTopicDetail 内绑定
+
+// 更新超话列表 - 刷新按钮（获取最新数据）
+$('#btn-topics-refresh').onclick = async () => {
+  if (isLoadingList) return;
+  isLoadingList = true;
+  const btn = $('#btn-topics-refresh');
+  btn.disabled = true; btn.textContent = '刷新中…';
+  const list = $('#topicsList');
+  if (list) list.innerHTML = '<div class="loading-progress"><div class="loading-bar"><div class="loading-bar-inner" style="width:20%"></div></div><div class="loading-text">正在刷新超话列表...</div></div>';
+  try {
+    const r = await api.post('/api/topics/refresh_all', {});
+    if (r.ok && !(r.errors && r.total === 0)) {
+      var msg = r.message || '刷新完成';
+      if (r.errors) msg += '（' + r.errors + ' 个账号失败）';
+      toast(msg, 'good');
+    } else {
+      toast(r.message || r.error || '刷新失败', 'err');
+    }
+  } catch(e) {
+    console.error('refresh_all error:', e);
+    toast('刷新失败: ' + (e.message || ''), 'err');
+  } finally {
+    isLoadingList = false;
+    btn.disabled = false; btn.textContent = '↻ 刷新';
+  }
+  setTimeout(function() { loadTopics(); }, 100);
+};
+
+$('#btn-topics-clear').onclick = async () => {
+  if (!confirm('确定清空全部超话记录？此操作不可恢复。')) return;
+  try {
+    const r = await api.del('/api/topics/all');
+    toast('已清空 ' + (r.removed||0) + ' 条超话记录', 'good');
+    currentTopicId = null;
+    currentPosts = [];
+    loadTopics();
+  } catch(e) { toast('清空失败', 'err'); }
+};
+
+// 设置页 AI 配置
+$('#btn-test-ai').onclick = async () => {
+  const st = $('#ai-test-status');
+  st.textContent = '测试中…';
+  try {
+    const r = await api.post('/api/topics/ai_summary', { text: '测试连接', topic_name: '测试', stream: false });
+    if (r.ok) {
+      st.textContent = '✅ 连接正常';
+      st.style.color = 'var(--success)';
+    } else {
+      st.textContent = '❌ ' + (r.error || '失败');
+      st.style.color = 'var(--danger)';
+    }
+  } catch(e) {
+    st.textContent = '❌ ' + e.message;
+    st.style.color = 'var(--danger)';
+  }
+};
+
+// 账号管理弹窗里的超话选择模块
+let accountTopicsCache = [];
+
+async function loadAccountTopicsForEdit(accountId) {
+  const statusEl = $('#m-topic-status');
+  const cbBox = $('#m-topic-checkboxes');
+  if (!statusEl || !cbBox) return;
+  statusEl.textContent = '加载中…';
+  statusEl.className = '';
+  cbBox.innerHTML = '';
+  try {
+    const r = await api.get('/api/topics/cache/' + accountId);
+    if (r.cached && r.topics && r.topics.length) {
+      accountTopicsCache = r.topics;
+      statusEl.textContent = '缓存于 ' + (r.cached_at ? r.cached_at.slice(5,16) : '未知') + '，共 ' + r.topics.length + ' 个超话';
+      statusEl.className = 'ok';
+      renderTopicCheckboxes();
+    } else {
+      statusEl.textContent = '尚未缓存，点击「刷新」获取';
+      statusEl.className = '';
+      accountTopicsCache = [];
+    }
+  } catch(e) {
+    statusEl.textContent = '加载失败：' + (e.message || '未知错误');
+    statusEl.className = 'err';
+    accountTopicsCache = [];
+  }
+}
+
+function renderTopicCheckboxes() {
+  const cbBox = $('#m-topic-checkboxes');
+  if (!cbBox) return;
+  cbBox.innerHTML = accountTopicsCache.map((t, i) => {
+    const name = esc(t.name || t.id);
+    const id = esc(t.id || '');
+    const done = t.done ? '<span class="tc-status">✓ 已签</span>' : '';
+    return `<label class="topic-checkbox-item" data-idx="${i}">
+      <input type="checkbox" value="${id}" checked />
+      <span class="tc-name" title="${name}">${name}</span>
+      ${done}
+    </label>`;
+  }).join('');
+  cbBox.querySelectorAll('.topic-checkbox-item').forEach(label => {
+    label.addEventListener('click', e => {
+      if (e.target.tagName === 'INPUT') return;
+      const cb = label.querySelector('input[type=checkbox]');
+      cb.checked = !cb.checked;
+      label.classList.toggle('checked', cb.checked);
+    });
+    const cb = label.querySelector('input[type=checkbox]');
+    label.classList.toggle('checked', cb.checked);
+    cb.addEventListener('change', () => label.classList.toggle('checked', cb.checked));
+  });
+}
+
+$('#m-topic-refresh').onclick = async () => {
+  if (!editingId) {
+    toast('请先保存账号后再刷新超话', 'warn');
+    return;
+  }
+  const btn = $('#m-topic-refresh');
+  btn.disabled = true; btn.textContent = '刷新中…';
+  try {
+    const r = await api.post('/api/topics/refresh', { account_id: editingId });
+    accountTopicsCache = r.topics || [];
+    $('#m-topic-status').textContent = `已刷新，共 ${r.count} 个超话`;
+    $('#m-topic-status').className = 'ok';
+    renderTopicCheckboxes();
+    toast('刷新完成', 'good');
+  } catch(e) {
+    toast('刷新失败：' + e.message, 'err');
+    $('#m-topic-status').textContent = '刷新失败：' + e.message;
+    $('#m-topic-status').className = 'err';
+  } finally {
+    btn.disabled = false; btn.textContent = '↻ 刷新';
+  }
+};
+
+function collectSelectedTopics() {
+  const checked = $('#m-topic-checkboxes').querySelectorAll('input[type=checkbox]:checked');
+  return Array.from(checked).map(cb => cb.value);
+}
+
+
+/* ===== 交互微动效 ===== */
+// 按钮涟漪反馈
+document.addEventListener('click', function(e){
+  var btn = e.target.closest('.btn');
+  if (!btn || btn.disabled) return;
+  var r = btn.querySelector('.ripple');
+  if (!r) { r = document.createElement('span'); r.className='ripple'; btn.appendChild(r); }
+  r.classList.remove('go');
+  var rect = btn.getBoundingClientRect();
+  r.style.left = (e.clientX - rect.left) + 'px';
+  r.style.top  = (e.clientY - rect.top) + 'px';
+  void r.offsetWidth;
+  r.classList.add('go');
+});
+
+// 弹窗通用 Esc 关闭
+document.addEventListener('keydown', function(e){
+  if (e.key === 'Escape') {
+    var open = document.querySelectorAll('.modal-mask:not([hidden])');
+    if (open.length) {
+      open[open.length-1].hidden = true;
+      document.body.classList.remove('modal-open');
+    }
+  }
+});
+
+// 滚动揭示
+var revealObserver = null;
+function setupReveal() {
+  if (revealObserver) return;
+  if (!window.IntersectionObserver) {
+    document.querySelectorAll('.reveal').forEach(function(el){ el.classList.add('in'); });
+    return;
+  }
+  revealObserver = new IntersectionObserver(function(entries){
+    entries.forEach(function(en){ if (en.isIntersecting) { en.target.classList.add('in'); revealObserver.unobserve(en.target); } });
+  }, {threshold:0.12});
+  document.querySelectorAll('.reveal').forEach(function(el){ revealObserver.observe(el); });
+}
+function observeNewReveal(root){
+  if (!window.IntersectionObserver) { (root||document).querySelectorAll('.reveal:not(.in)').forEach(function(el){ el.classList.add('in'); }); return; }
+  if (!revealObserver) { setupReveal(); return; }
+  (root||document).querySelectorAll('.reveal:not(.in)').forEach(function(el){ revealObserver.observe(el); });
+}
+
 /* ===== 初始化 ===== */
 loadVersion();
 loadMe();
 loadDashboard();
-setInterval(()=>{ if (!$('#view-dashboard').hidden) loadDashboard(); }, 30000);
+setupReveal();
+window._dashInterval = setInterval(()=>{ if (!$('#view-dashboard').hidden) loadDashboard(); }, 30000);
+
+// 一次性事件委托：超话帖子 Lightbox + 展开按钮
+var topicPostsBox = document.getElementById('topicPosts');
+if (topicPostsBox) {
+  topicPostsBox.addEventListener('click', function(e) {
+    var img = e.target.closest('[data-lightbox]');
+    if (img) openLightbox(img.dataset.lightbox);
+    var expandBtn = e.target.closest('.topic-post-expand');
+    if (expandBtn) toggleExpand(expandBtn.dataset.target);
+  });
+}

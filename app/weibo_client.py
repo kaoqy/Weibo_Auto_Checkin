@@ -26,6 +26,7 @@ except ImportError:
     SOCKS_AVAILABLE = False
 
 BASE = "https://m.weibo.cn"
+BASE_PC = "https://weibo.com"
 CONFIG_URL = BASE + "/api/config"
 TOPICS_URL = BASE + "/api/container/getIndex"
 FOLLOWED_CONTAINER = "100803_-_followsuper"
@@ -49,6 +50,397 @@ _RETRYABLE = (
     requests.exceptions.ReadTimeout,
     requests.exceptions.SSLError,
 )
+
+# ========================= 超话页面（v1.3.0） =========================
+
+
+def _clean_mblog_text(raw_text):
+    """去掉微博文本里的 HTML 标签、实体与截断尾巴（…全文 / 展开等）。"""
+    import re as _re, html as _html
+    text = _re.sub(r'<[^>]+>', '', str(raw_text or '')).strip()
+    text = _html.unescape(text)
+    if text:
+        # 先去掉尾部的时间戳行（如 "Thu Sep 17 21:13:15 +0800 2026"）
+        text = _re.sub(r'\n[A-Z][a-z]{2}\s[A-Z][a-z]{2}\s\d{1,2}\s\d{2}:\d{2}:\d{2}\s[+-]\d{4}\s\d{4}\s*$', '', text)
+        # 去掉尾部的「来自 XXX」行（source 字段已包含此信息）
+        text = _re.sub(r'(?:^|\n)来自\s+\S+\s*$', '', text)
+        # 去掉尾部的「转发了」等无意义结尾
+        text = _re.sub(r'(?:^|\n)(转发了|轉發了|Repost)\s*$', '', text)
+        # 去掉截断链接残留的「…全文」「展开」「收起」尾巴
+        text = _re.sub(r'(?:\s*(?:\.{3}|…)?\s*(?:全文|展开|收起))+$', '', text)
+        text = text.strip()
+    return text
+
+
+_REPOST_NOISE = ("转发微博", "轉發微博", "Repost", "分享微博", "转发了", "轉發了")
+
+
+def _clean_source(raw_source):
+    """source 字段常带 HTML（如 <a href="...">荣耀8X</a>），只留纯文本设备名。"""
+    import re as _re, html as _html
+    src = _re.sub(r'<[^>]+>', '', str(raw_source or '')).strip()
+    src = _html.unescape(src)
+    return _re.sub(r'\s+', ' ', src)[:30]
+
+
+def _normalize_mblog(mblog_raw):
+    """将 mblog 对象（PC 或移动端格式）标准化为统一输出格式。"""
+    if not mblog_raw or not isinstance(mblog_raw, dict):
+        return None
+    if not mblog_raw.get("id"):
+        return None
+    text = _clean_mblog_text(mblog_raw.get("text", ""))
+    user = mblog_raw.get("user") or {}
+    if not isinstance(user, dict):
+        user = {}
+    # 转发帖：真实内容在被转发的原博里，主文本只剩「转发微博」等噪声时用原博替换
+    retweeted = None
+    rt_raw = mblog_raw.get("retweeted_status")
+    if isinstance(rt_raw, dict) and rt_raw.get("id"):
+        rt_user_obj = rt_raw.get("user") or {}
+        rt_user_name = rt_user_obj.get("screen_name", "") if isinstance(rt_user_obj, dict) else ""
+        retweeted = {
+            "mid": rt_raw.get("idstr") or str(rt_raw.get("id", "")),
+            "text": _clean_mblog_text(rt_raw.get("text", "")),
+            "user": {"screen_name": rt_user_name},
+            "created_at": rt_raw.get("created_at", ""),
+        }
+        if (not text or text in _REPOST_NOISE
+                or any(text.startswith(n) for n in _REPOST_NOISE)):
+            text = f"//@{rt_user_name}: {retweeted['text']}" if rt_user_name else retweeted["text"]
+    # pics: pic_ids (list of str) or pic_infos (dict)
+    pics = []
+    pic_infos = mblog_raw.get("pic_infos") or {}
+    if pic_infos:
+        for pic_info in pic_infos.values():
+            if isinstance(pic_info, dict):
+                # original can be a string URL or a dict with url key
+                original = pic_info.get("original")
+                if isinstance(original, str) and original:
+                    pics.append(original)
+                elif isinstance(original, dict) and original.get("url"):
+                    pics.append(original["url"])
+                else:
+                    large = pic_info.get("large")
+                    if isinstance(large, str) and large:
+                        pics.append(large)
+                    elif isinstance(large, dict) and large.get("url"):
+                        pics.append(large["url"])
+    elif mblog_raw.get("pic_ids"):
+        # pic_ids are photo IDs, convert to URLs
+        for pic_id in mblog_raw["pic_ids"]:
+            pics.append(f"https://wx2.sinaimg.cn/orj1080/{pic_id}.jpg")
+    return {
+        "mid": mblog_raw.get("idstr") or str(mblog_raw.get("id", "")),
+        "text": text,
+        "created_at": mblog_raw.get("created_at", ""),
+        "source": _clean_source(mblog_raw.get("source", "")),
+        "reposts_count": mblog_raw.get("reposts_count", 0),
+        "comments_count": mblog_raw.get("comments_count", 0),
+        "attitudes_count": mblog_raw.get("attitudes_count", 0),
+        "pics": pics,
+        "retweeted": retweeted,
+        "user": {
+            "id": user.get("idstr") or str(user.get("id", "")),
+            "screen_name": user.get("screen_name", ""),
+            "profile_image_url": str(user.get("profile_image_url", "") or "").replace("http://", "https://"),
+        },
+    }
+
+
+def _extract_posts_from_payload(payload):
+    """从 API 响应中提取帖子列表，兼容 PC chaohua/page 和移动端 container/getIndex。"""
+    if not isinstance(payload, dict):
+        return []
+    results = []
+
+    # 格式 1: PC chaohua/page - items[].data 直接是 mblog
+    items = payload.get("items") or []
+    if isinstance(items, list):
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            mblog = item.get("data")
+            if not isinstance(mblog, dict):
+                mblog = item.get("mblog")
+            if isinstance(mblog, dict) and (item.get("category") == "feed" or mblog.get("id") or mblog.get("idstr")):
+                normalized = _normalize_mblog(mblog)
+                if normalized:
+                    results.append(normalized)
+    if results:
+        return results
+
+    # 格式 2: 移动端 container/getIndex - data.cards[].card_group[].mblog（含嵌套一层）
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return results
+    cards = data.get("cards") or []
+    if not isinstance(cards, list):
+        cards = []
+
+    def _collect_from_group(group, depth=0):
+        found = []
+        if not isinstance(group, list):
+            return found
+        for entry in group:
+            if not isinstance(entry, dict):
+                continue
+            nested = entry.get("card_group")
+            if isinstance(nested, list) and depth < 2:
+                found.extend(_collect_from_group(nested, depth + 1))
+                continue
+            mblog = entry.get("mblog")
+            if isinstance(mblog, dict):
+                normalized = _normalize_mblog(mblog)
+                if normalized:
+                    found.append(normalized)
+        return found
+
+    for card in cards:
+        if not isinstance(card, dict):
+            continue
+        results.extend(_collect_from_group(card.get("card_group")))
+
+    # 格式 3: data.cards 直接是 mblog 列表（无 card_group 包装）
+    if not results:
+        for card in cards:
+            if not isinstance(card, dict):
+                continue
+            mblog = card.get("mblog") or card
+            normalized = _normalize_mblog(mblog)
+            if normalized:
+                results.append(normalized)
+
+    # 格式 4: data.list[] / data.items[] 直接是 mblog 列表
+    if not results:
+        direct_list = data.get("list") or data.get("items") or []
+        if isinstance(direct_list, list):
+            for entry in direct_list:
+                if not isinstance(entry, dict):
+                    continue
+                mblog = entry.get("mblog") or entry
+                normalized = _normalize_mblog(mblog)
+                if normalized:
+                    results.append(normalized)
+
+    return results
+
+
+def _format_weibo_time(raw_time: str) -> str:
+    """将微博时间格式化为可读字符串。
+    处理：
+    - 相对时间（"10分钟前"、"今天 12:30"）→ 转为 YYYY-MM-DD HH:MM
+    - 已经是标准格式的 → 原样返回
+    - 无法解析 → 返回原始值
+    """
+    if not raw_time:
+        return ""
+    from datetime import datetime as _dt, timedelta as _td
+    now = _dt.now()
+
+    try:
+        # PC 端英文格式 "Fri Sep 25 21:13:15 +0800 2026"
+        if len(raw_time) >= 25 and raw_time[0] in "MonTueWedThuFriSat" and " " in raw_time[:4]:
+            dt = _dt.strptime(raw_time, "%a %b %d %H:%M:%S %z %Y")
+            return dt.astimezone().strftime("%Y-%m-%d %H:%M")
+        # 标准格式 YYYY-MM-DD HH:MM 或更长
+        if len(raw_time) >= 10 and raw_time[4] == '-' and raw_time[7] == '-':
+            return raw_time[:16]
+        # "今天 HH:MM"
+        if raw_time.startswith("今天"):
+            t = raw_time.replace("今天", "").strip()
+            return f"{now.strftime('%Y-%m-%d')} {t}"
+        # "昨天 HH:MM"
+        if raw_time.startswith("昨天"):
+            t = raw_time.replace("昨天", "").strip()
+            yest = now - _td(days=1)
+            return f"{yest.strftime('%Y-%m-%d')} {t}"
+        # "N分钟前"
+        if "分钟前" in raw_time:
+            n = int(raw_time.replace("分钟前", "").strip())
+            out = now - _td(minutes=n)
+            return out.strftime("%Y-%m-%d %H:%M")
+        # "N小时前"
+        if "小时前" in raw_time:
+            n = int(raw_time.replace("小时前", "").strip())
+            out = now - _td(hours=n)
+            return out.strftime("%Y-%m-%d %H:%M")
+        # "N天前"
+        if "天前" in raw_time:
+            n = int(raw_time.replace("天前", "").strip())
+            out = now - _td(days=n)
+            return out.strftime("%Y-%m-%d %H:%M")
+        # "MM-DD HH:MM"（无年份，补当前年）
+        if len(raw_time) >= 11 and raw_time[2] == '-':
+            return f"{now.year}-{raw_time}"
+        # "YYYY-MM-DD" 纯日期
+        if len(raw_time) == 10 and raw_time[4] == '-':
+            return f"{raw_time} 00:00"
+        # "刚刚" → 当前时间
+        if raw_time.strip() == "刚刚":
+            return now.strftime("%Y-%m-%d %H:%M")
+        # "X秒前" → 当前时间
+        if "秒前" in raw_time:
+            return now.strftime("%Y-%m-%d %H:%M")
+        # "X个月前" → 近似计算
+        if "个月前" in raw_time:
+            n = int(raw_time.replace("个月前", "").strip())
+            out = now - _td(days=n * 30)
+            return out.strftime("%Y-%m-%d %H:%M")
+        # "X年前" → 近似计算
+        if "年前" in raw_time:
+            n = int(raw_time.replace("年前", "").strip())
+            out = now - _td(days=n * 365)
+            return out.strftime("%Y-%m-%d %H:%M")
+        # "昨天" 单独出现（无时间）
+        if raw_time.strip() == "昨天":
+            yest = now - _td(days=1)
+            return yest.strftime("%Y-%m-%d %H:%M")
+        # "今天" 单独出现（无时间）
+        if raw_time.strip() == "今天":
+            return now.strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        pass
+    return raw_time
+
+
+def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
+                      proxy=None, force=False, allow_fallback=True, count: int = 20):
+    """拉取指定超话的最新帖子列表（默认前 count 条）。
+
+    微博超话帖子接口是公开的，不需要登录态。
+    优先尝试 PC 端 chaohua/page，失败则回退到移动端 container/getIndex。
+    """
+    posts = []
+    errors = []
+    tried = 0
+
+    # 清理 containerid，去掉可能的后缀
+    clean_cid = containerid.split("_-_")[0] if "_-_" in containerid else containerid
+    # 去掉可能已存在的 100808 前缀
+    if clean_cid.startswith("100808"):
+        clean_cid = clean_cid[6:]
+
+    # 端点列表（按优先级排序，确保获取最新帖子而非精华帖）
+    endpoints = [
+        # PC 端（chaohua/page）- 按时间排序（最可靠）
+        {
+            "url": f"{BASE_PC}/ajax_proxy/chaohua/page",
+            "params": {"flowId": f"100808{clean_cid}_-_sort_time", "vtype": 1},
+            "headers": {"Referer": f"{BASE_PC}/p/100808{clean_cid}"},
+        },
+        # PC 端（chaohua/page）- 默认排序
+        {
+            "url": f"{BASE_PC}/ajax_proxy/chaohua/page",
+            "params": {"flowId": f"100808{clean_cid}", "vtype": 1},
+            "headers": {"Referer": f"{BASE_PC}/p/100808{clean_cid}"},
+        },
+        # 移动端（container/getIndex）- 带 100808 前缀
+        {
+            "url": f"{BASE}/api/container/getIndex",
+            "params": {"containerid": f"100808{clean_cid}", "page": 1, "count": 25, "vtype": 1},
+            "headers": {"Referer": f"{BASE}/p/100808{clean_cid}"},
+        },
+        # 移动端（container/getIndex）- 无前缀
+        {
+            "url": f"{BASE}/api/container/getIndex",
+            "params": {"containerid": clean_cid, "page": 1, "count": 25, "vtype": 1},
+            "headers": {"Referer": f"{BASE}/p/{clean_cid}"},
+        },
+        # 移动端 - _all 全部（回退方案）
+        {
+            "url": f"{BASE}/api/container/getIndex",
+            "params": {"containerid": f"100808{clean_cid}_all", "page": 1, "count": 25, "vtype": 1},
+            "headers": {"Referer": f"{BASE}/p/100808{clean_cid}"},
+        },
+    ]
+
+    for ep in endpoints:
+        page = 1
+        since_id = ""
+        tried += 1
+        while len(posts) < count:
+            params = dict(ep["params"])
+            if page > 1:
+                params["page"] = page
+            if since_id:
+                params["since_id"] = since_id
+            old_headers = dict(session.headers)
+            try:
+                # 合并自定义 headers（请求后无论成败都恢复，避免污染后续端点）
+                session.headers.update(ep.get("headers", {}))
+                payload = request_json(
+                    session, "GET", ep["url"], params=params, cookies=cookies,
+                    channel=channel, proxy=proxy, force=force,
+                    allow_fallback=allow_fallback,
+                )
+            except NetworkError as exc:
+                errors.append(f"[{tried}] {ep['url']} p{page}: 网络错误 {exc}")
+                break
+            except RuntimeError as exc:
+                errors.append(f"[{tried}] {ep['url']} p{page}: 请求失败 {exc}")
+                break
+            except Exception as exc:
+                errors.append(f"[{tried}] {ep['url']} p{page}: 未知错误 {exc}")
+                break
+            finally:
+                session.headers.clear()
+                session.headers.update(old_headers)
+
+            # 检查响应状态（PC 端没有 ok 字段，直接有 items）
+            if "items" in payload:
+                # PC 端格式
+                pass
+            else:
+                # 移动端格式，检查 ok
+                ok_val = payload.get("ok")
+                if ok_val == -100:
+                    errors.append(f"[{tried}] {ep['url']} p{page}: Cookie 过期")
+                    break
+                if ok_val != 1 and ok_val != "1":
+                    log.warning(f"fetch_topic_posts: ok={ok_val!r}, url={ep['url']}, page={page}")
+                    break
+
+            extracted = _extract_posts_from_payload(payload)
+            if not extracted:
+                errors.append(f"[{tried}] {ep['url']} p{page}: 无帖子数据")
+                break
+
+            posts.extend(extracted)
+            if len(posts) >= count:
+                break
+
+            # 翻页
+            data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+            cardlist_info = data.get("cardlistInfo") if isinstance(data.get("cardlistInfo"), dict) else {}
+            next_since = cardlist_info.get("since_id", "")
+            if next_since:
+                since_id = next_since
+            else:
+                page += 1
+                if page > 3:
+                    break
+            time.sleep(0.3)
+
+        if posts:
+            break
+
+    # Deduplicate by mid
+    seen_mids = set()
+    unique_posts = []
+    for p in posts:
+        mid = p.get("mid", "")
+        if mid and mid in seen_mids:
+            continue
+        seen_mids.add(mid)
+        unique_posts.append(p)
+
+    # 格式化时间
+    for p in unique_posts[:count]:
+        p["created_at"] = _format_weibo_time(p.get("created_at", ""))
+
+    error_msg = "; ".join(errors) if errors else ""
+    return {"posts": unique_posts[:count], "error": error_msg, "tried": tried}
 
 
 class NetworkError(RuntimeError):
@@ -120,7 +512,6 @@ def request_via_proxy(session, method, url, channel="auto", proxy=None,
 
     if proxy and channel in ("socks", "auto"):
         if not SOCKS_AVAILABLE:
-            # 配置了 SOCKS 代理但未装 PySocks
             msg = ("配置了 SOCKS5 代理，但缺少 PySocks 支持。请安装：pip install PySocks "
                    "（或移除设置里的 SOCKS 代理节点改用直连）")
             log.error(msg)
@@ -185,11 +576,21 @@ def verify_cookie(session, cookies, channel="auto", proxy=None,
         return False, None
 
 
+def _normalize_topic_id(raw_id: str) -> str:
+    """统一超话 containerid：微博 scheme 里常带 -feeds / %2B 等后缀，
+    不归一会导致同一超话在去重表里出现多条记录（名字、头像各缺一半）。"""
+    if not raw_id:
+        return ""
+    match = re.search(r"100808\d+", raw_id)
+    return match.group() if match else raw_id.strip()
+
+
 def get_followed_topics(session, cookies, channel="auto", proxy=None,
                         force=False, allow_fallback=True):
-    """获取关注超话列表，返回 [{name,id,scheme,done}]。"""
+    """获取关注超话列表，返回 [{name,id,scheme,done,avatar,description,member_count}]。"""
     topics = []
     since_id = ""
+    seen_pages = set()
     while True:
         params = {"containerid": FOLLOWED_CONTAINER}
         if since_id:
@@ -199,18 +600,24 @@ def get_followed_topics(session, cookies, channel="auto", proxy=None,
             channel=channel, proxy=proxy, force=force,
             allow_fallback=allow_fallback,
         )
-        if payload.get("ok") != 1:
+        ok_val = payload.get("ok")
+        if ok_val != 1 and ok_val != "1":
+            # 不要把登录过期、风控或微博接口错误误报成「没有关注超话」。
+            detail = payload.get("msg") or payload.get("errmsg") or payload.get("error") or ok_val
+            if not topics:
+                raise RuntimeError(f"微博未能返回关注超话列表：{detail}")
+            log.warning("关注超话翻页提前结束：%s", detail)
             break
         data = payload.get("data") or {}
         for card in data.get("cards", []):
             items = card.get("card_group") or [card]
             for item in items:
-                if item.get("card_type") != "8" or not item.get("buttons"):
+                if str(item.get("card_type", "")) != "8" or not item.get("buttons"):
                     continue
                 name = item.get("title_sub", "").strip()
                 scheme = item.get("scheme", "")
                 query = parse_qs(urlparse(scheme).query)
-                topic_id = query.get("containerid", [""])[0]
+                topic_id = _normalize_topic_id(query.get("containerid", [""])[0])
                 button = item["buttons"][0]
                 button_name = button.get("name", "")
                 button_scheme = button.get("scheme")
@@ -218,18 +625,100 @@ def get_followed_topics(session, cookies, channel="auto", proxy=None,
                     button_name in ("已签", "已簽", "已签到", "已簽到")
                     or not button_scheme
                 )
+                # 提取头像、描述、成员数（m.weibo.cn 关注卡片头像在 icon 字段）
+                avatar = (item.get("pic", "") or item.get("portrait", "")
+                          or item.get("icon", "") or "")
+                if avatar.startswith("//"):
+                    avatar = "https:" + avatar
+                avatar = avatar.replace("http://", "https://")
+                desc = item.get("desc", "") or item.get("desc1", "") or ""
+                member = item.get("member_count", 0) or 0
                 if name:
                     topics.append({
                         "name": name,
                         "id": topic_id,
                         "scheme": None if done else button_scheme,
                         "done": done,
+                        "avatar": avatar,
+                        "description": desc,
+                        "member_count": member,
                     })
         since_id = (data.get("cardlistInfo") or {}).get("since_id", "")
-        if not since_id:
+        if not since_id or since_id in seen_pages:
             break
+        seen_pages.add(since_id)
         time.sleep(0.5)
     return topics
+
+
+def _positive_int(value) -> int | None:
+    """微博各版本接口把排名字段返回成 int / '12' / '第12名' 都有可能。"""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, str):
+        match = re.search(r"\d+", value)
+        if match:
+            number = int(match.group())
+            return number if number > 0 else None
+    return None
+
+
+def extract_checkin_rank(response) -> int | None:
+    """从签到响应中提取超话签到排名，取不到时返回 None。"""
+    if not isinstance(response, (dict, list)):
+        return None
+
+    # 越具体的键优先，避免误取榜单总长度或粉丝团等级里的数字
+    rank_keys = (
+        "rank", "today_rank", "sign_rank", "checkin_rank",
+        "cur_rank", "rank_index", "rank_num", "position",
+    )
+    # 微博接口排名散落在不同嵌套层级，按可能性从高到低逐层查找
+    containers = (
+        ("data",),
+        ("result",),
+        ("data", "result"),
+        ("data", "sign_data"),
+        ("data", "checkin_data"),
+        ("data", "extra"),
+        ("sign_data",),
+        ("checkin_data",),
+        ("extra",),
+        (),
+    )
+    for level in containers:
+        for key in rank_keys:
+            for path in _iter_rank_candidates(response, level, key):
+                rank = _positive_int(path)
+                if rank is not None:
+                    return rank
+    return None
+
+
+def _iter_rank_candidates(node, path: tuple, wanted_key: str):
+    """按给定容器路径查找目标键，并递归展开 JSON 字符串。"""
+    if isinstance(node, str):
+        text = node.strip()
+        if text.startswith(("{", "[")):
+            try:
+                node = json.loads(text)
+            except (ValueError, TypeError):
+                return
+        else:
+            return
+    if isinstance(node, dict):
+        if not path:
+            if wanted_key in node:
+                yield node[wanted_key]
+            return
+        head, rest = path[0], path[1:]
+        if head in node:
+            yield from _iter_rank_candidates(node[head], rest, wanted_key)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _iter_rank_candidates(item, path, wanted_key)
 
 
 def checkin_topic(session, cookies, scheme, st, channel="auto", proxy=None,
@@ -245,12 +734,7 @@ def checkin_topic(session, cookies, scheme, st, channel="auto", proxy=None,
 
 
 def merge_refreshed_cookies(session, cookie_dict: dict) -> tuple[dict, list]:
-    """合并响应中的 Set-Cookie，返回 (新dict, 变化的key列表)。
-
-    只有「原 cookie_dict 中已存在、且值实际发生变化」的 key 才计入 changed。
-    响应里新出现的无关 cookie 只并入 merged，但不触发回写，避免每次签到
-    都因无关 cookie 被判为「有变动」而频繁写数据库。
-    """
+    """合并响应中的 Set-Cookie，返回 (新dict, 变化的key列表)。"""
     merged = dict(cookie_dict)
     changed = []
     for cookie in session.cookies:
@@ -288,21 +772,13 @@ class CheckinOptions:
 
 def run_account_checkin(cookie_dict: dict, opts: CheckinOptions,
                         proxy_url: str | None = None,
-                        proxy_index: int = 0,
-                        account_id: int | None = None) -> dict:
-    """
-    对单个账号执行一遍签到。
-    - proxy_url: 账号指定使用的 socks 链接（优先）
-    - proxy_index: 无指定时按 opts.proxies 轮询的序号（兼容旧逻辑）
-    - account_id: 提供则按账号选超话配置过滤（v1.2.0）
-    返回 dict：{status, channel, total, success, fail, message, results, cookie, cookie_changed}
-    """
+                        proxy_index: int = 0) -> dict:
+    """对单个账号执行一遍签到。"""
     cookie_dict = normalize_cookie(cookie_dict)
     if not cookie_dict:
         return _bundle("failed", "Cookie 为空，请重新登录", 0, 0, 0, [],
                        cookie_dict, [], failure_type="cookie_invalid")
 
-    # 代理选择：账号指定 proxy_url 优先；否则按 opts.proxies 轮询
     proxy = None
     channel = "direct"
     if proxy_url and proxy_url.strip().startswith(("socks5://", "socks5h://")):
@@ -363,7 +839,6 @@ def run_account_checkin(cookie_dict: dict, opts: CheckinOptions,
             )
             resp_text = str(response)
             if str(response.get("errno")) == "100015" or "验签" in resp_text or "驗簽" in resp_text:
-                # 刷新 st 重试
                 logged_in, st = verify_cookie(
                     session, cookie_dict, channel=channel, proxy=proxy,
                     force=opts.proxy_force, allow_fallback=opts.proxy_fallback,
@@ -382,10 +857,18 @@ def run_account_checkin(cookie_dict: dict, opts: CheckinOptions,
                 or "已签到" in message
                 or "已簽到" in message
             )
-            results.append({"name": topic["name"], "success": success,
-                            "message": message or str(response)[:100]})
+            entry = {"name": topic["name"], "success": success,
+                     "message": message or str(response)[:100]}
+            if success:
+                entry["rank"] = extract_checkin_rank(response)
+                if entry["rank"] is not None:
+                    log.info("  🏆 %s 签到成功，今日第 %s 名",
+                             topic["name"], entry["rank"])
+                else:
+                    log.info("  %s 签到成功，但响应中未找到排名：%.200s",
+                             topic["name"], resp_text)
+            results.append(entry)
         except NetworkError:
-            # 签到请求网络失败，整遍判为网络失败
             merged, changed = merge_refreshed_cookies(session, cookie_dict)
             return _bundle("failed", "签到过程中网络失败", total,
                            sum(1 for r in results if r["success"]),
@@ -401,8 +884,25 @@ def run_account_checkin(cookie_dict: dict, opts: CheckinOptions,
     success_count = sum(1 for r in results if r["success"])
     fail_count = total - success_count
     status = "success" if fail_count == 0 else "partial"
-    return _bundle(status, "签到完成", total, success_count, fail_count,
-                   results, merged, changed, channel)
+    return _bundle(status, _checkin_summary_message(results), total,
+                   success_count, fail_count, results, merged, changed, channel)
+
+
+def _checkin_summary_message(results: list) -> str:
+    """汇总本次签到：有排名时在消息里带上，供日志与 TG 直接展示。"""
+    ranked = [(r["name"], r["rank"]) for r in results
+              if r.get("success") and isinstance(r.get("rank"), int)]
+    if not ranked:
+        return "签到完成"
+    ranked.sort(key=lambda item: item[1])
+    fastest, best_rank = ranked[0]
+    worst_name, worst_rank = ranked[-1]
+    average = round(sum(rank for _, rank in ranked) / len(ranked))
+    detail = "、".join(f"{name} #{rank}" for name, rank in ranked[:5])
+    if len(ranked) > 5:
+        detail += f" …（共 {len(ranked)} 个）"
+    return (f"签到完成 · 排名 {len(ranked)} 个：{detail}"
+            f" ｜ 最快 {fastest} #{best_rank}，最慢 {worst_name} #{worst_rank}，平均 #{average}")
 
 
 def _bundle(status, message, total, success, fail, results, cookie,

@@ -155,11 +155,16 @@ def update_settings(values: dict, user: dict = Depends(auth.require_admin)):
         "proxies", "proxy_force", "proxy_fallback",
         "checkin_delay_min", "checkin_delay_max",
         "log_retention_days",
+        # v1.0.0 AI 总结
+        "ai_base_url", "ai_api_key", "ai_model",
+        # v1.3.0 超话推送 & 自动刷新
+        "topics_daily_push", "topics_daily_push_cron", "topics_daily_push_mode",
+        "auto_refresh_topics",
     }
     updates = {k: v for k, v in values.items() if k in known}
     database.set_settings(updates)
     # 若涉及调度，重建定时任务
-    if "schedule_enabled" in updates or "schedule_cron" in updates:
+    if "schedule_enabled" in updates or "schedule_cron" in updates or "topics_daily_push" in updates or "topics_daily_push_cron" in updates or "topics_daily_push_mode" in updates or "auto_refresh_topics" in updates:
         scheduler.reload_schedule()
     return database.get_settings()
 

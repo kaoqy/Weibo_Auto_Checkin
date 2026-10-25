@@ -1,9 +1,5 @@
-# 微博签到管理面板 · 常用命令（开发用）
-#
-# **终端用户不需要这个文件**——使用 `bash install.sh` 即可。
-# 镜像构建与推送由 GitHub Actions 在 push tag 后自动完成。
-#
-# 本 Makefile 仅供本地开发与测试。
+# 微博签到管理面板 · 常用命令
+.PHONY: run checkin test test-frontend docker-build docker-up docker-down clean
 
 .PHONY: run checkin test test-frontend docker-build docker-up docker-down clean
 

@@ -93,31 +93,29 @@ docker run -d --name weibo-checkin --restart unless-stopped \
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/api/health  # 期望 200
 ```
 
-## 🛠️ 维护者：发版流程（GitHub Actions）
+> GitHub Actions 会在推送 tag 时自动构建 Docker Hub 镜像，版本号与 Git tag 一致（如 `v1.3.0`），`latest` 永远指向最新。
 
-镜像构建与发布**完全自动化**，无 156/38 之分：
-
-1. 改代码 → commit → 推 main
-2. 推 tag：
-   ```bash
-   git tag -a v1.2.1 -m "..."
-   git push origin main --follow-tags
-   ```
-3. `.github/workflows/build-docker.yml` 监听 tag push，自动：
-   - 多架构构建（`linux/amd64` + `linux/arm64`）
-   - 推 Docker Hub `kaoqy666/weibo-checkin:<version>` + `:latest`
-4. 验证：
-   ```bash
-   curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/api/health
-   ```
-
-需要在仓库 Settings → Secrets → Actions 配置：
-- `DOCKERHUB_USERNAME` = `kaoqy666`
-- `DOCKERHUB_TOKEN` = Docker Hub Access Token（https://hub.docker.com/settings/security）
+## 🛠️ 开发者：本地构建 / 发布
 
 也可在 Actions 页面手动触发 `workflow_dispatch`。
 
 > 历史版本：`v1.0.0` / `v1.0.1` / `v1.1.0` / `v1.1.1` / `v1.1.2` / `v1.2.0` 等都在 Docker Hub 上保留可拉取。
+
+发布：推送 tag 触发 GitHub Actions 自动构建 Docker Hub 镜像（见 `.github/workflows/build-docker.yml`）。
+
+```bash
+git tag v1.3.0
+git push origin v1.3.0   # 自动触发 Docker Hub 构建
+```
+
+本地 Docker 构建：
+
+```bash
+docker build -t weibo-checkin:latest .
+docker compose up -d --build
+```
+
+发布：推送 tag 触发 GitHub Actions 自动构建 Docker Hub 镜像（见 `.github/workflows/build-docker.yml`）。
 
 ## 🎯 使用
 
@@ -150,8 +148,8 @@ node tests/frontend-render.test.js
 
 ```
 weibo-checkin-manager/
-├── run.py            # 本地启动入口
-├── install.sh        # 终端用户唯一需要的脚本（安装/更新/管理）
+├── run.py            # 本地启动
+├── install.sh        # 用户一键安装/更新/管理（推荐）
 ├── compose.prod.yml  # 生产 compose（仅拉镜像运行）
 ├── Dockerfile
 ├── .github/

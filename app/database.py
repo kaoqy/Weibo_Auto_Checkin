@@ -161,6 +161,45 @@ def init_db() -> None:
 
         CREATE INDEX IF NOT EXISTS idx_logs_account ON checkin_logs(account_id);
         CREATE INDEX IF NOT EXISTS idx_logs_time   ON checkin_logs(created_at);
+
+        -- v1.0.0：单账号关注超话缓存
+        CREATE TABLE IF NOT EXISTS topic_cache (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id   INTEGER NOT NULL,
+            topics       TEXT NOT NULL DEFAULT '[]',
+            cached_at    TEXT NOT NULL,
+            FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE,
+            UNIQUE(account_id)
+        );
+
+        -- v1.0.0：所有账号关注过的全量超话（去重）
+        CREATE TABLE IF NOT EXISTS all_topics (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            topic_id     TEXT NOT NULL UNIQUE,
+            name         TEXT NOT NULL DEFAULT '',
+            avatar_url   TEXT NOT NULL DEFAULT '',
+            description  TEXT NOT NULL DEFAULT '',
+            topic_url    TEXT NOT NULL DEFAULT '',
+            member_count INTEGER NOT NULL DEFAULT 0,
+            post_count   INTEGER NOT NULL DEFAULT 0,
+            push_enabled INTEGER NOT NULL DEFAULT 0,
+            fetched_at   TEXT,
+            created_at   TEXT NOT NULL,
+            updated_at   TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_topic_cache_account ON topic_cache(account_id);
+        CREATE INDEX IF NOT EXISTS idx_all_topics_topic_id ON all_topics(topic_id);
+        -- v1.0.0：超话帖子缓存
+        CREATE TABLE IF NOT EXISTS topic_posts_cache (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            topic_id     TEXT NOT NULL UNIQUE,
+            posts        TEXT NOT NULL DEFAULT '[]',
+            fetched_at   TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_topic_posts_cache_topic_id ON topic_posts_cache(topic_id);
+
         """
     )
     conn.commit()
@@ -194,6 +233,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
         if name not in proxy_cols:
             conn.execute(f"ALTER TABLE proxies ADD COLUMN {name} {definition}")
             log.info("proxies 表已迁移：新增 %s", name)
+
+    # v1.3.0：all_topics 表新增 push_enabled 列（每日推送选择）
+    all_topics_cols = [r["name"] for r in conn.execute("PRAGMA table_info(all_topics)").fetchall()]
+    if "push_enabled" not in all_topics_cols:
+        conn.execute("ALTER TABLE all_topics ADD COLUMN push_enabled INTEGER NOT NULL DEFAULT 0")
+        log.info("all_topics 表已迁移：新增 push_enabled 列")
     conn.commit()
 
 
@@ -222,6 +267,11 @@ def _seed_defaults(conn: sqlite3.Connection) -> None:
         "tg_only_on_change": "0",     # 仅在有失败/异常时推送
         "tg_silent": "0",             # 静默推送（不震动提示）
         "log_retention_days": "30",   # 日志保留天数（0=不清理）
+        # ---- v1.0.0 超话 AI 总结 ----
+        "ai_base_url": "",          # OpenAI 兼容 API base_url
+        "ai_api_key": "",           # API Key
+        "ai_model": "gpt-4o-mini",  # 模型名
+        "ai_topic_prompt": "你是一个超话内容总结助手。请对以下超话帖子内容进行简洁总结（200字以内），包括：1. 主要讨论话题 2. 热门帖子要点 3. 整体氛围。只输出总结文字，不要任何前缀或格式标记。",
     }
     for key, value in defaults.items():
         conn.execute(
@@ -839,88 +889,174 @@ def delete_user_sessions(user_id: int) -> None:
     conn.commit()
 
 
-# ========================= 超话选（v1.2.0） =========================
+# ========================= v1.0.0 超话缓存 =========================
 
-def list_topic_selections(account_id: int) -> list[dict]:
-    """返回账号的关注超话选择列表。空列表 = 从未拉取过 → 默认全选。"""
-    rows = _get_conn().execute(
-        "SELECT * FROM account_topic_selections WHERE account_id = ? ORDER BY topic_name",
-        (account_id,),
-    ).fetchall()
-    return [dict(r) for r in rows]
+# ---------- topic_cache 表（单账号关注超话缓存） ----------
 
-
-def has_topic_selections(account_id: int) -> bool:
-    """该账号是否曾经拉过超话列表（用于判断「全选」 vs 「按选择」）"""
+def get_topic_cache(account_id: int) -> dict | None:
+    """获取单账号的关注超话缓存。返回 dict 或 None。"""
     row = _get_conn().execute(
-        "SELECT 1 FROM account_topic_selections WHERE account_id = ? LIMIT 1",
-        (account_id,),
+        "SELECT * FROM topic_cache WHERE account_id = ?", (account_id,)
     ).fetchone()
-    return row is not None
+    if not row:
+        return None
+    d = dict(row)
+    try:
+        d["topics"] = json.loads(d["topics"]) if d["topics"] else []
+    except json.JSONDecodeError:
+        d["topics"] = []
+    return d
 
 
-def replace_topic_selections(account_id: int, items: list[dict]) -> int:
-    """原子替换某账号的选超话列表。
+def set_topic_cache(account_id: int, topics: list) -> None:
+    """写入/更新单账号的关注超话缓存。topics 是 list[dict]。"""
+    conn = _get_conn()
+    now = _now()
+    conn.execute(
+        "INSERT INTO topic_cache (account_id, topics, cached_at) VALUES (?, ?, ?) "
+        "ON CONFLICT(account_id) DO UPDATE SET topics=excluded.topics, cached_at=excluded.cached_at",
+        (account_id, json.dumps(topics, ensure_ascii=False), now),
+    )
+    conn.commit()
 
-    items: [{"name": "xxx", "topic_id": "...", "enabled": True/False}, ...]
-    返回写入条数。
+
+def delete_topic_cache(account_id: int) -> None:
+    """清除单个账号的超话缓存。"""
+    conn = _get_conn()
+    conn.execute("DELETE FROM topic_cache WHERE account_id = ?", (account_id,))
+    conn.commit()
+
+
+def clear_topic_caches() -> int:
+    """清除所有超话缓存。"""
+    conn = _get_conn()
+    cur = conn.execute("DELETE FROM topic_cache")
+    conn.commit()
+    return cur.rowcount or 0
+
+
+# ---------- all_topics 表（全量超话去重列表） ----------
+
+def upsert_all_topic(topic_id: str, name: str | None = None,
+                     avatar_url: str | None = None,
+                     description: str | None = None,
+                     topic_url: str | None = None,
+                     member_count: int | None = None,
+                     post_count: int | None = None,
+                     push_enabled: int | None = None,
+                     fetched_at: str = "") -> int:
+    """插入或更新一条全量超话（按 topic_id 去重）。返回 id。
+
+    更新采用「只覆盖非空字段」语义：空字符串 / None / 非正数一律保留库里的旧值，
+    防止刷新某个局部信息时把名称、头像或推送勾选冲掉。
     """
     conn = _get_conn()
     now = _now()
-    conn.execute("DELETE FROM account_topic_selections WHERE account_id = ?", (account_id,))
-    for it in items:
+    row = conn.execute(
+        "SELECT id FROM all_topics WHERE topic_id = ?", (topic_id,)
+    ).fetchone()
+    if row:
+        sets, params = [], []
+        for col, val in (("name", name), ("avatar_url", avatar_url),
+                         ("description", description), ("topic_url", topic_url)):
+            if isinstance(val, str) and val.strip():
+                sets.append(f"{col} = ?")
+                params.append(val.strip() if col == "name" else val)
+        for col, val in (("member_count", member_count), ("post_count", post_count)):
+            if isinstance(val, int) and val > 0:
+                sets.append(f"{col} = ?")
+                params.append(val)
+        if push_enabled in (0, 1):
+            sets.append("push_enabled = ?")
+            params.append(push_enabled)
+        if fetched_at:
+            sets.append("fetched_at = ?")
+            params.append(fetched_at)
+        sets.append("updated_at = ?")
+        params.append(now)
+        params.append(row["id"])
         conn.execute(
-            """
-            INSERT INTO account_topic_selections
-                (account_id, topic_name, topic_id, enabled, last_seen, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                account_id,
-                (it.get("name") or "").strip(),
-                it.get("topic_id") or "",
-                1 if it.get("enabled", True) else 0,
-                it.get("last_seen") or now,
-                now,
-            ),
+            f"UPDATE all_topics SET {', '.join(sets)} WHERE id = ?", params
         )
-    conn.commit()
-    return len(items)
+        conn.commit()
+        return row["id"]
+    else:
+        cur = conn.execute(
+            "INSERT INTO all_topics (topic_id, name, avatar_url, description, topic_url,"
+            " member_count, post_count, push_enabled, fetched_at, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (topic_id, (name or "").strip(), avatar_url or "", description or "",
+             topic_url or "", member_count if isinstance(member_count, int) and member_count > 0 else 0,
+             post_count if isinstance(post_count, int) and post_count > 0 else 0,
+             push_enabled if push_enabled in (0, 1) else 0,
+             fetched_at or now, now, now),
+        )
+        conn.commit()
+        return cur.lastrowid
 
 
-def update_topic_enabled(account_id: int, topic_name: str, enabled: bool) -> bool:
+def get_all_topics(limit: int = 50, offset: int = 0) -> dict:
+    """分页获取全量超话列表，返回 {items, total, has_more}。"""
     conn = _get_conn()
-    cur = conn.execute(
-        """
-        UPDATE account_topic_selections
-        SET enabled = ?, updated_at = ?
-        WHERE account_id = ? AND topic_name = ?
-        """,
-        (1 if enabled else 0, _now(), account_id, topic_name),
+    total = conn.execute("SELECT COUNT(*) c FROM all_topics").fetchone()["c"]
+    rows = conn.execute(
+        "SELECT * FROM all_topics ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+        (limit, offset),
+    ).fetchall()
+    return {
+        "items": [dict(r) for r in rows],
+        "total": total,
+        "has_more": offset + len(rows) < total,
+    }
+
+
+def get_all_topic(topic_id: str) -> dict | None:
+    """根据 topic_id 获取一条全量超话。"""
+    row = _get_conn().execute(
+        "SELECT * FROM all_topics WHERE topic_id = ?", (topic_id,)
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def clear_all_topics() -> int:
+    """清空全量超话列表。"""
+    conn = _get_conn()
+    cur = conn.execute("DELETE FROM all_topics")
+    conn.commit()
+    return cur.rowcount or 0
+
+
+# ---------- topic_posts_cache 表（超话帖子缓存） ----------
+
+def get_topic_posts_cache(topic_id: str) -> dict | None:
+    """获取超话帖子缓存。返回 dict 或 None。"""
+    row = _get_conn().execute(
+        "SELECT * FROM topic_posts_cache WHERE topic_id = ?", (topic_id,)
+    ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    try:
+        d["posts"] = json.loads(d["posts"]) if d["posts"] else []
+    except json.JSONDecodeError:
+        d["posts"] = []
+    return d
+
+
+def set_topic_posts_cache(topic_id: str, posts: list) -> None:
+    """写入/更新超话帖子缓存。posts 是 list[dict]。"""
+    conn = _get_conn()
+    now = _now()
+    conn.execute(
+        "INSERT INTO topic_posts_cache (topic_id, posts, fetched_at) VALUES (?, ?, ?) "
+        "ON CONFLICT(topic_id) DO UPDATE SET posts=excluded.posts, fetched_at=excluded.fetched_at",
+        (topic_id, json.dumps(posts, ensure_ascii=False), now),
     )
     conn.commit()
-    return cur.rowcount > 0
 
 
-def set_topic_last_status(account_id: int, topic_name: str, status: str) -> None:
-    """单个超话最近一次签到结果（ok/fail/unknown），用于面板 UI 徽标。"""
-    _get_conn().execute(
-        """
-        UPDATE account_topic_selections
-        SET last_status = ?, updated_at = ?
-        WHERE account_id = ? AND topic_name = ?
-        """,
-        (status, _now(), account_id, topic_name),
-    )
-
-
-def filter_enabled_topics(account_id: int, topics: list[dict]) -> list[dict]:
-    """根据账号选择过滤超话：未拉过列表则原样返回；拉过则只保留 enabled=1。
-
-    topics: [{name, id, scheme, done}, ...]
-    """
-    selections = list_topic_selections(account_id)
-    if not selections:
-        return topics
-    enabled_names = {s["topic_name"] for s in selections if s.get("enabled")}
-    return [t for t in topics if t.get("name") in enabled_names]
+def delete_topic_posts_cache(topic_id: str) -> None:
+    """清除超话帖子缓存。"""
+    conn = _get_conn()
+    conn.execute("DELETE FROM topic_posts_cache WHERE topic_id = ?", (topic_id,))
+    conn.commit()
