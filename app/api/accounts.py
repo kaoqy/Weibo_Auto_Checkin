@@ -918,47 +918,17 @@ def renew_one(account_id: int, user: dict = Depends(auth.require_admin)):
 @router.post("/{account_id}/verify")
 def verify_one(account_id: int, user: dict = Depends(auth.require_admin)):
     """校验账号 Cookie 是否有效（只校验，不签到）。"""
-    from ..weibo_client import CheckinOptions, normalize_cookie, verify_cookie
-    import requests as _req  # noqa
+    from ..cookie_session import refresh_account_cookie
 
     acc = database.get_account(account_id)
     if not acc:
         raise HTTPException(404, "账号不存在")
-    cookie = normalize_cookie(acc.get("cookie") or acc.get("cookie_raw") or "")
-    if not cookie:
-        return {"valid": False, "message": "Cookie 为空"}
-    opts = CheckinOptions.from_settings(database.get_setting)
-    # v7.1：优先用账号自己绑定的代理校验，与实际签到链路保持一致
-    proxy = (acc.get("proxy") or "").strip() or None
-    channel = "socks" if proxy else "direct"
-    if not proxy and opts.proxies:
-        idx = (acc.get("proxy_index") or 0) % len(opts.proxies)
-        proxy = opts.proxies[idx]
-        channel = "socks"
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) "
-                      "AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148",
-        "Referer": "https://m.weibo.cn/",
-        "Accept": "application/json, text/plain, */*",
-        "X-Requested-With": "XMLHttpRequest",
-    })
-    try:
-        logged_in, _st = verify_cookie(
-            session, cookie, channel=channel, proxy=proxy,
-            force=opts.proxy_force, allow_fallback=opts.proxy_fallback,
-        )
-    except Exception as exc:
-        return {"valid": False, "message": f"请求异常：{exc}"}
-    from ..cookie_session import persist_cookie_result
-    from ..weibo_client import merge_refreshed_cookies
-    merged, _ = merge_refreshed_cookies(session, cookie)
-    updated = persist_cookie_result(acc, merged, logged_in,
-                                    "healthy" if logged_in else "expired",
-                                    "" if logged_in else "登录态已失效，请重新扫码登录")
-    return {"valid": logged_in, "account": _public(updated),
-            "message": "Cookie 有效" if logged_in else "Cookie 无效或已过期",
-            "channel": channel}
+    result = refresh_account_cookie(account_id)
+    updated = result.pop("account", acc)
+    if result.get("valid") is False:
+        result["message"] = "Cookie 无效或已过期，请重新登录"
+    return {**result, "valid": result.get("valid"), "account": _public(updated),
+            "channel": "socks" if acc.get("proxy") else "direct"}
 
 
 # ========================= 超话选（v1.2.0） =========================

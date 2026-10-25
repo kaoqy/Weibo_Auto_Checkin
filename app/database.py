@@ -503,6 +503,23 @@ def delete_account(account_id: int) -> bool:
     return cur.rowcount > 0
 
 
+def persist_cookie_checked(account_id: int, previous_checked_at: str,
+                           cookie: str, status: str, checked_at: str,
+                           refreshed_at: str = "", expires_at: str = "") -> bool:
+    """Only write if no newer validation or QR login has touched this account."""
+    conn = _get_conn()
+    with conn:
+        cur = conn.execute(
+            """UPDATE accounts SET cookie=?, cookie_raw=?, cookie_status=?,
+               cookie_checked_at=?, cookie_refreshed_at=?, cookie_expires_at=?,
+               cookie_error='', cookie_failure_count=0, updated_at=?
+               WHERE id=? AND cookie_checked_at=?""",
+            (cookie, cookie, status, checked_at, refreshed_at, expires_at,
+             _now(), account_id, previous_checked_at or ""),
+        )
+    return cur.rowcount > 0
+
+
 def get_account(account_id: int) -> dict | None:
     row = _get_conn().execute(
         "SELECT * FROM accounts WHERE id = ?", (account_id,)

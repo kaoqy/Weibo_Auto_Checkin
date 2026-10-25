@@ -16,7 +16,7 @@ from apscheduler.triggers.cron import CronTrigger
 from . import database, notifier
 from .anti_ban import AntiBanPolicy
 from .weibo_client import (
-    CheckinOptions, cookie_to_string, fetch_topic_posts,
+    CheckinOptions, fetch_topic_posts,
     get_followed_topics, normalize_cookie, run_account_checkin,
 )
 
@@ -118,27 +118,21 @@ def run_checkin(trigger_type: str = "manual", account_ids: list[int] | None = No
                 if wait and group_label:
                     log.info("  [%s] 防封等待 %.0fs 后处理 %s", log_label, wait, acc.get("name"))
 
-            raw_cookie = acc.get("cookie") or acc.get("cookie_raw") or ""
-            cookie_dict = normalize_cookie(raw_cookie)
-            proxy_url = acc.get("proxy") or None
+            from .cookie_session import account_cookie_lock, persist_cookie_result
+            with account_cookie_lock(acc["id"]):
+                acc = database.get_account(acc["id"]) or acc
+                raw_cookie = acc.get("cookie") or acc.get("cookie_raw") or ""
+                cookie_dict = normalize_cookie(raw_cookie)
+                proxy_url = acc.get("proxy") or None
 
-            log.info("👤 [%s] 账号：%s", log_label, acc.get("name"))
-            result = run_account_checkin(cookie_dict, opts, proxy_url=proxy_url,
-                                          account_id=acc.get("id"))
+                log.info("👤 [%s] 账号：%s", log_label, acc.get("name"))
+                result = run_account_checkin(cookie_dict, opts, proxy_url=proxy_url,
+                                              account_id=acc.get("id"))
+                if result.get("failure_type") not in ("cookie_invalid", "network"):
+                    persist_cookie_result(acc, result.get("cookie") or cookie_dict, True, "healthy")
+                elif result.get("failure_type") == "cookie_invalid":
+                    database.update_account(acc["id"], {"cookie_status": "expired", "cookie_error": result.get("message", "")})
             channel = "socks" if proxy_url else "direct"
-
-            # 仅在 Session 实际获得 Cookie 更新时回写完整合并值。
-            # cookie 与 cookie_raw 始终保持一致，且只使用客户端返回的原始值，
-            # 不使用任何用于日志或 API 展示的脱敏内容。
-            from .cookie_session import persist_cookie_result
-            cookie_changed = result.get("cookie_changed") or []
-            refreshed_cookie = result.get("cookie") or {}
-            if cookie_changed and refreshed_cookie and result.get("failure_type") not in ("cookie_invalid", "network"):
-                new_cookie_str = cookie_to_string(refreshed_cookie)
-                database.update_account(acc["id"], {
-                    "cookie": new_cookie_str,
-                    "cookie_raw": new_cookie_str,
-                })
 
             # 签到后自动刷新超话帖子缓存（如果启用）
             auto_refresh = database.get_setting("auto_refresh_topics", "0") == "1"
@@ -150,10 +144,6 @@ def run_checkin(trigger_type: str = "manual", account_ids: list[int] | None = No
                 acc["id"], result["status"],
                 result.get("message") or result.get("status"),
             )
-            if result.get("status") in ("success", "partial"):
-                persist_cookie_result(acc, result.get("cookie") or cookie_dict, True, "healthy")
-            elif result.get("failure_type") == "cookie_invalid":
-                database.update_account(acc["id"], {"cookie_status": "expired", "cookie_error": result.get("message", "")})
             for r in result.get("results", []) or []:
                 if r.get("name"):
                     database.set_topic_last_status(acc["id"], r["name"], "ok" if r.get("success") else "fail")

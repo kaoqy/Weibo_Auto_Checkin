@@ -104,3 +104,12 @@ def test_panel_session_is_sliding(account):
     assert db.get_session_user("token", sliding=True)["username"] == "admin"
     expiry = db._get_conn().execute("SELECT expires_at FROM sessions WHERE token='token'").fetchone()[0]
     assert datetime.strptime(expiry, "%Y-%m-%d %H:%M:%S") > datetime.now() + timedelta(days=29)
+
+
+def test_stale_cookie_result_cannot_overwrite_new_qr_login(account):
+    stale = dict(account)
+    db.update_account(account["id"], {"cookie": "SUB=new-login", "cookie_raw": "SUB=new-login",
+                                     "cookie_checked_at": db._now()})
+    result = cookie_session.persist_cookie_result(stale, {"SUB": "old"}, True, "healthy")
+    assert result["cookie_raw"] == "SUB=new-login"
+    assert db.get_account(account["id"])["cookie_raw"] == "SUB=new-login"

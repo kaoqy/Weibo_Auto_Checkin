@@ -6,6 +6,7 @@ valid. A permanently expired session must be signed in again by the user.
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import datetime, timedelta
 
 import requests
@@ -18,6 +19,13 @@ from .weibo_client import (
 
 log = logging.getLogger("weibo.cookie_session")
 _last_notification: dict[int, tuple[str, str]] = {}
+_account_locks_guard = threading.Lock()
+_account_locks: dict[int, threading.Lock] = {}
+
+
+def account_cookie_lock(account_id: int) -> threading.Lock:
+    with _account_locks_guard:
+        return _account_locks.setdefault(account_id, threading.Lock())
 
 
 def cookie_expiry(cookies: dict) -> str:
@@ -47,13 +55,22 @@ def persist_cookie_result(account: dict, cookies: dict, valid: bool,
         updates["cookie_expires_at"] = expiry
     if valid:
         cookie = cookie_to_string(cookies)
-        updates.update(cookie=cookie, cookie_raw=cookie, cookie_refreshed_at=now)
+        if database.persist_cookie_checked(
+                account["id"], account.get("cookie_checked_at") or "",
+                cookie, status, now, refreshed_at=now, expires_at=expiry):
+            return database.get_account(account["id"]) or {**account, **updates}
+        return database.get_account(account["id"]) or account
     database.update_account(account["id"], updates)
     return database.get_account(account["id"]) or {**account, **updates}
 
 
 def refresh_account_cookie(account_id: int) -> dict:
     """Visit the login-aware config endpoint and save every renewed cookie."""
+    with account_cookie_lock(account_id):
+        return _refresh_account_cookie(account_id)
+
+
+def _refresh_account_cookie(account_id: int) -> dict:
     account = database.get_account(account_id)
     if not account:
         return {"ok": False, "status": "missing", "message": "账号不存在"}
