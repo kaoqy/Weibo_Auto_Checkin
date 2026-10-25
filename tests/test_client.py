@@ -116,6 +116,25 @@ def test_merge_refreshed_cookies_ignores_new_cookie_for_change_detection():
     assert changed == []
 
 
+def test_run_account_checkin_accepts_account_id_and_filters_topics(monkeypatch):
+    from app.weibo_client import run_account_checkin
+    selected = []
+    monkeypatch.setattr("app.weibo_client.verify_cookie", lambda *args, **kwargs: (True, "st"))
+    monkeypatch.setattr("app.weibo_client.get_followed_topics", lambda *args, **kwargs: [
+        {"name": "勾选超话", "id": "1", "done": True, "scheme": None},
+        {"name": "未选超话", "id": "2", "done": False, "scheme": "/checkin"},
+    ])
+    def filter_topics(account_id, topics):
+        selected.append(account_id)
+        return topics[:1]
+    monkeypatch.setattr("app.weibo_client.database.filter_enabled_topics", filter_topics)
+    result = run_account_checkin({"SUB": "valid"}, CheckinOptions(), account_id=42)
+    assert result["status"] == "success"
+    assert result["total"] == 1
+    assert result["results"][0]["name"] == "勾选超话"
+    assert selected == [42]
+
+
 # ---------- CheckinOptions ----------
 
 def test_checkin_options_from_settings():

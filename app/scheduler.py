@@ -41,22 +41,59 @@ def get_current_run() -> dict | None:
 
 # ========================= 核心签到流程 =========================
 
-def run_checkin(trigger_type: str = "manual", account_ids: list[int] | None = None) -> dict:
+def is_checkin_running() -> bool:
+    return _running_lock.locked()
+
+
+def prepare_checkin(trigger_type: str, account_ids: list[int] | None = None) -> int:
+    """Initialize progress before the worker starts; keep scheduled runs unchanged."""
+    global _current_run
+    if not _running_lock.acquire(blocking=False):
+        raise RuntimeError("已有任务在运行")
+    accounts = database.get_enabled_accounts()
+    if account_ids:
+        ids = set(account_ids)
+        accounts = [a for a in accounts if a["id"] in ids]
+    task_id = uuid.uuid4().hex[:12]
+    started = _now_str()
+    database.create_task(task_id, trigger_type)
+    _current_run = {"task_id": task_id, "status": "running", "trigger_type": trigger_type,
+                    "started_at": started, "progress": 0, "accounts_total": len(accounts),
+                    "accounts_done": 0}
+    return len(accounts)
+
+
+def abort_prepared_checkin() -> None:
+    """Release a prepared worker if thread creation fails before run_checkin."""
+    global _current_run
+    if _current_run:
+        _current_run["status"] = "failed"
+        _current_run["message"] = "签到线程启动失败"
+    if _running_lock.locked():
+        _running_lock.release()
+
+
+def run_checkin(trigger_type: str = "manual", account_ids: list[int] | None = None,
+                prepared: bool = False) -> dict:
     """
     执行一次完整签到：遍历启用账号（或指定 account_ids）→ 防封等待 → 签到 → 记录日志 → 汇总。
     返回汇总 dict。线程安全（同一时刻只允许一个运行）。
     """
     global _current_run, _last_run_summary
-    if not _running_lock.acquire(blocking=False):
+    if not prepared and not _running_lock.acquire(blocking=False):
         log.warning("已有签到任务在运行，跳过本次触发")
         return {"status": "skipped", "message": "已有任务在运行"}
 
-    task_id = uuid.uuid4().hex[:12]
-    database.create_task(task_id, trigger_type)
-    started = _now_str()
-    _current_run = {"task_id": task_id, "status": "running",
-                    "trigger_type": trigger_type, "started_at": started,
-                    "progress": 0, "accounts_total": 0, "accounts_done": 0}
+    if prepared:
+        task_id = _current_run["task_id"]
+        started = _current_run["started_at"]
+    else:
+        task_id = uuid.uuid4().hex[:12]
+        database.create_task(task_id, trigger_type)
+        started = _now_str()
+        _current_run = {"task_id": task_id, "status": "running",
+                        "trigger_type": trigger_type, "started_at": started,
+                        "progress": 0, "accounts_total": 0, "accounts_done": 0}
     opts = CheckinOptions.from_settings(database.get_setting)
     policy = AntiBanPolicy.from_settings()
 

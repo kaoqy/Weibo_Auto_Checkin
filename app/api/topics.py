@@ -45,38 +45,11 @@ def call_ai_summary(text: str, topic_name: str = "超话", stream: bool = False)
         {"role": "user", "content": user_content},
     ]
 
-    payload = {
-        "model": model,
-        "messages": messages,
-        "max_tokens": 1200,
-        "temperature": 0.7,
-        "stream": stream,
-    }
-
-    try:
-        if stream:
-            # Non-streaming fallback for scheduler
-            payload["stream"] = False
-        resp = requests.post(
-            f"{base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            timeout=120,
-        )
-        resp.raise_for_status()
-        result = resp.json()
-        summary = _extract_ai_content(result)
-        if not summary:
-            log.warning("AI 返回空内容 (model=%s)", result.get("model", model))
-            return {"ok": False, "summary": "", "error": "AI 服务未返回有效内容，请稍后重试"}
-        return {"ok": True, "summary": summary, "model": result.get("model", model)}
-    except requests.exceptions.Timeout:
-        return {"ok": False, "summary": "", "error": "请求超时"}
-    except Exception as exc:
-        return {"ok": False, "summary": "", "error": f"调用失败：{exc}"}
+    from ..ai_service import summarize
+    result = summarize(text, topic_name, AI_TOPIC_PROMPT, base_url, api_key, model)
+    if isinstance(result, dict):
+        return result
+    return {"ok": False, "summary": "", "error": "AI 响应异常"}
 
 
 router = APIRouter(prefix="/api/topics", tags=["topics"])
@@ -432,10 +405,12 @@ def analyze_topic(topic_id: str, data: TopicAnalyzeIn,
     # Add sample metadata before the model's SSE stream starts.
     from fastapi.responses import StreamingResponse
     import json
-    def stream():
+    async def stream():
         yield f"event: meta\ndata: {json.dumps({'stats': analysis['stats'], 'fetched_at': raw.get('fetched_at')}, ensure_ascii=False)}\n\n"
-        yield from result.body_iterator
-    return StreamingResponse(stream(), media_type="text/event-stream")
+        async for chunk in result.body_iterator:
+            yield chunk
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 # ========================= 超话内容拉取 =========================
@@ -564,7 +539,7 @@ def refresh_posts(topic_id: str, data: RefreshPostsIn,
                   user=Depends(auth.require_admin)):
     """手动刷新超话帖子"""
     database.delete_topic_posts_cache(topic_id)
-    return get_topic_posts(topic_id, count=data.count, force=True)
+    return get_topic_posts(topic_id, count=data.count, pages=data.pages, force=True)
 
 
 # ========================= 图片代理 =========================
@@ -615,132 +590,9 @@ def ai_summary(data: AISummaryIn, user=Depends(auth.require_admin)):
             "error": "未配置 AI 总结功能。请在设置中填写 API Base URL 和 API Key。",
         }
 
-    truncated_text = data.text[:8000] if len(data.text) > 8000 else data.text
-
-    system_content = AI_TOPIC_PROMPT.replace("{topic_name}", data.topic_name)
-    if data.question.strip():
-        system_content = f"你是超话内容问答助手。只能依据下面帖子回答，不知道就明确说明。\n\n帖子样本：\n{truncated_text}"
-        user_content = data.question.strip()
-    else:
-        user_content = f"以下是「{data.topic_name}」超话的最新帖子内容：\n\n{truncated_text}"
-    messages = [
-        {"role": "system", "content": system_content},
-        {"role": "user", "content": user_content},
-    ]
-
-    payload = {
-        "model": model,
-        "messages": messages,
-        "max_tokens": 1200,
-        "temperature": 0.7,
-        "stream": data.stream,
-    }
-
-    try:
-        if data.stream:
-            # SSE streaming response
-            # 先建立上游连接，让鉴权/模型/网关错误仍由本接口转成 JSON 错误，
-            # 避免流已经开始后只剩一个空白面板。
-            resp_stream = requests.post(
-                f"{base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                    "Accept": "text/event-stream",
-                },
-                json=payload,
-                timeout=120,
-                stream=True,
-            )
-            resp_stream.raise_for_status()
-
-            def generate():
-                import json as _json
-                buffer = b""
-                try:
-                    for chunk in resp_stream.iter_content(chunk_size=2048):
-                        if not chunk:
-                            continue
-                        buffer += chunk
-                        while b"\n\n" in buffer:
-                            message, buffer = buffer.split(b"\n\n", 1)
-                            for msg_line in message.split(b"\n"):
-                                msg_line = msg_line.strip()
-                                if not msg_line:
-                                    continue
-                                try:
-                                    line_str = msg_line.decode("utf-8")
-                                except UnicodeDecodeError:
-                                    continue
-                                if line_str.startswith("data: "):
-                                    data_str = line_str[6:].strip()
-                                    if not data_str or data_str == "[DONE]":
-                                        break
-                                    try:
-                                        chunk_data = _json.loads(data_str)
-                                        choices = chunk_data.get("choices") or []
-                                        choice = choices[0] if choices else {}
-                                        delta = choice.get("delta") or {}
-                                        text_piece = delta.get("content", "") or ""
-                                        if text_piece:
-                                            out = {"text": text_piece}
-                                            yield f"data: {_json.dumps(out, ensure_ascii=False)}\n\n"
-                                        if choice.get("finish_reason"):
-                                            out_done = {"finish": True}
-                                            usage = chunk_data.get("usage")
-                                            if usage:
-                                                out_done["usage"] = usage
-                                            mdl = chunk_data.get("model")
-                                            if mdl:
-                                                out_done["model"] = mdl
-                                            yield f"data: {_json.dumps(out_done, ensure_ascii=False)}\n\n"
-                                            break
-                                    except _json.JSONDecodeError:
-                                        buffer = msg_line + b"\n" + buffer
-                                        break
-                                    except Exception as exc:
-                                        out_err = {"error": str(exc)}
-                                        yield f"data: {_json.dumps(out_err, ensure_ascii=False)}\n\n"
-                                        break
-                except Exception as exc:
-                    out_err = {"error": f"流式读取失败：{exc}"}
-                    yield f"data: {_json.dumps(out_err, ensure_ascii=False)}\n\n"
-                finally:
-                    close = getattr(resp_stream, "close", None)
-                    if close:
-                        close()
-
-            from fastapi.responses import StreamingResponse
-            return StreamingResponse(generate(), media_type="text/event-stream")
-        else:
-            # Non-streaming
-            resp = requests.post(
-                f"{base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-                timeout=120,
-            )
-            resp.raise_for_status()
-            result = resp.json()
-            summary = _extract_ai_content(result)
-            if not summary:
-                log.warning("AI 返回空内容 (model=%s)", result.get("model", model))
-                return {"ok": False, "summary": "", "error": "AI 服务未返回有效内容（可能被内容审核拦截），请稍后重试"}
-            out = {
-                "ok": True,
-                "summary": summary,
-                "model": result.get("model", model),
-                "qa_mode": bool(data.question.strip()),
-            }
-            return out
-    except requests.exceptions.Timeout:
-        return {"ok": False, "summary": "", "error": "请求超时，请稍后重试"}
-    except Exception as exc:
-        log.error("AI 总结失败: %s", exc)
-        return {"ok": False, "summary": "", "error": f"调用失败：{exc}"}
+    from ..ai_service import summarize
+    return summarize(data.text, data.topic_name, AI_TOPIC_PROMPT, base_url,
+                     api_key, model, question=data.question, stream=data.stream)
 
 
 # ========================= TG 推送超话摘要 =========================

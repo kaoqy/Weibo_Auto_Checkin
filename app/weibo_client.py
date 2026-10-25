@@ -809,8 +809,9 @@ class CheckinOptions:
 
 def run_account_checkin(cookie_dict: dict, opts: CheckinOptions,
                         proxy_url: str | None = None,
-                        proxy_index: int = 0) -> dict:
-    """对单个账号执行一遍签到。"""
+                        proxy_index: int = 0,
+                        account_id: int | None = None) -> dict:
+    """签到指定账号；account_id 用于应用该账号保存的超话勾选范围。"""
     cookie_dict = normalize_cookie(cookie_dict)
     if not cookie_dict:
         return _bundle("failed", "Cookie 为空，请重新登录", 0, 0, 0, [],

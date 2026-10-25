@@ -392,3 +392,24 @@ def test_ai_summary_streaming(client, monkeypatch):
     assert accumulated == "流式输出"
     assert "test-model" in decoded
     db._local.conn = None
+
+
+def test_analyze_stream_combines_metadata_and_async_body(client, monkeypatch):
+    """分析包装层必须支持新版 Starlette 的 async body_iterator。"""
+    db.upsert_all_topic("100808abc", name="测试超话")
+    db.set_settings({"ai_base_url": "https://ai.example/v1", "ai_api_key": "test-key", "ai_model": "test"})
+    fake_posts = [{"mid": "1001", "text": "新舞台讨论", "created_at": "2026-10-25 12:00:00",
+                   "user": {"id": "1", "screen_name": "作者"}, "attitudes_count": 9}]
+    monkeypatch.setattr("app.api.topics.fetch_topic_posts", lambda *args, **kwargs: {"posts": fake_posts, "error": ""})
+    class FakeResp:
+        status_code = 200
+        headers = {"Content-Type": "application/json"}
+        def raise_for_status(self): pass
+        def json(self): return {"model": "test", "choices": [{"message": {"content": "完整总结正文"}}]}
+        def close(self): pass
+    monkeypatch.setattr("app.ai_service.post_completion", lambda *args: FakeResp())
+    r = client.post("/api/topics/analyze/100808abc", json={"count": 10, "pages": 1})
+    assert r.status_code == 200
+    body = r.text
+    assert '"stats"' in body
+    assert '"text": "完整总结正文"' in body

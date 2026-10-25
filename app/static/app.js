@@ -348,9 +348,9 @@ if (btnCheckinSel) btnCheckinSel.onclick = ()=>{
     toast('选中的账号都已停用，请先点击「启用选中」', 'err');
     return;
   }
-  api.post('/api/checkin/run-accounts', {account_ids: enabledIds}).then(r=>{
+  startCheckin('/api/checkin/run-accounts', {account_ids: enabledIds}).then(r=>{
     toast((r.message || '已启动手动签到') + (skipped ? `，已跳过 ${skipped} 个停用账号` : ''), 'good');
-  }).catch(()=>toast('启动失败','err'));
+  }).catch(e=>toast(e.message || '启动失败','err'));
 };
 async function toggleAccEnabled(id) {
   const a = (window.__accounts||[]).find(x=>x.id===id);
@@ -1230,17 +1230,22 @@ $('#btn-test-tg').onclick = async () => {
 };
 
 /* ===== 立即签到 + 运行状态轮询 ===== */
-$('#btn-run').onclick = async () => {
+async function startCheckin(path, body={}) {
+  $('#runModal').hidden = false;
+  document.body.classList.add('modal-open');
+  $('#runBar').style.width='0%';
+  $('#runInfo').textContent='正在启动签到任务…';
+  $('#runLines').innerHTML='';
   try {
-    $('#runModal').hidden = false;
-    document.body.classList.add('modal-open');
-    $('#runBar').style.width='0%';
-    $('#runInfo').textContent='正在启动…';
-    $('#runLines').innerHTML='';
-    await api.post('/api/checkin/run', {});
+    const result = await api.post(path, body);
     pollRun();
-  } catch(e){ toast('启动失败','err'); $('#runModal').hidden=true; }
-};
+    return result;
+  } catch(e) {
+    $('#runInfo').textContent='启动失败：'+(e.message||'请求失败');
+    throw e;
+  }
+}
+$('#btn-run').onclick = () => startCheckin('/api/checkin/run').catch(e=>toast(e.message||'启动失败','err'));
 $('#runModalClose').onclick = ()=> {
   $('#runModal').hidden=true;
   document.body.classList.remove('modal-open');
@@ -1263,7 +1268,8 @@ function pollRun() {
       api.get('/api/checkin/last').then(l=>{
         const sm = l.summary;
         if (sm) {
-          $('#runInfo').textContent = `✅ 完成（${sm.status}）· 账号${sm.accounts||0} · 成功${sm.success||0} · 失败${sm.fail||0}`;
+          const label = sm.status==='success'?'完成':sm.status==='failed'?'失败':sm.status==='skipped'?'已跳过':'部分完成';
+          $('#runInfo').textContent = `${label}（${sm.status}）· 账号${sm.accounts||0} · 成功${sm.success||0} · 失败${sm.fail||0}`;
           addRunLine(`完成：${sm.message||''}`);
         }
         loadDashboard(); loadAccounts(); loadLogs();
@@ -1344,6 +1350,7 @@ function renderFilteredPosts() {
   currentPosts = allFetchedPosts.filter(p => (!keyword || postFullText(p).toLowerCase().includes(keyword)) && (!hideReposts || !p.retweeted));
   window.__currentPosts = currentPosts;
   renderPosts(currentPosts);
+  $('#topicFeedMeta').textContent = `显示 ${currentPosts.length} / ${allFetchedPosts.length} 条`;
 }
 $('#topicPostSearch').oninput = renderFilteredPosts;
 $('#topicHideReposts').onchange = renderFilteredPosts;
@@ -1504,6 +1511,11 @@ async function openTopicDetail(topicId, el, forceRefresh = false) {
   $('#topicPosts').innerHTML = skeleton(4);
   $('#aiSummaryContent').innerHTML = '<div class="ai-placeholder"><span class="ai-placeholder-icon">✨</span><p>点击「生成总结」按钮，AI 将自动分析超话帖子内容</p></div>';
   currentPosts = [];
+  allFetchedPosts = [];
+  $('#topicFeedMeta').textContent = '正在获取帖子…';
+  $('#analysisStatus').textContent = '等待生成总结';
+  $('#analysisStats').hidden = true;
+  $('#btn-copy-summary').disabled = true;
 
   // 绑定动态按钮事件（必须在 innerHTML 设置后）
   var pushTgBtn = $('#btn-push-tg');
@@ -1543,6 +1555,7 @@ async function openTopicDetail(topicId, el, forceRefresh = false) {
     allFetchedPosts = data.posts || [];
     currentPosts = allFetchedPosts;
     if (currentPosts.length) renderFilteredPosts();
+    $('#topicFeedMeta').textContent = `显示 ${currentPosts.length} 条 · ${data.cached ? '缓存 '+String(data.fetched_at||'').slice(5,16) : '实时抓取'}${data.pages ? ' · '+data.pages+' 页' : ''}`;
     if (!currentPosts.length) {
       const err = data.error || '未知错误';
       const tried = data.tried ? `（已尝试 ${data.tried} 个端点）` : '';
@@ -1727,145 +1740,87 @@ document.addEventListener('keydown', function(e) {
 
 // TG 推送按钮事件已在 openTopicDetail 内绑定
 
-// AI 总结（仅流式输出）
-$('#btn-ai-summary').onclick = async () => {
-  if (!currentTopicId) {
-    toast('请先选择超话并拉取帖子', 'warn');
-    return;
+// AI 总结：统一消费后端事件，JSON 降级也必须显示正文。
+let latestSummary = '';
+let analysisController = null;
+function analysisError(message) {
+  $('#aiSummaryContent').innerHTML = '<div class="ai-summary-error">'+esc(message)+'</div>';
+  $('#analysisStatus').textContent = '生成失败，可点击重试';
+  $('#btn-retry-summary').disabled = false;
+}
+function consumeSseBlock(block, onEvent) {
+  const data = block.split('\n').filter(line=>line.startsWith('data:')).map(line=>line.slice(5).trim()).join('\n');
+  if (!data || data === '[DONE]') return;
+  try { onEvent(JSON.parse(data)); } catch(e) { console.warn('Invalid AI event', data); }
+}
+async function consumeEventStream(response, onEvent) {
+  const reader=response.body.getReader(), decoder=new TextDecoder();
+  let buffer='';
+  while(true) {
+    const {value,done}=await reader.read();
+    if(done) break;
+    buffer += decoder.decode(value,{stream:true}).replace(/\r\n/g,'\n').replace(/\r/g,'\n');
+    let split;
+    while((split=buffer.indexOf('\n\n'))>=0) { consumeSseBlock(buffer.slice(0,split),onEvent); buffer=buffer.slice(split+2); }
   }
-  var box = $('#aiSummaryContent');
-  var button = $('#btn-ai-summary');
-  var text = currentPosts.map(function(p, i) {
-    return '[' + (i+1) + '] ' + (p.user?.screen_name || '未知') + ': ' + postFullText(p) +
-      '（转发 ' + (p.reposts_count || 0) + '，评论 ' + (p.comments_count || 0) + '，点赞 ' + (p.attitudes_count || 0) + '）';
-  }).join('\n');
-
-  button.disabled = true;
-  button.textContent = '总结中…';
-  box.innerHTML = '<div class="ai-summary-loading"><span class="qr-spinner" style="width:16px;height:16px;border-width:2px"></span> AI 正在思考…</div>';
-
+  buffer += decoder.decode();
+  if(buffer.trim()) consumeSseBlock(buffer,onEvent);
+}
+async function generateSummary() {
+  if(!currentTopicId) { toast('请先选择超话', 'warn'); return; }
+  if(analysisController) analysisController.abort();
+  const topicId=currentTopicId, button=$('#btn-ai-summary');
+  analysisController=new AbortController();
+  latestSummary=''; button.disabled=true; button.innerHTML='<span class="btn-spinner"></span>分析中';
+  $('#btn-copy-summary').disabled=true; $('#btn-retry-summary').disabled=true;
+  $('#analysisStatus').textContent='正在抓取最新帖子并整理样本…';
+  $('#aiSummaryContent').innerHTML='<div class="ai-summary-loading"><span class="qr-spinner"></span> 正在准备分析样本</div>';
   try {
-    var resp = await fetch('/api/topics/analyze/'+encodeURIComponent(currentTopicId), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ count:+$('#topicFetchCount').value||30, pages:3,
-        hours:+$('#analysisHours').value||0, keyword:$('#analysisKeyword').value.trim(),
-        hide_reposts:$('#topicHideReposts').checked }),
-    });
-
-    if (!resp.ok) {
-      var err = await resp.json();
-      box.innerHTML = '<div class="ai-summary-error">❌ ' + esc(err.error || '请求失败') + '</div>';
-      return;
-    }
-
-    // 配置缺失、反向代理错误等情况下后端会返回 JSON，而非 SSE。
-    var contentType = (resp.headers && resp.headers.get('content-type') || '').toLowerCase();
-    if (!contentType.includes('text/event-stream')) {
-      var result = await resp.json();
-      if (!result.ok) {
-        box.innerHTML = '<div class="ai-summary-error">❌ ' + esc(result.error || 'AI 请求失败') + '</div>';
-        return;
-      }
-      var resultText = result.summary || '';
-      box.innerHTML = '<div class="ai-summary-text">' + formatAiSummary(resultText) + '</div>';
-      if (result.model) {
-        var resultHint = document.createElement('div');
-        resultHint.className = 'ai-model-hint';
-        resultHint.textContent = '模型: ' + result.model;
-        box.appendChild(resultHint);
-      }
-      return;
-    }
-
-    var reader = resp.body.getReader();
-    var decoder = new TextDecoder();
-    var accumulated = '';
-    var streamError = '';
-    var buffer = '';
-    box.innerHTML = '';
-    var summaryDiv = document.createElement('div');
-    summaryDiv.className = 'ai-summary-text streaming';
-    box.appendChild(summaryDiv);
-
-    var done = false;
-    while (!done) {
-      var result = await reader.read();
-      var chunk = result.value;
-      done = result.done;
-
-      if (chunk && chunk.length > 0) {
-        buffer += decoder.decode(chunk, { stream: true });
-        var lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (var i = 0; i < lines.length; i++) {
-          var line = lines[i].trim();
-          if (!line || !line.startsWith('data: ')) continue;
-
-          var jsonStr = line.slice(6).trim();
-          if (!jsonStr || jsonStr === '[DONE]') { done = true; break; }
-
-          try {
-            var chunkData = JSON.parse(jsonStr);
-            if (chunkData.stats) {
-              const stats=chunkData.stats;
-              $('#analysisStats').hidden=false;
-              $('#analysisStats').innerHTML='<span><b>'+stats.posts+'</b> 去重帖子</span><span><b>'+stats.authors+'</b> 作者</span><span><b>'+stats.likes+'</b> 点赞</span><span><b>'+stats.comments+'</b> 评论</span>';
-            }
-            if (chunkData.text) {
-              accumulated += chunkData.text;
-              summaryDiv.innerHTML = formatAiSummary(accumulated);
-            }
-            if (chunkData.error) {
-              streamError = chunkData.error;
-            }
-            if (chunkData.finish) {
-              done = true;
-              if (chunkData.model) {
-                var hint = document.createElement('div');
-                hint.className = 'ai-model-hint';
-                hint.textContent = '模型: ' + chunkData.model;
-                box.appendChild(hint);
-              }
-            }
-          } catch (e) {
-            // JSON 不完整，跳过
-          }
+    const resp=await fetch('/api/topics/analyze/'+encodeURIComponent(topicId),{method:'POST',headers:{'Content-Type':'application/json'},signal:analysisController.signal,
+      body:JSON.stringify({count:+$('#topicFetchCount').value||30,pages:3,hours:+$('#analysisHours').value||0,keyword:$('#analysisKeyword').value.trim(),hide_reposts:$('#topicHideReposts').checked})});
+    const type=resp.headers.get('content-type')||'';
+    if(!resp.ok||!type.includes('text/event-stream')) {
+      const result=await resp.json();
+      if(!resp.ok||!result.ok) throw new Error(result.error||result.detail||`请求失败 ${resp.status}`);
+      latestSummary=result.summary||'';
+      if(result.stats) showAnalysisStats(result.stats);
+      if(!latestSummary) throw new Error('AI 没有返回正文，请重试');
+      $('#aiSummaryContent').innerHTML='<div class="ai-summary-text">'+formatAiSummary(latestSummary)+'</div>';
+    } else {
+      const summaryDiv=document.createElement('div'); summaryDiv.className='ai-summary-text streaming';
+      $('#aiSummaryContent').replaceChildren(summaryDiv);
+      let error='';
+      await consumeEventStream(resp,event=>{
+        if(event.stats) showAnalysisStats(event.stats);
+        if(event.text) {
+          latestSummary+=event.text;
+          summaryDiv.innerHTML=formatAiSummary(latestSummary);
+          $('#analysisStatus').textContent=`AI 正在输出 · ${latestSummary.length} 字`;
         }
-      }
+        if(event.error) error=event.error;
+      });
+      if(error) throw new Error(error);
+      if(!latestSummary.trim()) throw new Error('AI 服务没有返回正文，请重试或切换非流式兼容接口');
+      summaryDiv.classList.remove('streaming');
     }
-
-    // 处理剩余的 buffer
-    if (buffer.trim().startsWith('data: ')) {
-      try {
-        var jsonStr = buffer.trim().slice(6).trim();
-        if (jsonStr !== '[DONE]') {
-          var chunkData = JSON.parse(jsonStr);
-          if (chunkData.text) {
-            accumulated += chunkData.text;
-            summaryDiv.innerHTML = formatAiSummary(accumulated);
-          }
-        }
-      } catch (e) { /* ignore */ }
-    }
-
-    if (!accumulated.trim()) {
-      box.innerHTML = '<div class="ai-summary-error">❌ ' + esc(streamError || 'AI 没有返回内容，请检查模型配置后重试。') + '</div>';
-    } else if (streamError) {
-      var streamErrorEl = document.createElement('div');
-      streamErrorEl.className = 'ai-summary-error';
-      streamErrorEl.textContent = streamError;
-      box.appendChild(streamErrorEl);
-    }
-
+    $('#analysisStatus').textContent='总结完成 · 样本与正文已更新';
+    $('#btn-copy-summary').disabled=false;
   } catch(e) {
-    box.innerHTML = '<div class="ai-summary-error">❌ ' + esc(e.message || '请求失败') + '</div>';
+    if(e.name==='AbortError') $('#analysisStatus').textContent='已取消本次分析';
+    else analysisError(e.message||'生成失败');
   } finally {
-    button.disabled = false;
-    button.textContent = '✨ 生成总结';
-    if (summaryDiv) summaryDiv.classList.remove('streaming');
+    analysisController=null; button.disabled=false; button.textContent='✨ 生成总结';
   }
+}
+function showAnalysisStats(stats) {
+  $('#analysisStats').hidden=false;
+  $('#analysisStats').innerHTML=`<span><b>${stats.posts||0}</b> 去重帖子</span><span><b>${stats.authors||0}</b> 作者</span><span><b>${stats.likes||0}</b> 点赞</span><span><b>${stats.comments||0}</b> 评论</span>`;
+}
+$('#btn-ai-summary').onclick=generateSummary;
+$('#btn-retry-summary').onclick=generateSummary;
+$('#btn-copy-summary').onclick=async()=>{
+  try { await navigator.clipboard.writeText(latestSummary); toast('摘要已复制','good'); }
+  catch(e) { toast('复制失败，请手动选择文本','err'); }
 };
 
 // 格式化 AI 总结文本（Markdown → HTML，支持流式逐字显示）

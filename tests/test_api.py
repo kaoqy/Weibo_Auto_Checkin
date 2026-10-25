@@ -300,10 +300,30 @@ def test_checkin_run_accounts_api(client):
     data = r.json()
     assert data["ok"] is True
     assert data["count"] == 1
+    import time
+    from app import scheduler as sched
+    for _ in range(50):
+        if not sched.is_checkin_running():
+            break
+        time.sleep(0.05)
+    assert not sched.is_checkin_running()
 
     # 空列表应 400
     r2 = client.post("/api/checkin/run-accounts", json={"account_ids": []})
     assert r2.status_code == 400
+
+
+def test_checkin_prepare_exposes_total_and_rejects_duplicate(client, monkeypatch):
+    from app import scheduler as sched
+    db.add_account({"name": "准备账号", "cookie_raw": "SUB=prepare"})
+    total = sched.prepare_checkin("manual")
+    assert total == 1
+    assert sched.get_current_run()["accounts_total"] == 1
+    r = client.post("/api/checkin/run", json={})
+    assert r.status_code == 409
+    summary = sched.run_checkin("manual", prepared=True)
+    assert summary["accounts"] == 1
+    assert not sched.is_checkin_running()
 
 
 # ========================= v7.0 =========================

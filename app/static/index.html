@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>微博超话签到管理面板</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="/style.css?v=1.3.0&rev=3" />
-  <link rel="stylesheet" href="/enhancements.css?v=1.3.0" />
+  <link rel="stylesheet" href="/style.css?v=1.3.0&rev=4" />
+  <link rel="stylesheet" href="/enhancements.css?v=1.3.0&rev=4" />
   <script>!function(){try{const t=localStorage.getItem('wcm-theme')||'system';document.documentElement.dataset.theme=t}catch(e){}}()</script>
 </head>
 <body>
@@ -161,6 +161,7 @@
                 <input id="topicPostSearch" type="search" placeholder="筛选帖子关键词" />
                 <label class="repost-filter"><input type="checkbox" id="topicHideReposts" /> 隐藏转发</label>
               </div>
+              <div class="topic-feed-meta" id="topicFeedMeta" aria-live="polite"></div>
               <div class="topic-posts" id="topicPosts"></div>
             </div>
           </div>
@@ -174,6 +175,7 @@
               <div class="ai-panel">
                 <div class="analysis-options"><select id="analysisHours" aria-label="时间范围"><option value="0">全部已抓帖子</option><option value="24">近 24 小时</option><option value="72">近 3 天</option><option value="168">近 7 天</option></select><input id="analysisKeyword" placeholder="分析关键词（可选）" /></div>
                 <div class="analysis-stats" id="analysisStats" hidden></div>
+                <div class="analysis-status" id="analysisStatus" aria-live="polite">选择超话后，可抓取并总结最新讨论</div>
                 <div class="ai-summary-content" id="aiSummaryContent">
                   <div class="ai-placeholder">
                     <span class="ai-placeholder-icon">✨</span>
@@ -181,6 +183,7 @@
                   </div>
                 </div>
               </div>
+              <div class="ai-panel-actions"><button class="btn btn-ghost btn-sm" id="btn-copy-summary" disabled>复制摘要</button><button class="btn btn-ghost btn-sm" id="btn-retry-summary" disabled>重试</button></div>
             </div>
           </div>
         </div>
@@ -647,6 +650,6 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <script src="/app.js?v=1.3.0&rev=3"></script>
+  <script src="/app.js?v=1.3.0&rev=4"></script>
 </body>
 </html>
