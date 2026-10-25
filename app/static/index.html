@@ -4,10 +4,15 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>微博超话签到管理面板</title>
-  <link rel="stylesheet" href="/style.css?v=1.3.0&rev=2" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/style.css?v=1.3.0&rev=3" />
+  <link rel="stylesheet" href="/enhancements.css?v=1.3.0" />
   <script>!function(){try{const t=localStorage.getItem('wcm-theme')||'system';document.documentElement.dataset.theme=t}catch(e){}}()</script>
 </head>
 <body>
+  <div class="page-loader" id="pageLoader" aria-hidden="true"><span></span><span></span><span></span></div>
+  <button class="mobile-nav-toggle" id="mobileNavToggle" aria-label="打开导航" aria-expanded="false">☰</button>
+  <div class="sidebar-scrim" id="sidebarScrim" hidden></div>
   <div class="app">
     <!-- 侧边栏 -->
     <aside class="sidebar">
@@ -54,7 +59,7 @@
     <!-- 主内容 -->
     <main class="main">
       <header class="topbar">
-        <h1 id="view-title">仪表盘</h1>
+        <div class="view-heading"><h1 id="view-title">仪表盘</h1><p id="view-subtitle">今天也为你照看每一个超话</p></div>
         <div class="topbar-actions">
           <button class="btn btn-ghost" id="btn-health" title="服务状态">●</button>
           <button class="btn btn-ghost" id="btn-user" title="账户">👤</button>
@@ -97,7 +102,7 @@
         <div class="card">
           <div class="card-head">
             <h2>账号列表</h2>
-            <div class="account-actions" aria-label="账号操作">
+          <div class="account-actions" aria-label="账号操作">
               <div class="account-action-group account-action-primary">
                 <button class="btn btn-primary btn-sm" id="btn-add-acc">＋ 添加账号</button>
                 <button class="btn btn-ghost btn-sm" id="btn-qr-add">📱 扫码添加</button>
@@ -110,6 +115,7 @@
               </div>
             </div>
           </div>
+          <div class="cookie-overview" id="cookieOverview"><span class="live-dot"></span>自动保活已开启，正在读取账号状态…</div>
           <div class="batch-bar" id="batchBar" hidden>
             <span class="hint">已选 <b id="selCount">0</b> 个账号</span>
             <button class="btn btn-ghost btn-sm" id="btn-sel-enable">启用选中</button>
@@ -149,6 +155,12 @@
                 <button class="btn btn-ghost btn-sm" id="btn-topic-refresh">↻ 刷新</button>
               </div>
               <div class="topic-detail-header" id="topicDetailHeader"></div>
+              <div class="topic-feed-tools" aria-label="帖子筛选">
+                <label>数量<select id="topicFetchCount"><option>20</option><option selected>30</option><option>50</option><option>100</option></select></label>
+                <label>排序<select id="topicSort"><option value="latest">最新</option><option value="hot">热门</option></select></label>
+                <input id="topicPostSearch" type="search" placeholder="筛选帖子关键词" />
+                <label class="repost-filter"><input type="checkbox" id="topicHideReposts" /> 隐藏转发</label>
+              </div>
               <div class="topic-posts" id="topicPosts"></div>
             </div>
           </div>
@@ -160,6 +172,8 @@
                 <button class="btn btn-primary btn-sm" id="btn-ai-summary">✨ 生成总结</button>
               </div>
               <div class="ai-panel">
+                <div class="analysis-options"><select id="analysisHours" aria-label="时间范围"><option value="0">全部已抓帖子</option><option value="24">近 24 小时</option><option value="72">近 3 天</option><option value="168">近 7 天</option></select><input id="analysisKeyword" placeholder="分析关键词（可选）" /></div>
+                <div class="analysis-stats" id="analysisStats" hidden></div>
                 <div class="ai-summary-content" id="aiSummaryContent">
                   <div class="ai-placeholder">
                     <span class="ai-placeholder-icon">✨</span>
@@ -240,6 +254,16 @@
                 <div class="settings-label"><label for="s-auto_refresh_topics">签到后自动刷新超话</label><small>每次签到完成后自动拉取关注超话的最新帖子缓存</small></div>
                 <label class="switch"><input type="checkbox" id="s-auto_refresh_topics" /><span class="switch-slider"></span></label>
               </div>
+            </div>
+          </div>
+
+          <!-- 防封策略 -->
+          <div class="settings-section">
+            <div class="settings-section-head"><span class="settings-section-ico">🔐</span><h2>Cookie 保活</h2></div>
+            <div class="settings-section-body">
+              <div class="settings-row"><div class="settings-label"><label for="s-cookie_auto_refresh">自动续签</label><small>在微博登录态有效时主动刷新并持久化新凭证</small></div><label class="switch"><input type="checkbox" id="s-cookie_auto_refresh" checked /><span class="switch-slider"></span></label></div>
+              <div class="settings-row"><div class="settings-label"><label for="s-cookie_refresh_interval_hours">保活间隔（小时）</label><small>1–72 小时；临期账号自动提高检查频率</small></div><input id="s-cookie_refresh_interval_hours" class="input-modern" type="number" min="1" max="72" value="12" /></div>
+              <div class="settings-row"><div class="settings-label"><label for="s-cookie_renew_before_days">临期阈值（天）</label><small>到期前进入重点保活，已失效账号仍需扫码登录</small></div><input id="s-cookie_renew_before_days" class="input-modern" type="number" min="1" max="30" value="3" /></div>
             </div>
           </div>
 
@@ -623,6 +647,6 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <script src="/app.js?v=1.3.0&rev=2"></script>
+  <script src="/app.js?v=1.3.0&rev=3"></script>
 </body>
 </html>

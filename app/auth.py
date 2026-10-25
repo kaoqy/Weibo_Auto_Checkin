@@ -18,7 +18,7 @@ from fastapi.responses import RedirectResponse
 from . import database
 
 COOKIE_NAME = "wcm_token"
-SESSION_TTL_HOURS = 168  # 7 天
+SESSION_TTL_HOURS = 24 * 30  # 30 天滑动会话，活跃用户无需每周登录
 
 
 # ========================= 密码哈希（PBKDF2） =========================

@@ -89,7 +89,9 @@ def _normalize_mblog(mblog_raw):
         return None
     if not mblog_raw.get("id"):
         return None
-    text = _clean_mblog_text(mblog_raw.get("text", ""))
+    text = _clean_mblog_text(mblog_raw.get("text_raw") or mblog_raw.get("text", ""))
+    if mblog_raw.get("isLongText") and not text:
+        text = _clean_mblog_text(mblog_raw.get("longTextContent") or "")
     user = mblog_raw.get("user") or {}
     if not isinstance(user, dict):
         user = {}
@@ -242,19 +244,19 @@ def _format_weibo_time(raw_time: str) -> str:
         # PC 端英文格式 "Fri Sep 25 21:13:15 +0800 2026"
         if len(raw_time) >= 25 and raw_time[0] in "MonTueWedThuFriSat" and " " in raw_time[:4]:
             dt = _dt.strptime(raw_time, "%a %b %d %H:%M:%S %z %Y")
-            return dt.astimezone().strftime("%Y-%m-%d %H:%M")
+            return dt.astimezone().strftime("%Y-%m-%d %H:%M:%S")
         # 标准格式 YYYY-MM-DD HH:MM 或更长
         if len(raw_time) >= 10 and raw_time[4] == '-' and raw_time[7] == '-':
-            return raw_time[:16]
+            return (raw_time[:19] if len(raw_time) >= 19 else raw_time[:16] + ":00")
         # "今天 HH:MM"
         if raw_time.startswith("今天"):
             t = raw_time.replace("今天", "").strip()
-            return f"{now.strftime('%Y-%m-%d')} {t}"
+            return f"{now.strftime('%Y-%m-%d')} {t if len(t) > 5 else t + ':00'}"
         # "昨天 HH:MM"
         if raw_time.startswith("昨天"):
             t = raw_time.replace("昨天", "").strip()
             yest = now - _td(days=1)
-            return f"{yest.strftime('%Y-%m-%d')} {t}"
+            return f"{yest.strftime('%Y-%m-%d')} {t if len(t) > 5 else t + ':00'}"
         # "N分钟前"
         if "分钟前" in raw_time:
             n = int(raw_time.replace("分钟前", "").strip())
@@ -305,7 +307,8 @@ def _format_weibo_time(raw_time: str) -> str:
 
 
 def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
-                      proxy=None, force=False, allow_fallback=True, count: int = 20):
+                      proxy=None, force=False, allow_fallback=True, count: int = 20,
+                      max_pages: int = 3, sort: str = "latest"):
     """拉取指定超话的最新帖子列表（默认前 count 条）。
 
     微博超话帖子接口是公开的，不需要登录态。
@@ -321,12 +324,15 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
     if clean_cid.startswith("100808"):
         clean_cid = clean_cid[6:]
 
+    max_pages = max(1, min(int(max_pages), 5))
+    count = max(1, min(int(count), 100))
+    flow_suffix = "_-_sort_hot" if sort == "hot" else "_-_sort_time"
     # 端点列表（按优先级排序，确保获取最新帖子而非精华帖）
     endpoints = [
         # PC 端（chaohua/page）- 按时间排序（最可靠）
         {
             "url": f"{BASE_PC}/ajax_proxy/chaohua/page",
-            "params": {"flowId": f"100808{clean_cid}_-_sort_time", "vtype": 1},
+            "params": {"flowId": f"100808{clean_cid}{flow_suffix}", "vtype": 1},
             "headers": {"Referer": f"{BASE_PC}/p/100808{clean_cid}"},
         },
         # PC 端（chaohua/page）- 默认排序
@@ -359,7 +365,8 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
         page = 1
         since_id = ""
         tried += 1
-        while len(posts) < count:
+        seen_cursors = set()
+        while len(posts) < count and page <= max_pages:
             params = dict(ep["params"])
             if page > 1:
                 params["page"] = page
@@ -414,12 +421,14 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
             data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
             cardlist_info = data.get("cardlistInfo") if isinstance(data.get("cardlistInfo"), dict) else {}
             next_since = cardlist_info.get("since_id", "")
-            if next_since:
+            page += 1
+            if next_since and next_since not in seen_cursors:
+                seen_cursors.add(next_since)
                 since_id = next_since
             else:
-                page += 1
-                if page > 3:
-                    break
+                since_id = ""
+                errors.append(f"[{tried}] {ep['url']} p{page}: 翻页游标重复，停止")
+                break
             time.sleep(0.3)
 
         if posts:
@@ -440,7 +449,13 @@ def fetch_topic_posts(session, cookies, containerid: str, channel="auto",
         p["created_at"] = _format_weibo_time(p.get("created_at", ""))
 
     error_msg = "; ".join(errors) if errors else ""
-    return {"posts": unique_posts[:count], "error": error_msg, "tried": tried}
+    for post in unique_posts:
+        post["engagement"] = (int(post.get("reposts_count") or 0) * 3
+                              + int(post.get("comments_count") or 0) * 2
+                              + int(post.get("attitudes_count") or 0))
+        post["url"] = f"https://weibo.com/detail/{post['mid']}" if post.get("mid") else ""
+    return {"posts": unique_posts[:count], "error": error_msg, "tried": tried,
+            "pages": min(page - 1, max_pages), "complete": len(unique_posts) >= count}
 
 
 class NetworkError(RuntimeError):
@@ -542,6 +557,11 @@ def request_via_proxy(session, method, url, channel="auto", proxy=None,
 
 def request_json(session, method, url, channel="auto", proxy=None,
                  force=False, allow_fallback=True, **kwargs):
+    # Only use the caller's cookies when the session has none. Passing an old
+    # Cookie header on every request can overwrite freshly issued cookies.
+    request_cookies = kwargs.pop("cookies", None)
+    if request_cookies and not session.cookies:
+        kwargs["cookies"] = request_cookies
     response = request_via_proxy(
         session, method, url, channel=channel, proxy=proxy,
         force=force, allow_fallback=allow_fallback,
@@ -571,6 +591,8 @@ def verify_cookie(session, cookies, channel="auto", proxy=None,
         raise
     except requests.exceptions.RequestException as exc:
         raise NetworkError(f"验证 Cookie 网络失败：{exc}") from exc
+    except RuntimeError as exc:
+        raise NetworkError(f"验证 Cookie 响应失败：{exc}") from exc
     except Exception as exc:
         log.warning("验证 Cookie 失败：%s", exc)
         return False, None
@@ -746,6 +768,21 @@ def merge_refreshed_cookies(session, cookie_dict: dict) -> tuple[dict, list]:
     return merged, changed
 
 
+_SESSION_COOKIE_KEYS = {"SUB", "SUBP", "ALF", "SCF", "SSOLoginState", "WEIBOCN_FROM", "MLOGIN"}
+
+
+def cookie_changes(session, cookie_dict: dict) -> list[str]:
+    """Track real authentication changes; transient response cookies are not renewals."""
+    merged = dict(cookie_dict)
+    changed = []
+    for cookie in session.cookies:
+        if cookie.value and cookie.name in _SESSION_COOKIE_KEYS:
+            if merged.get(cookie.name) != cookie.value:
+                changed.append(cookie.name)
+            merged[cookie.name] = cookie.value
+    return changed
+
+
 # ========================= 单账号签到 =========================
 
 class CheckinOptions:
@@ -801,7 +838,8 @@ def run_account_checkin(cookie_dict: dict, opts: CheckinOptions,
                        cookie_dict, [], channel, failure_type="network")
 
     if not logged_in:
-        merged, changed = merge_refreshed_cookies(session, cookie_dict)
+        merged, _ = merge_refreshed_cookies(session, cookie_dict)
+        changed = cookie_changes(session, cookie_dict)
         return _bundle("failed", "Cookie 无效或已过期，请重新登录", 0, 0, 0,
                        [], merged, changed, channel,
                        failure_type="cookie_invalid")
@@ -820,7 +858,8 @@ def run_account_checkin(cookie_dict: dict, opts: CheckinOptions,
         topics = database.filter_enabled_topics(account_id, topics)
 
     if not topics:
-        merged, changed = merge_refreshed_cookies(session, cookie_dict)
+        merged, _ = merge_refreshed_cookies(session, cookie_dict)
+        changed = cookie_changes(session, cookie_dict)
         return _bundle("success", "没有需要签到的超话", 0, 0, 0, [],
                        merged, changed, channel)
 
@@ -869,7 +908,8 @@ def run_account_checkin(cookie_dict: dict, opts: CheckinOptions,
                              topic["name"], resp_text)
             results.append(entry)
         except NetworkError:
-            merged, changed = merge_refreshed_cookies(session, cookie_dict)
+            merged, _ = merge_refreshed_cookies(session, cookie_dict)
+            changed = cookie_changes(session, cookie_dict)
             return _bundle("failed", "签到过程中网络失败", total,
                            sum(1 for r in results if r["success"]),
                            len(results) - sum(1 for r in results if r["success"]),
@@ -880,7 +920,8 @@ def run_account_checkin(cookie_dict: dict, opts: CheckinOptions,
         if idx < total:
             time.sleep(random.uniform(opts.checkin_delay_min, opts.checkin_delay_max))
 
-    merged, changed = merge_refreshed_cookies(session, cookie_dict)
+    merged, _ = merge_refreshed_cookies(session, cookie_dict)
+    changed = cookie_changes(session, cookie_dict)
     success_count = sum(1 for r in results if r["success"])
     fail_count = total - success_count
     status = "success" if fail_count == 0 else "partial"

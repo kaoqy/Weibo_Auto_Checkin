@@ -116,10 +116,15 @@ AI_TOPIC_PROMPT = """你是微博「{topic_name}」超话的内容分析助手�
 ## 💬 互动与氛围
 用 2-3 句话概括粉丝互动特点与社区整体情绪走向。
 
+## 📌 值得关注
+列出 1-3 条有信息价值的后续线索；没有可靠线索就写“暂无”。
+
 要求：
 - 只依据所给帖子内容，严禁编造；若帖子稀少、重复或内容空洞，如实说明即可，不要硬凑
 - 人名、作品名、事件名等专有名词保留原文
-- 客观中立、简洁流畅，全文控制在 300 字以内
+- 客观中立、简洁流畅，全文控制在 500 字以内
+- 结合样本量、去重规则与互动数据，不要用单条帖子代表整个社区
+- 涉及热门帖子时附上其 ID，例如（帖子 123），方便读者核对原文
 - 直接从「## 📋 内容概览」开始输出，不要开场白和结尾客套"""
 
 
@@ -137,13 +142,22 @@ def _download_image(url: str) -> Path | None:
     if local_path.exists() and local_path.stat().st_size > 0:
         return local_path
     try:
+        from urllib.parse import urlparse
+        host = (urlparse(url).hostname or "").lower().rstrip(".")
+        allowed = ("sinaimg.cn", "sinaimg.com", "weibo.com", "weibo.cn")
+        if not any(host == domain or host.endswith("." + domain) for domain in allowed):
+            log.warning("拒绝非微博图床地址 %s", host)
+            return None
         resp = requests.get(url, timeout=15, headers={
             "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15",
             "Referer": "https://m.weibo.cn/",
         })
         resp.raise_for_status()
+        content_type = resp.headers.get("Content-Type", "").split(";")[0].lower()
+        if content_type and not content_type.startswith("image/"):
+            return None
         content = resp.content
-        if len(content) < 100:
+        if len(content) < 100 or len(content) > 15 * 1024 * 1024:
             return None
         ext = _detect_image_ext(content) or ext
         local_path = IMG_CACHE_DIR / f"{url_hash}{ext}"
@@ -380,26 +394,73 @@ def get_cached_posts(topic_id: str, user=Depends(auth.require_admin)):
     }
 
 
+class TopicAnalyzeIn(BaseModel):
+    count: int = 30
+    pages: int = 3
+    hours: int = 0
+    keyword: str = ""
+    min_engagement: int = 0
+    hide_reposts: bool = False
+    question: str = ""
+
+
+@router.post("/analyze/{topic_id}")
+def analyze_topic(topic_id: str, data: TopicAnalyzeIn,
+                  user=Depends(auth.require_admin)):
+    """Fetch, normalize and analyze one consistent sample of topic posts."""
+    from ..topic_analysis import build_analysis_context, filter_posts
+    topic = database.get_all_topic(topic_id) or {}
+    topic_name = topic.get("name") or topic_id
+    data.count = max(1, min(data.count, 100))
+    data.pages = max(1, min(data.pages, 5))
+    data.hours = max(0, min(data.hours, 24 * 30))
+    data.keyword = data.keyword[:100]
+    data.question = data.question[:2000]
+    raw = get_topic_posts(topic_id, count=data.count, pages=data.pages, force=True)
+    posts = filter_posts(raw.get("posts") or [], hours=data.hours,
+                         keyword=data.keyword, min_engagement=data.min_engagement,
+                         hide_reposts=data.hide_reposts)
+    if not posts:
+        return {"ok": False, "error": raw.get("error") or "筛选后没有可用于分析的帖子",
+                "posts": [], "stats": {}}
+    text, analysis = build_analysis_context(posts, topic_name)
+    summary_data = AISummaryIn(text=text, topic_name=topic_name,
+                               stream=True, question=data.question)
+    result = ai_summary(summary_data)
+    if isinstance(result, dict):
+        return {**result, **analysis, "fetched_at": raw.get("fetched_at")}
+    # Add sample metadata before the model's SSE stream starts.
+    from fastapi.responses import StreamingResponse
+    import json
+    def stream():
+        yield f"event: meta\ndata: {json.dumps({'stats': analysis['stats'], 'fetched_at': raw.get('fetched_at')}, ensure_ascii=False)}\n\n"
+        yield from result.body_iterator
+    return StreamingResponse(stream(), media_type="text/event-stream")
+
+
 # ========================= 超话内容拉取 =========================
 
 @router.get("/posts/{topic_id}")
-def get_topic_posts(topic_id: str, count: int = 20,
+def get_topic_posts(topic_id: str, count: int = 30, pages: int = 3,
+                    sort: str = "latest",
                     force: bool = False, user=Depends(auth.require_admin)):
     """拉取指定超话的最新帖子。
     默认使用缓存（cache-first），force=true 时强制刷新。
     微博超话帖子接口是公开的，不需要登录态。
     """
     # Cache-first: return cached data unless force=true
-    if not force:
+    use_cache = not force and sort == "latest" and count <= len((database.get_topic_posts_cache(topic_id) or {}).get("posts", []))
+    if use_cache:
         cached = database.get_topic_posts_cache(topic_id)
         if cached and cached.get("posts"):
+            cached_posts = cached["posts"][:count]
             return {
                 "ok": True,
                 "topic_id": topic_id,
                 "account_used": 0,
                 "account_name": "",
-                "posts": cached["posts"],
-                "count": len(cached["posts"]),
+                "posts": cached_posts,
+                "count": len(cached_posts),
                 "error": "",
                 "cached": True,
                 "fetched_at": cached.get("fetched_at", ""),
@@ -437,7 +498,7 @@ def get_topic_posts(topic_id: str, count: int = 20,
             session, cookies={}, containerid=topic_id,
             channel=channel, proxy=proxy,
             force=opts.proxy_force, allow_fallback=opts.proxy_fallback,
-            count=min(count, 50),
+            count=min(max(count, 1), 100), max_pages=pages, sort=sort,
         )
     except Exception as exc:
         return {
@@ -477,6 +538,9 @@ def get_topic_posts(topic_id: str, count: int = 20,
             "count": len(posts),
             "error": "",
             "cached": False,
+            "fetched_at": database._now(),
+            "pages": result.get("pages", 1),
+            "complete": result.get("complete", False),
         }
 
     return {
@@ -506,7 +570,7 @@ def refresh_posts(topic_id: str, data: RefreshPostsIn,
 # ========================= 图片代理 =========================
 
 @router.get("/img")
-def proxy_image(url: str):
+def proxy_image(url: str, user=Depends(auth.require_admin)):
     """代理下载图片"""
     if not url:
         raise HTTPException(400, "url 为空")
@@ -534,6 +598,7 @@ class AISummaryIn(BaseModel):
     text: str
     topic_name: str = "超话"
     stream: bool = False
+    question: str = ""
 
 
 @router.post("/ai_summary")
@@ -552,9 +617,12 @@ def ai_summary(data: AISummaryIn, user=Depends(auth.require_admin)):
 
     truncated_text = data.text[:8000] if len(data.text) > 8000 else data.text
 
-    # 总结模式：结构化总结
     system_content = AI_TOPIC_PROMPT.replace("{topic_name}", data.topic_name)
-    user_content = f"以下是「{data.topic_name}」超话的最新帖子内容：\n\n{truncated_text}"
+    if data.question.strip():
+        system_content = f"你是超话内容问答助手。只能依据下面帖子回答，不知道就明确说明。\n\n帖子样本：\n{truncated_text}"
+        user_content = data.question.strip()
+    else:
+        user_content = f"以下是「{data.topic_name}」超话的最新帖子内容：\n\n{truncated_text}"
     messages = [
         {"role": "system", "content": system_content},
         {"role": "user", "content": user_content},
@@ -665,6 +733,7 @@ def ai_summary(data: AISummaryIn, user=Depends(auth.require_admin)):
                 "ok": True,
                 "summary": summary,
                 "model": result.get("model", model),
+                "qa_mode": bool(data.question.strip()),
             }
             return out
     except requests.exceptions.Timeout:

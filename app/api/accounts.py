@@ -692,7 +692,8 @@ def _public(acc: dict) -> dict:
     acc = dict(acc)
     cookie = acc.get("cookie") or acc.get("cookie_raw") or ""
     acc["cookie_length"] = len(cookie) if cookie else 0
-    acc["cookie_preview"] = (cookie[:20] + "…") if len(cookie) > 20 else cookie
+    acc.pop("cookie_raw", None)
+    acc.pop("cookie", None)
     raw_proxy = acc.get("proxy", "") or ""
     # 代理只对外给“打码链接 + 可读名称 + 引用 id”，不给明文密码。
     acc["proxy"] = database.mask_proxy_url(raw_proxy)
@@ -887,6 +888,9 @@ def update_one(account_id: int, data: AccountUpdate, user: dict = Depends(auth.r
     if not existing:
         raise HTTPException(404, "账号不存在")
     payload = {k: v for k, v in data.model_dump().items() if v is not None}
+    if not payload.get("cookie_raw") and not payload.get("cookie"):
+        payload.pop("cookie_raw", None)
+        payload.pop("cookie", None)
     payload = _resolve_proxy(payload, existing.get("proxy") or "")
     database.update_account(account_id, payload)
     return _public(database.get_account(account_id))
@@ -897,6 +901,18 @@ def delete_one(account_id: int, user: dict = Depends(auth.require_admin)):
     if not database.delete_account(account_id):
         raise HTTPException(404, "账号不存在")
     return {"ok": True}
+
+
+@router.post("/{account_id}/renew")
+def renew_one(account_id: int, user: dict = Depends(auth.require_admin)):
+    from ..cookie_session import refresh_account_cookie
+    if not database.get_account(account_id):
+        raise HTTPException(404, "账号不存在")
+    result = refresh_account_cookie(account_id)
+    account = result.pop("account", None)
+    if account:
+        result["account"] = _public(account)
+    return result
 
 
 @router.post("/{account_id}/verify")
@@ -934,7 +950,13 @@ def verify_one(account_id: int, user: dict = Depends(auth.require_admin)):
         )
     except Exception as exc:
         return {"valid": False, "message": f"请求异常：{exc}"}
-    return {"valid": logged_in,
+    from ..cookie_session import persist_cookie_result
+    from ..weibo_client import merge_refreshed_cookies
+    merged, _ = merge_refreshed_cookies(session, cookie)
+    updated = persist_cookie_result(acc, merged, logged_in,
+                                    "healthy" if logged_in else "expired",
+                                    "" if logged_in else "登录态已失效，请重新扫码登录")
+    return {"valid": logged_in, "account": _public(updated),
             "message": "Cookie 有效" if logged_in else "Cookie 无效或已过期",
             "channel": channel}
 

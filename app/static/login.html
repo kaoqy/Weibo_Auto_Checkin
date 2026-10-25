@@ -4,7 +4,9 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>登录 · 微博签到管理面板</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="/style.css" />
+  <link rel="stylesheet" href="/enhancements.css" />
   <style>
     .login-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;
       background:linear-gradient(160deg,var(--bg) 0%,color-mix(in srgb,var(--accent-soft) 55%,var(--bg)) 100%)}
@@ -28,7 +30,7 @@
       <div class="logo">签</div>
       <div>
         <h1>微博签到管理面板</h1>
-        <p>请登录后继续操作</p>
+        <p>自动签到，也自动照看登录状态</p>
       </div>
     </div>
     <label>用户名</label>
@@ -46,7 +48,7 @@ const form = document.getElementById('loginForm'),
 form.addEventListener('submit', async e => {
   e.preventDefault();
   err.textContent = '';
-  btn.disabled = true; btn.textContent = '登录中…';
+  btn.disabled = true; btn.classList.add('is-loading'); btn.innerHTML = '<span class="btn-spinner"></span>正在验证…';
   try {
     const r = await fetch('/api/auth/login', {
       method: 'POST',
@@ -57,7 +59,7 @@ form.addEventListener('submit', async e => {
     if (!r.ok) { err.textContent = d.detail || '登录失败'; return; }
     location.href = '/';
   } catch(ex) { err.textContent = '网络错误：' + ex; }
-  finally { btn.disabled = false; btn.textContent = '登 录'; }
+  finally { btn.disabled = false; btn.classList.remove('is-loading'); btn.textContent = '登 录'; }
 });
 </script>
 </body>

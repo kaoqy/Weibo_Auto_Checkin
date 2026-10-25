@@ -43,13 +43,30 @@ themeSel.onchange = () => {
 
 /* ===== 导航 ===== */
 const VIEW_TITLES = {dashboard:'仪表盘', accounts:'账号管理', topics:'超话', proxies:'代理', logs:'签到日志', settings:'设置'};
+const VIEW_SUBTITLES = {dashboard:'签到、任务与账号健康，一屏掌握', accounts:'管理微博账号与登录态保活', topics:'发现热议，读懂每一次讨论', proxies:'节点连通性与归属地', logs:'每一次执行都有迹可循', settings:'按你的节奏自动化'};
+function skeleton(rows=4) { return '<div class="skeleton-stack" aria-label="加载中">'+Array.from({length:rows},()=>'<div class="skeleton-row"><i></i><i></i><i></i></div>').join('')+'</div>'; }
+async function withButton(button, task, label='处理中…') {
+  if (!button || button.disabled) return;
+  const previous = button.innerHTML;
+  button.disabled = true; button.classList.add('is-loading');
+  button.innerHTML = '<span class="btn-spinner"></span>' + label;
+  try { return await task(); } finally { button.disabled = false; button.classList.remove('is-loading'); button.innerHTML = previous; }
+}
+$('#mobileNavToggle').onclick = () => {
+  const open = document.body.classList.toggle('nav-open');
+  $('#mobileNavToggle').setAttribute('aria-expanded', String(open));
+  $('#sidebarScrim').hidden = !open;
+};
+$('#sidebarScrim').onclick = () => $('#mobileNavToggle').click();
 $$('.nav-item').forEach(btn => {
   btn.onclick = () => {
     $$('.nav-item').forEach(b=>b.classList.remove('active'));
     btn.classList.add('active');
+    if (document.body.classList.contains('nav-open')) $('#mobileNavToggle').click();
     $$('.view').forEach(v=>v.hidden = true);
     $('#view-' + btn.dataset.view).hidden = false;
     $('#view-title').textContent = VIEW_TITLES[btn.dataset.view];
+    $('#view-subtitle').textContent = VIEW_SUBTITLES[btn.dataset.view];
     // 离开仪表盘时清理定时器
     if (btn.dataset.view !== 'dashboard') {
       if (schedTimer) { clearInterval(schedTimer); schedTimer = null; }
@@ -66,6 +83,7 @@ $$('.nav-item').forEach(btn => {
 
 /* ===== 仪表盘 ===== */
 async function loadDashboard() {
+  $('#statGrid').innerHTML = skeleton(1);
   try {
     const [stats, tasks, accounts] = await Promise.all([
       api.get('/api/logs/stats'),
@@ -226,6 +244,7 @@ if (btnQuotePush) btnQuotePush.onclick = async ()=>{
 /* ===== 账号管理 ===== */
 let editingId = null;
 async function loadAccounts() {
+  $('#accTable tbody').innerHTML = '<tr><td colspan="7">'+skeleton(3)+'</td></tr>';
   try {
     const accounts = await api.get('/api/accounts');
     window.__accounts = accounts;
@@ -235,13 +254,14 @@ async function loadAccounts() {
         <td><input type="checkbox" class="acc-check" data-id="${a.id}" /></td>
         <td>${accountIdentity(a, true)}</td>
         <td>${a.enabled?statusBadge('success')+' 启用':'<span class="badge gray">已停用</span>'} <span style="color:var(--muted)">·</span> ${statusBadge(a.last_status)}</td>
-        <td style="color:var(--muted)">${a.cookie_length} 字符</td>
+        <td>${cookieHealth(a)}</td>
         <td>${a.proxy_label ? '<span class="badge">'+esc(a.proxy_label)+'</span>' : (a.proxy ? '<span class="badge">'+esc(a.proxy)+'</span>' : '<span class="badge gray">直连</span>')}</td>
         <td>${a.last_checkin||'从未'}</td>
         <td class="acc-actions">
           <button class="btn btn-ghost btn-sm" data-action="toggle" data-id="${a.id}">${a.enabled?'停用':'启用'}</button>
           <button class="btn btn-ghost btn-sm" data-action="edit" data-id="${a.id}">编辑</button>
           <button class="btn btn-ghost btn-sm" data-action="verify" data-id="${a.id}">校验</button>
+          <button class="btn btn-ghost btn-sm" data-action="renew" data-id="${a.id}">续签</button>
           <button class="btn btn-danger btn-sm" data-action="delete" data-id="${a.id}">删除</button>
         </td>
       </tr>`).join('') : '<tr><td colspan="7" style="color:var(--muted)">暂无账号</td></tr>';
@@ -254,12 +274,32 @@ async function loadAccounts() {
       if (action === 'toggle') toggleAccEnabled(id);
       else if (action === 'edit') openAccModal(id);
       else if (action === 'verify') verifyAcc(id);
+      else if (action === 'renew') renewAcc(id, btn);
       else if (action === 'delete') delAcc(id);
     };
     $('#accCheckAll').checked = false;
     updateSelCount();
     $('#btn-checkin-selected').disabled = true;
+    renderCookieOverview(accounts);
   } catch(e) { toast('加载账号失败', 'err'); }
+}
+
+function cookieHealth(a) {
+  const labels = {healthy:'健康', expiring:'临期保活', expired:'已过期', network:'网络异常', error:'保活异常', unknown:'待校验'};
+  const status = a.cookie_status || 'unknown';
+  const expiry = a.cookie_expires_at ? '<small>至 '+esc(a.cookie_expires_at.slice(0,16))+'</small>' : '<small>'+esc(a.cookie_checked_at ? '校验 '+a.cookie_checked_at.slice(5,16) : '尚未校验')+'</small>';
+  return '<span class="cookie-health '+esc(status)+'" title="'+esc(a.cookie_error || a.cookie_refreshed_at || '')+'"><i></i>'+labels[status]+'</span>'+expiry;
+}
+function renderCookieOverview(accounts) {
+  const healthy = accounts.filter(a=>a.cookie_status==='healthy').length;
+  const attention = accounts.filter(a=>['expired','error','network','expiring'].includes(a.cookie_status)).length;
+  $('#cookieOverview').innerHTML = '<span class="live-dot"></span><strong>Cookie 自动保活</strong><span>'+healthy+' 个健康 · '+attention+' 个需关注</span><small>网络异常自动退避重试，登录态失效时会通知</small>';
+}
+async function renewAcc(id, button) {
+  await withButton(button, async () => {
+    try { const r=await api.post(`/api/accounts/${id}/renew`, {}); toast(r.message, r.ok?'good':'err'); loadAccounts(); }
+    catch(e) { toast(e.message||'续签失败','err'); }
+  }, '续签中');
 }
 
 // ---------- 账号多选 + 批量操作 ----------
@@ -363,7 +403,8 @@ function openAccModal(id=null) {
   if (id) {
     accModalLoadPromise = api.get('/api/accounts/'+id).then(a=>{
       $('#m-name').value = a.name;
-      $('#m-cookie').value = a.cookie_raw || a.cookie || '';
+      $('#m-cookie').value = '';
+      $('#m-cookie').placeholder = '留空保留现有 Cookie；填写新值以替换';
       $('#m-remark').value = a.remark||'';
       $('#m-enabled').checked = !!a.enabled;
       populateProxySelect($('#m-proxy'), a.proxy_id ?? null);
@@ -1115,6 +1156,9 @@ async function loadSettings() {
     $('#s-topics_daily_push_cron').value = settingsCache.topics_daily_push_cron||'0 8 * * *';
     // 签到后自动刷新超话
     setVal('s-auto_refresh_topics', settingsCache.auto_refresh_topics==='1');
+    setVal('s-cookie_auto_refresh', settingsCache.cookie_auto_refresh!=='0');
+    $('#s-cookie_refresh_interval_hours').value = settingsCache.cookie_refresh_interval_hours||'12';
+    $('#s-cookie_renew_before_days').value = settingsCache.cookie_renew_before_days||'3';
     // 推送模式：all / selected
     if ($('#s-topics_daily_push_mode')) {
       $('#s-topics_daily_push_mode').value = settingsCache.topics_daily_push_mode||'all';
@@ -1154,6 +1198,9 @@ function collectSettings() {
     topics_daily_push_mode: val('s-topics_daily_push_mode').trim() || 'all',
     // 签到后自动刷新超话
     auto_refresh_topics: chk('s-auto_refresh_topics'),
+    cookie_auto_refresh: chk('s-cookie_auto_refresh'),
+    cookie_refresh_interval_hours: val('s-cookie_refresh_interval_hours','12'),
+    cookie_renew_before_days: val('s-cookie_renew_before_days','3'),
   };
 }
 $('#btn-save-all').onclick = async () => {
@@ -1290,10 +1337,23 @@ var currentPosts = [];
 var isLoadingPosts = false;
 var isLoadingList = false;
 var currentRequestId = 0;
+var allFetchedPosts = [];
+function renderFilteredPosts() {
+  const keyword = ($('#topicPostSearch').value || '').toLowerCase();
+  const hideReposts = $('#topicHideReposts').checked;
+  currentPosts = allFetchedPosts.filter(p => (!keyword || postFullText(p).toLowerCase().includes(keyword)) && (!hideReposts || !p.retweeted));
+  window.__currentPosts = currentPosts;
+  renderPosts(currentPosts);
+}
+$('#topicPostSearch').oninput = renderFilteredPosts;
+$('#topicHideReposts').onchange = renderFilteredPosts;
+$('#topicFetchCount').onchange = () => { if(currentTopicId) openTopicDetail(currentTopicId, document.querySelector('.topic-list-item.active'), true); };
+$('#topicSort').onchange = () => { if(currentTopicId) openTopicDetail(currentTopicId, document.querySelector('.topic-list-item.active'), true); };
+$('#analysisHours').onchange = () => { $('#analysisStats').hidden=true; };
 
 async function loadTopics(reset = true) {
   if (reset) {
-    $('#topicsList').innerHTML = '<div class="loading-progress"><div class="loading-bar"><div class="loading-bar-inner" style="width:30%"></div></div><div class="loading-text">正在加载超话列表...</div></div>';
+    $('#topicsList').innerHTML = skeleton(4);
   }
   try {
     const data = await api.get('/api/topics/all?limit=200');
@@ -1441,7 +1501,7 @@ async function openTopicDetail(topicId, el, forceRefresh = false) {
   headerHtml += '<button class="btn btn-ghost btn-sm" id="btn-push-tg" title="推送 AI 总结到 TG">📮 推送到 TG</button>';
   headerHtml += '</div>';
   $('#topicDetailHeader').innerHTML = headerHtml;
-  $('#topicPosts').innerHTML = '<div class="loading-progress"><div class="loading-bar"><div class="loading-bar-inner" style="width:60%"></div></div><div class="loading-text">正在加载帖子…</div></div>';
+  $('#topicPosts').innerHTML = skeleton(4);
   $('#aiSummaryContent').innerHTML = '<div class="ai-placeholder"><span class="ai-placeholder-icon">✨</span><p>点击「生成总结」按钮，AI 将自动分析超话帖子内容</p></div>';
   currentPosts = [];
 
@@ -1475,18 +1535,20 @@ async function openTopicDetail(topicId, el, forceRefresh = false) {
     };
   }
   try {
-    const url = '/api/topics/posts/' + encodeURIComponent(topicId) + '?count=20' + (forceRefresh ? '&force=true' : '');
+    const count = $('#topicFetchCount').value || 30;
+    const sort = $('#topicSort').value || 'latest';
+    const url = '/api/topics/posts/' + encodeURIComponent(topicId) + '?count='+count+'&pages=3&sort='+sort + (forceRefresh ? '&force=true' : '');
     const data = await api.get(url);
     if (requestId !== currentRequestId) return;
-    currentPosts = data.posts || [];
-    window.__currentPosts = currentPosts;
+    allFetchedPosts = data.posts || [];
+    currentPosts = allFetchedPosts;
+    if (currentPosts.length) renderFilteredPosts();
     if (!currentPosts.length) {
       const err = data.error || '未知错误';
       const tried = data.tried ? `（已尝试 ${data.tried} 个端点）` : '';
       $('#topicPosts').innerHTML = '<div style="color:var(--muted);padding:20px;text-align:center">暂无帖子数据<br><span style="font-size:11px">' + esc(err) + tried + '</span></div>';
       return;
     }
-    renderPosts(currentPosts);
     // 显示缓存状态
     if (data.cached) {
       const header = $('#topicDetailHeader');
@@ -1536,7 +1598,7 @@ function linkifyText(text) {
     } catch(e) {
       display = trimmed.length > 60 ? trimmed.slice(0, 30) + '…' : trimmed;
     }
-    return '<a href="' + trimmed + '" target="_blank" rel="noopener noreferrer" class="topic-link">' + display + '</a>' + extra;
+    return '<a href="' + esc(trimmed) + '" target="_blank" rel="noopener noreferrer" class="topic-link">' + esc(display) + '</a>' + esc(extra);
   });
   return html;
 }
@@ -1611,7 +1673,7 @@ function renderPosts(posts) {
         '<span>🔁 ' + (p.reposts_count || 0) + '</span>' +
         '<span>💬 ' + (p.comments_count || 0) + '</span>' +
         '<span>❤️ ' + (p.attitudes_count || 0) + '</span>' +
-        (mid ? '<a href="https://weibo.com/detail/' + mid + '" target="_blank" rel="noopener" class="topic-post-link">原文 ↗</a>' : '') +
+        (p.url ? '<a href="' + esc(p.url) + '" target="_blank" rel="noopener" class="topic-post-link">原文 ↗</a>' : '') +
       '</div>' +
     '</div>';
   }).join('');
@@ -1667,7 +1729,7 @@ document.addEventListener('keydown', function(e) {
 
 // AI 总结（仅流式输出）
 $('#btn-ai-summary').onclick = async () => {
-  if (!currentPosts || !currentPosts.length) {
+  if (!currentTopicId) {
     toast('请先选择超话并拉取帖子', 'warn');
     return;
   }
@@ -1683,10 +1745,12 @@ $('#btn-ai-summary').onclick = async () => {
   box.innerHTML = '<div class="ai-summary-loading"><span class="qr-spinner" style="width:16px;height:16px;border-width:2px"></span> AI 正在思考…</div>';
 
   try {
-    var resp = await fetch('/api/topics/ai_summary', {
+    var resp = await fetch('/api/topics/analyze/'+encodeURIComponent(currentTopicId), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: text, topic_name: currentTopicName, stream: true }),
+      body: JSON.stringify({ count:+$('#topicFetchCount').value||30, pages:3,
+        hours:+$('#analysisHours').value||0, keyword:$('#analysisKeyword').value.trim(),
+        hide_reposts:$('#topicHideReposts').checked }),
     });
 
     if (!resp.ok) {
@@ -1744,6 +1808,11 @@ $('#btn-ai-summary').onclick = async () => {
 
           try {
             var chunkData = JSON.parse(jsonStr);
+            if (chunkData.stats) {
+              const stats=chunkData.stats;
+              $('#analysisStats').hidden=false;
+              $('#analysisStats').innerHTML='<span><b>'+stats.posts+'</b> 去重帖子</span><span><b>'+stats.authors+'</b> 作者</span><span><b>'+stats.likes+'</b> 点赞</span><span><b>'+stats.comments+'</b> 评论</span>';
+            }
             if (chunkData.text) {
               accumulated += chunkData.text;
               summaryDiv.innerHTML = formatAiSummary(accumulated);

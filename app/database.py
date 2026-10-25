@@ -62,6 +62,12 @@ def init_db() -> None:
             last_status  TEXT NOT NULL DEFAULT 'unknown', -- success/failed/partial/unknown
             last_checkin TEXT,                         -- 上次签到时间
             last_message TEXT NOT NULL DEFAULT '',
+            cookie_status TEXT NOT NULL DEFAULT 'unknown',
+            cookie_checked_at TEXT NOT NULL DEFAULT '',
+            cookie_refreshed_at TEXT NOT NULL DEFAULT '',
+            cookie_expires_at TEXT NOT NULL DEFAULT '',
+            cookie_failure_count INTEGER NOT NULL DEFAULT 0,
+            cookie_error TEXT NOT NULL DEFAULT '',
             created_at   TEXT NOT NULL,
             updated_at   TEXT NOT NULL
         );
@@ -216,6 +222,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
     account_additions = {
         "avatar_url": "TEXT NOT NULL DEFAULT ''",
         "weibo_uid": "TEXT NOT NULL DEFAULT ''",
+        "cookie_status": "TEXT NOT NULL DEFAULT 'unknown'",
+        "cookie_checked_at": "TEXT NOT NULL DEFAULT ''",
+        "cookie_refreshed_at": "TEXT NOT NULL DEFAULT ''",
+        "cookie_expires_at": "TEXT NOT NULL DEFAULT ''",
+        "cookie_failure_count": "INTEGER NOT NULL DEFAULT 0",
+        "cookie_error": "TEXT NOT NULL DEFAULT ''",
     }
     for name, definition in account_additions.items():
         if name not in account_cols:
@@ -260,6 +272,11 @@ def _seed_defaults(conn: sqlite3.Connection) -> None:
         "checkin_delay_min": "3",     # 超话间随机延时（秒）
         "checkin_delay_max": "8",
         "cookie_valid": "0",          # 最近一次 Cookie 是否校验过（占位）
+        "cookie_auto_refresh": "1",
+        "cookie_refresh_interval_hours": "12",
+        "cookie_renew_before_days": "3",
+        "topics_fetch_pages": "3",
+        "topics_fetch_count": "30",
         "auth_enabled": "1",          # 是否启用登录保护
         "admin_initialized": "0",     # 默认管理员是否已初始化
         # ---- v7.0 新增 ----
@@ -455,7 +472,10 @@ def add_account(data: dict) -> int:
 
 def update_account(account_id: int, data: dict) -> bool:
     conn = _get_conn()
-    allowed = ("name", "cookie", "cookie_raw", "enabled", "proxy", "proxy_index", "remark", "avatar_url", "weibo_uid")
+    allowed = ("name", "cookie", "cookie_raw", "enabled", "proxy", "proxy_index",
+               "remark", "avatar_url", "weibo_uid", "cookie_status",
+               "cookie_checked_at", "cookie_refreshed_at", "cookie_expires_at",
+               "cookie_failure_count", "cookie_error")
     fields = {k: v for k, v in data.items() if k in allowed}
     if not fields:
         return False
@@ -803,6 +823,58 @@ def get_notifications(limit: int = 10) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+# ========================= 账号关注超话选择 =========================
+
+def list_topic_selections(account_id: int) -> list[dict]:
+    rows = _get_conn().execute(
+        "SELECT * FROM account_topic_selections WHERE account_id = ? ORDER BY topic_name",
+        (account_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def has_topic_selections(account_id: int) -> bool:
+    return _get_conn().execute(
+        "SELECT 1 FROM account_topic_selections WHERE account_id = ? LIMIT 1", (account_id,)
+    ).fetchone() is not None
+
+
+def replace_topic_selections(account_id: int, items: list[dict]) -> int:
+    conn = _get_conn()
+    now = _now()
+    with conn:
+        conn.execute("DELETE FROM account_topic_selections WHERE account_id = ?", (account_id,))
+        conn.executemany(
+            "INSERT INTO account_topic_selections (account_id, topic_name, topic_id, enabled, last_seen, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+            [(account_id, (it.get("name") or "").strip(), it.get("topic_id") or "",
+              1 if it.get("enabled", True) else 0, it.get("last_seen") or now, now) for it in items],
+        )
+    return len(items)
+
+
+def update_topic_enabled(account_id: int, topic_name: str, enabled: bool) -> bool:
+    conn = _get_conn()
+    cur = conn.execute("UPDATE account_topic_selections SET enabled=?, updated_at=? WHERE account_id=? AND topic_name=?",
+                       (1 if enabled else 0, _now(), account_id, topic_name))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def set_topic_last_status(account_id: int, topic_name: str, status: str) -> None:
+    conn = _get_conn()
+    conn.execute("UPDATE account_topic_selections SET last_status=?, updated_at=? WHERE account_id=? AND topic_name=?",
+                 (status, _now(), account_id, topic_name))
+    conn.commit()
+
+
+def filter_enabled_topics(account_id: int, topics: list[dict]) -> list[dict]:
+    selections = list_topic_selections(account_id)
+    if not selections:
+        return topics
+    enabled_names = {s["topic_name"] for s in selections if s.get("enabled")}
+    return [t for t in topics if t.get("name") in enabled_names]
+
+
 # ========================= 用户 & 会话 =========================
 
 def create_user(username: str, password_hash: str) -> int:
@@ -842,8 +914,8 @@ def count_users() -> int:
     return _get_conn().execute("SELECT COUNT(*) c FROM users").fetchone()["c"]
 
 
-def create_session(token: str, user_id: int, ttl_hours: int = 168) -> None:
-    """创建会话，默认 7 天有效。"""
+def create_session(token: str, user_id: int, ttl_hours: int = 720) -> None:
+    """创建会话，默认 30 天有效。"""
     from datetime import timedelta
 
     conn = _get_conn()
@@ -857,7 +929,7 @@ def create_session(token: str, user_id: int, ttl_hours: int = 168) -> None:
     conn.commit()
 
 
-def get_session_user(token: str) -> dict | None:
+def get_session_user(token: str, sliding: bool = False) -> dict | None:
     """根据 token 返回用户（校验有效期）。"""
     if not token:
         return None
@@ -871,6 +943,9 @@ def get_session_user(token: str) -> dict | None:
         conn.execute("DELETE FROM sessions WHERE token = ?", (token,))
         conn.commit()
         return None
+    if sliding:
+        conn.execute("UPDATE sessions SET expires_at=? WHERE token=?",
+                     ((datetime.now() + timedelta(hours=720)).strftime("%Y-%m-%d %H:%M:%S"), token))
     # 清理过期会话
     conn.execute("DELETE FROM sessions WHERE expires_at < ?", (_now(),))
     conn.commit()

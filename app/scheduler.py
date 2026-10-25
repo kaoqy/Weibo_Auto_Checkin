@@ -123,15 +123,17 @@ def run_checkin(trigger_type: str = "manual", account_ids: list[int] | None = No
             proxy_url = acc.get("proxy") or None
 
             log.info("👤 [%s] 账号：%s", log_label, acc.get("name"))
-            result = run_account_checkin(cookie_dict, opts, proxy_url=proxy_url)
+            result = run_account_checkin(cookie_dict, opts, proxy_url=proxy_url,
+                                          account_id=acc.get("id"))
             channel = "socks" if proxy_url else "direct"
 
             # 仅在 Session 实际获得 Cookie 更新时回写完整合并值。
             # cookie 与 cookie_raw 始终保持一致，且只使用客户端返回的原始值，
             # 不使用任何用于日志或 API 展示的脱敏内容。
+            from .cookie_session import persist_cookie_result
             cookie_changed = result.get("cookie_changed") or []
             refreshed_cookie = result.get("cookie") or {}
-            if cookie_changed and refreshed_cookie:
+            if cookie_changed and refreshed_cookie and result.get("failure_type") not in ("cookie_invalid", "network"):
                 new_cookie_str = cookie_to_string(refreshed_cookie)
                 database.update_account(acc["id"], {
                     "cookie": new_cookie_str,
@@ -148,6 +150,13 @@ def run_checkin(trigger_type: str = "manual", account_ids: list[int] | None = No
                 acc["id"], result["status"],
                 result.get("message") or result.get("status"),
             )
+            if result.get("status") in ("success", "partial"):
+                persist_cookie_result(acc, result.get("cookie") or cookie_dict, True, "healthy")
+            elif result.get("failure_type") == "cookie_invalid":
+                database.update_account(acc["id"], {"cookie_status": "expired", "cookie_error": result.get("message", "")})
+            for r in result.get("results", []) or []:
+                if r.get("name"):
+                    database.set_topic_last_status(acc["id"], r["name"], "ok" if r.get("success") else "fail")
 
             entry = {
                 "name": acc.get("name", "未命名账号"),
@@ -312,6 +321,15 @@ def reload_schedule() -> None:
         except Exception as exc:
             log.error("定时表达式无效 %r：%s", cron_expr, exc)
 
+    # Cookie 保活调度（具体账号间隔与退避由 should_refresh 决定）
+    existing_cookie = scheduler.get_job("cookie_maintenance")
+    if existing_cookie:
+        existing_cookie.remove()
+    if database.get_setting("cookie_auto_refresh", "1") == "1":
+        scheduler.add_job(run_cookie_maintenance, "interval", hours=1,
+                          id="cookie_maintenance", name="Cookie 自动续签",
+                          max_instances=1, coalesce=True, misfire_grace_time=3600)
+
     # 每日超话推送任务
     existing_push = scheduler.get_job("topics_daily_push")
     if existing_push:
@@ -356,7 +374,14 @@ def start_scheduler() -> None:
                               misfire_grace_time=300, coalesce=True)
             log.info("已配置每日超话总结推送：%s", fixed)
     reload_schedule()
+    if database.get_setting("cookie_auto_refresh", "1") == "1" and database.get_accounts():
+        scheduler.add_job(run_cookie_maintenance, id="cookie_startup", replace_existing=True)
     log.info("调度器已启动")
+
+
+def run_cookie_maintenance() -> dict:
+    from .cookie_session import run_cookie_maintenance as run
+    return run()
 
 
 def _auto_refresh_topics_for_account(acc: dict, cookie_dict: dict,

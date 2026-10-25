@@ -34,7 +34,7 @@ PUBLIC_API_PREFIXES = (
     "/api/auth/login", "/api/auth/me", "/api/health",
     "/api/auth/init", "/api/auth/needs-init",
 )
-PUBLIC_STATIC = ("/login.html", "/style.css", "/favicon.ico")
+PUBLIC_STATIC = ("/login.html", "/style.css", "/enhancements.css", "/favicon.ico", "/favicon.svg")
 
 
 @asynccontextmanager
@@ -87,7 +87,7 @@ async def auth_guard(request: Request, call_next):
     # 首次部署：无用户则强制到 init 页（除 init 相关接口和静态资源外）
     needs_init = database.count_users() == 0
     if needs_init:
-        if path in ("/init.html", "/style.css", "/api/auth/init", "/api/auth/needs-init", "/api/health", "/favicon.ico"):
+        if path in ("/init.html", "/style.css", "/enhancements.css", "/api/auth/init", "/api/auth/needs-init", "/api/health", "/favicon.ico", "/favicon.svg"):
             return await call_next(request)
         if path.startswith("/api/"):
             from fastapi.responses import JSONResponse
@@ -105,7 +105,9 @@ async def auth_guard(request: Request, call_next):
         return await call_next(request)
 
     token = request.cookies.get(auth.COOKIE_NAME, "")
-    user = auth.database.get_session_user(token) if token else None
+    user = auth.database.get_session_user(token, sliding=True) if token else None
+    if user:
+        request.state.session_token = token
 
     if request.url.path.startswith("/api/"):
         # API：未登录返回 401 JSON
@@ -134,6 +136,9 @@ async def _no_cache_static(request: Request, call_next):
     """静态资源不缓存，避免前端更新后旧 HTML/JS 残留导致功能异常。
     HTML 每次重新验证；JS/CSS 带版本号查询串，配合 no-cache 确保取到最新。"""
     resp = await call_next(request)
+    session_token = getattr(request.state, "session_token", "")
+    if session_token:
+        auth.set_session_cookie(resp, session_token, request)
     req_path = request.url.path
     if req_path.endswith((".html", ".js", ".css")) or req_path in ("/", "/index.html", "/login.html"):
         resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"

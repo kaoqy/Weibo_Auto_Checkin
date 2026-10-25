@@ -4,7 +4,9 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>初始化 · 微博签到管理面板</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="/style.css" />
+  <link rel="stylesheet" href="/enhancements.css" />
   <style>
     .login-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg)}
     .login-card{width:380px;max-width:92vw;background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:34px 30px;box-shadow:var(--shadow)}
@@ -30,7 +32,7 @@
         <p>首次部署，请设置登录账号</p>
       </div>
     </div>
-    <p class="init-hero">这是首次部署（系统尚无用户）。设置管理者账号密码后即可登录使用。</p>
+    <p class="init-hero">设置管理员账号密码，开启自动签到与 Cookie 保活。所有数据保存在你的服务器中。</p>
     <label>用户名</label>
     <input type="text" id="username" autocomplete="off" required autofocus placeholder="例如 admin" />
     <label>密码（至少 6 位）</label>
@@ -50,14 +52,14 @@ form.addEventListener('submit', async e => {
   if (u.length < 2) { err.textContent='用户名至少 2 个字符'; return; }
   if (p1.length < 6) { err.textContent='密码至少 6 位'; return; }
   if (p1 !== p2) { err.textContent='两次密码不一致'; return; }
-  btn.disabled = true; btn.textContent = '创建中…';
+  btn.disabled = true; btn.classList.add('is-loading'); btn.innerHTML = '<span class="btn-spinner"></span>正在创建…';
   try {
     const r = await fetch('/api/auth/init', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({username:u, password:p1})});
     if (r.redirected) { location.href = r.url; return; }
     const d = await r.json();
-    if (!r.ok) { err.textContent = d.detail || '初始化失败'; btn.disabled=false; btn.textContent='创建并登录'; return; }
+    if (!r.ok) { err.textContent = d.detail || '初始化失败'; btn.disabled=false; btn.classList.remove('is-loading'); btn.textContent='创建并登录'; return; }
     location.href = '/';
-  } catch(ex) { err.textContent='网络错误：'+ex; btn.disabled=false; btn.textContent='创建并登录'; }
+  } catch(ex) { err.textContent='网络错误：'+ex; btn.disabled=false; btn.classList.remove('is-loading'); btn.textContent='创建并登录'; }
 });
 </script>
 </body>

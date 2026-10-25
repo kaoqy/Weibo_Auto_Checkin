@@ -160,11 +160,13 @@ def update_settings(values: dict, user: dict = Depends(auth.require_admin)):
         # v1.3.0 超话推送 & 自动刷新
         "topics_daily_push", "topics_daily_push_cron", "topics_daily_push_mode",
         "auto_refresh_topics",
+        "cookie_auto_refresh", "cookie_refresh_interval_hours", "cookie_renew_before_days",
+        "topics_fetch_pages", "topics_fetch_count",
     }
     updates = {k: v for k, v in values.items() if k in known}
     database.set_settings(updates)
     # 若涉及调度，重建定时任务
-    if "schedule_enabled" in updates or "schedule_cron" in updates or "topics_daily_push" in updates or "topics_daily_push_cron" in updates or "topics_daily_push_mode" in updates or "auto_refresh_topics" in updates:
+    if known.intersection(updates):
         scheduler.reload_schedule()
     return database.get_settings()
 

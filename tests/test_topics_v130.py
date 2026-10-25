@@ -228,6 +228,15 @@ def test_ai_summary_without_config(client):
     assert "未配置" in body["error"]
 
 
+def test_account_api_does_not_return_cookie(client):
+    created = client.post("/api/accounts", json={"name": "保密", "cookie_raw": "SUB=secret; SCF=private"}).json()
+    assert "cookie_raw" not in created and "cookie" not in created
+    fetched = client.get(f"/api/accounts/{created['id']}").json()
+    assert "SUB=secret" not in str(fetched)
+    client.put(f"/api/accounts/{created['id']}", json={"name": "改名", "cookie_raw": ""})
+    assert "SUB=secret" in db.get_account(created["id"])["cookie_raw"]
+
+
 def test_ai_summary_with_mock(client, monkeypatch):
     """配置 AI 后应调用 API。"""
     db.set_settings({
