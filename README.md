@@ -147,7 +147,8 @@ docker compose up -d --build
 
 ```bash
 # 后端测试（需 .venv 已装好依赖）
-.venv/bin/python -m pytest tests/ -v          # 105 个测试
+.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/python -m pytest tests/ -v          # 后端与 API 测试
 
 # 前端渲染测试（自动装 jsdom）
 node tests/frontend-render.test.js

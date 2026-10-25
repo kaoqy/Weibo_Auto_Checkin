@@ -1,0 +1,4 @@
+-r requirements.txt
+pytest>=8,<10
+# Starlette 1.x moved TestClient's HTTP transport to this separate package.
+httpx2>=0.28
