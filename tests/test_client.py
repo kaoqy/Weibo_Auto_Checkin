@@ -135,6 +135,17 @@ def test_run_account_checkin_accepts_account_id_and_filters_topics(monkeypatch):
     assert selected == [42]
 
 
+def test_checkin_v121_minus_100_does_not_raise(monkeypatch):
+    from app.weibo_client import run_account_checkin
+    monkeypatch.setattr("app.weibo_client.verify_cookie", lambda *args, **kwargs: (True, "st"))
+    monkeypatch.setattr("app.weibo_client.request_json", lambda *args, **kwargs: {"ok": -100})
+    monkeypatch.setattr("app.weibo_client.database.filter_enabled_topics", lambda account_id, topics: topics)
+    result = run_account_checkin({"SUB": "valid"}, CheckinOptions(), account_id=7)
+    assert result["status"] == "success"
+    assert result["message"] == "没有需要签到的超话"
+    assert result["total"] == 0
+
+
 # ---------- CheckinOptions ----------
 
 def test_checkin_options_from_settings():

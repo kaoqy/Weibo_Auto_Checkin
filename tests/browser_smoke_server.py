@@ -23,6 +23,8 @@ def config():
 
 @upstream.get("/api/container/getIndex")
 def topics(containerid: str = ""):
+    if containerid == "100803_-_followsuper" and os.environ.get("WCM_TEST_MINUS_100") == "1":
+        return {"ok": -100}
     if containerid == "100803_-_followsuper":
         return {"ok": 1, "data": {"cards": [{"card_group": [{"card_type": 8, "title_sub": "测试超话", "scheme": "sinaweibo://page/?containerid=100808test", "buttons": [{"name": "签到", "scheme": "/checkin"}], "desc": "集成测试"}]}], "cardlistInfo": {"since_id": ""}}}
     return {"ok": 1, "data": {"cards": [{"mblog": {"id": "1001", "text": "今天讨论新舞台 #巡演#", "created_at": "2026-10-25 12:00:00", "attitudes_count": 88, "comments_count": 12, "user": {"id": 1, "screen_name": "测试作者"}}}], "cardlistInfo": {"since_id": ""}}}

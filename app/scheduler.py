@@ -59,7 +59,8 @@ def prepare_checkin(trigger_type: str, account_ids: list[int] | None = None) -> 
     database.create_task(task_id, trigger_type)
     _current_run = {"task_id": task_id, "status": "running", "trigger_type": trigger_type,
                     "started_at": started, "progress": 0, "accounts_total": len(accounts),
-                    "accounts_done": 0}
+                    "accounts_done": 0, "success": 0, "fail": 0, "current_account": "",
+                    "stage": "prepare", "detail": []}
     return len(accounts)
 
 
@@ -163,6 +164,8 @@ def run_checkin(trigger_type: str = "manual", account_ids: list[int] | None = No
                 proxy_url = acc.get("proxy") or None
 
                 log.info("👤 [%s] 账号：%s", log_label, acc.get("name"))
+                _current_run["current_account"] = acc.get("name", "未命名账号")
+                _current_run["stage"] = "checkin"
                 result = run_account_checkin(cookie_dict, opts, proxy_url=proxy_url,
                                               account_id=acc.get("id"))
                 if result.get("failure_type") not in ("cookie_invalid", "network"):
@@ -219,6 +222,10 @@ def run_checkin(trigger_type: str = "manual", account_ids: list[int] | None = No
                 nonlocal_map["done"] += 1
                 _current_run["accounts_done"] = nonlocal_map["done"]
                 _current_run["progress"] = round(nonlocal_map["done"] / len(accounts) * 100)
+                _current_run["success"] = nonlocal_map["success"]
+                _current_run["fail"] = nonlocal_map["fail"]
+                _current_run["detail"] = list(overall)
+                _current_run["current_account"] = acc.get("name", "未命名账号")
             return entry
 
         # 用可变字典做并发计数器/合计
@@ -280,6 +287,10 @@ def _finish(task_id: str, status: str, message: str, started: str,
     summary["status"] = status
     summary["finished_at"] = finished
     summary["message"] = message
+    if _current_run is not None:
+        _current_run.update(status=status, stage="done", progress=100,
+                            success=summary.get("success", 0), fail=summary.get("fail", 0),
+                            detail=summary.get("detail", []), current_account="")
     database.set_settings({"last_checkin_time": finished})
     _current_run = None
     _last_run_summary = summary

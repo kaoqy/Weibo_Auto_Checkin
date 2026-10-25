@@ -1234,8 +1234,7 @@ async function startCheckin(path, body={}) {
   $('#runModal').hidden = false;
   document.body.classList.add('modal-open');
   $('#runBar').style.width='0%';
-  $('#runInfo').textContent='正在启动签到任务…';
-  $('#runLines').innerHTML='';
+  resetRunModal();
   try {
     const result = await api.post(path, body);
     pollRun();
@@ -1246,44 +1245,101 @@ async function startCheckin(path, body={}) {
   }
 }
 $('#btn-run').onclick = () => startCheckin('/api/checkin/run').catch(e=>toast(e.message||'启动失败','err'));
-$('#runModalClose').onclick = ()=> {
-  $('#runModal').hidden=true;
-  document.body.classList.remove('modal-open');
-  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
-};
+$('#runModalClose').onclick = closeRunModal;
+$('#runModalBackground').onclick = closeRunModal;
 
 let pollTimer;
+let runFinished = false;
+function resetRunModal() {
+  runFinished = false;
+  $('#runTitle').textContent='正在准备签到';
+  $('#runInfo').textContent='正在启动签到任务…';
+  $('#runPercent').textContent='0%';
+  $('#runBar').style.width='0%';
+  $('#runProgress').setAttribute('aria-valuenow','0');
+  $('#runAccountCount').textContent='0 / 0';
+  $('#runSuccessCount').textContent='0';
+  $('#runFailCount').textContent='0';
+  $('#runTaskId').textContent='';
+  $('#runCurrent').innerHTML='<span class="run-current-dot"></span><span>等待调度器分配账号</span>';
+  $('#runLines').innerHTML='<div class="run-empty">任务开始后，这里会显示每个账号的结果</div>';
+  $('#runStateBadge').className='run-state-badge running';
+  $('#runStateBadge').textContent='运行中';
+  updateRunStages('prepare');
+}
+function updateRunStages(stage) {
+  const order=['prepare','accounts','checkin','done'], current=order.indexOf(stage);
+  $$('.run-stage').forEach(el=>{
+    const index=order.indexOf(el.dataset.stage);
+    el.classList.toggle('active',index===current);
+    el.classList.toggle('complete',index<current);
+  });
+}
+function renderRunAccount(account) {
+  const success=account.status==='success', partial=account.status==='partial';
+  const label=success?'成功':partial?'部分完成':'失败';
+  const topics=(account.results||[]).map(t=>`${esc(t.name||'超话')} · ${t.success?'成功':'失败'}${t.rank?' · 第 '+esc(t.rank)+' 名':''}`).join('<br>');
+  return `<div class="run-account ${success?'success':partial?'partial':'failed'}"><div class="run-account-head"><strong>${esc(account.name||'未命名账号')}</strong><span>${label}</span></div><div class="run-account-stats">${account.success||0} 成功 · ${account.fail||0} 失败 · ${esc(account.channel||'直连')}</div><div class="run-account-message">${esc(account.message||'')}</div>${topics?'<details><summary>查看超话结果</summary><div>'+topics+'</div></details>':''}</div>`;
+}
+function renderRunProgress(run) {
+  const percent=Math.max(0,Math.min(100,Number(run.progress)||0));
+  $('#runPercent').textContent=percent+'%';
+  $('#runBar').style.width=percent+'%';
+  $('#runProgress').setAttribute('aria-valuenow',String(percent));
+  $('#runAccountCount').textContent=`${run.accounts_done||0} / ${run.accounts_total||0}`;
+  $('#runSuccessCount').textContent=run.success||0;
+  $('#runFailCount').textContent=run.fail||0;
+  $('#runTaskId').textContent=run.task_id?'任务 '+run.task_id:'';
+  updateRunStages(run.stage||'accounts');
+  if(run.current_account) $('#runCurrent').innerHTML='<span class="run-current-dot"></span><span>正在处理 <strong>'+esc(run.current_account)+'</strong></span>';
+  else if(run.accounts_done) $('#runCurrent').innerHTML='<span class="run-current-dot"></span><span>正在汇总本次签到结果</span>';
+  $('#runLines').innerHTML=(run.detail||[]).length ? run.detail.map(renderRunAccount).join('') : '<div class="run-empty">账号正在验证，结果将在完成后显示</div>';
+  $('#runInfo').textContent=`已处理 ${run.accounts_done||0} / ${run.accounts_total||0} 个账号`;
+}
+function renderRunFinished(summary) {
+  runFinished=true;
+  const labels={success:'签到完成',partial:'部分完成',failed:'签到失败',skipped:'任务已跳过'};
+  $('#runTitle').textContent=labels[summary.status]||'任务结束';
+  $('#runStateBadge').className='run-state-badge '+summary.status;
+  $('#runStateBadge').textContent=labels[summary.status]||summary.status;
+  $('#runPercent').textContent='100%'; $('#runBar').style.width='100%';
+  $('#runProgress').setAttribute('aria-valuenow','100');
+  $('#runAccountCount').textContent=`${summary.accounts||0} / ${summary.accounts||0}`;
+  $('#runSuccessCount').textContent=summary.success||0;
+  $('#runFailCount').textContent=summary.fail||0;
+  $('#runInfo').textContent=summary.message==='完成'?'本次任务已完成':summary.message||'任务结束';
+  $('#runCurrent').innerHTML='<span class="run-current-dot"></span><span>'+((summary.fail||0)?'请查看失败账号的说明':'所有账号均已处理完成')+'</span>';
+  $('#runLines').innerHTML=(summary.detail||[]).length ? summary.detail.map(renderRunAccount).join('') : '<div class="run-empty">'+esc(summary.message||'本次没有需要签到的账号或超话')+'</div>';
+  updateRunStages('done');
+  $('#runModalBackground').textContent='关闭';
+}
+function closeRunModal() {
+  $('#runModal').hidden=true;
+  document.body.classList.remove('modal-open');
+  if(pollTimer) { clearTimeout(pollTimer); pollTimer=null; }
+}
 function pollRun() {
   clearTimeout(pollTimer);
   api.get('/api/checkin/status').then(s=>{
     if (s.running && s.run) {
-      const r = s.run;
-      $('#runInfo').textContent = `账号 ${r.accounts_done||0}/${r.accounts_total||0}（${r.progress||0}%）· ${r.started_at}`;
-      $('#runBar').style.width = (r.progress||0)+'%';
-      addRunLine(`运行中… 已完成 ${r.accounts_done||0}/${r.accounts_total||0} 个账号`);
+      renderRunProgress(s.run);
       pollTimer = setTimeout(pollRun, 1500);
+    } else if (s.run && (s.run.status === 'done' || s.run.stage === 'done')) {
+      renderRunFinished(s.run);
+      loadDashboard(); loadAccounts(); loadLogs();
     } else {
       // 结束
       $('#runBar').style.width='100%';
       api.get('/api/checkin/last').then(l=>{
         const sm = l.summary;
         if (sm) {
-          const label = sm.status==='success'?'完成':sm.status==='failed'?'失败':sm.status==='skipped'?'已跳过':'部分完成';
-          $('#runInfo').textContent = `${label}（${sm.status}）· 账号${sm.accounts||0} · 成功${sm.success||0} · 失败${sm.fail||0}`;
-          addRunLine(`完成：${sm.message||''}`);
+          renderRunFinished(sm);
         }
         loadDashboard(); loadAccounts(); loadLogs();
       });
       clearTimeout(pollTimer);
     }
   }).catch(()=>{ clearTimeout(pollTimer); });
-}
-function addRunLine(txt){
-  const box = $('#runLines');
-  const div = document.createElement('div');
-  div.className='ln'; div.textContent = txt;
-  box.appendChild(div);
-  box.scrollTop = box.scrollHeight;
 }
 
 /* ===== 版本 ===== */

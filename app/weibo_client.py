@@ -557,11 +557,6 @@ def request_via_proxy(session, method, url, channel="auto", proxy=None,
 
 def request_json(session, method, url, channel="auto", proxy=None,
                  force=False, allow_fallback=True, **kwargs):
-    # Only use the caller's cookies when the session has none. Passing an old
-    # Cookie header on every request can overwrite freshly issued cookies.
-    request_cookies = kwargs.pop("cookies", None)
-    if request_cookies and not session.cookies:
-        kwargs["cookies"] = request_cookies
     response = request_via_proxy(
         session, method, url, channel=channel, proxy=proxy,
         force=force, allow_fallback=allow_fallback,
@@ -591,8 +586,6 @@ def verify_cookie(session, cookies, channel="auto", proxy=None,
         raise
     except requests.exceptions.RequestException as exc:
         raise NetworkError(f"验证 Cookie 网络失败：{exc}") from exc
-    except RuntimeError as exc:
-        raise NetworkError(f"验证 Cookie 响应失败：{exc}") from exc
     except Exception as exc:
         log.warning("验证 Cookie 失败：%s", exc)
         return False, None
@@ -624,11 +617,8 @@ def get_followed_topics(session, cookies, channel="auto", proxy=None,
         )
         ok_val = payload.get("ok")
         if ok_val != 1 and ok_val != "1":
-            # 不要把登录过期、风控或微博接口错误误报成「没有关注超话」。
-            detail = payload.get("msg") or payload.get("errmsg") or payload.get("error") or ok_val
-            if not topics:
-                raise RuntimeError(f"微博未能返回关注超话列表：{detail}")
-            log.warning("关注超话翻页提前结束：%s", detail)
+            # v1.2.1：关注列表与登录验证独立，-100 不在签到流程中抛异常。
+            log.info("关注超话列表接口结束读取：%s", ok_val)
             break
         data = payload.get("data") or {}
         for card in data.get("cards", []):
@@ -839,8 +829,7 @@ def run_account_checkin(cookie_dict: dict, opts: CheckinOptions,
                        cookie_dict, [], channel, failure_type="network")
 
     if not logged_in:
-        merged, _ = merge_refreshed_cookies(session, cookie_dict)
-        changed = cookie_changes(session, cookie_dict)
+        merged, changed = merge_refreshed_cookies(session, cookie_dict)
         return _bundle("failed", "Cookie 无效或已过期，请重新登录", 0, 0, 0,
                        [], merged, changed, channel,
                        failure_type="cookie_invalid")
@@ -859,8 +848,7 @@ def run_account_checkin(cookie_dict: dict, opts: CheckinOptions,
         topics = database.filter_enabled_topics(account_id, topics)
 
     if not topics:
-        merged, _ = merge_refreshed_cookies(session, cookie_dict)
-        changed = cookie_changes(session, cookie_dict)
+        merged, changed = merge_refreshed_cookies(session, cookie_dict)
         return _bundle("success", "没有需要签到的超话", 0, 0, 0, [],
                        merged, changed, channel)
 
@@ -909,8 +897,7 @@ def run_account_checkin(cookie_dict: dict, opts: CheckinOptions,
                              topic["name"], resp_text)
             results.append(entry)
         except NetworkError:
-            merged, _ = merge_refreshed_cookies(session, cookie_dict)
-            changed = cookie_changes(session, cookie_dict)
+            merged, changed = merge_refreshed_cookies(session, cookie_dict)
             return _bundle("failed", "签到过程中网络失败", total,
                            sum(1 for r in results if r["success"]),
                            len(results) - sum(1 for r in results if r["success"]),
@@ -921,8 +908,7 @@ def run_account_checkin(cookie_dict: dict, opts: CheckinOptions,
         if idx < total:
             time.sleep(random.uniform(opts.checkin_delay_min, opts.checkin_delay_max))
 
-    merged, _ = merge_refreshed_cookies(session, cookie_dict)
-    changed = cookie_changes(session, cookie_dict)
+    merged, changed = merge_refreshed_cookies(session, cookie_dict)
     success_count = sum(1 for r in results if r["success"])
     fail_count = total - success_count
     status = "success" if fail_count == 0 else "partial"

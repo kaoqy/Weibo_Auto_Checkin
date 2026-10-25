@@ -75,7 +75,7 @@ def test_cookie_expiry_accepts_unix_and_relative_values():
     assert cookie_session.cookie_expiry({"ALF": "invalid"}) == ""
 
 
-def test_request_json_uses_session_after_first_response():
+def test_request_json_matches_v121_cookie_behavior():
     session = requests.Session()
     class Response:
         status_code = 200
@@ -90,7 +90,7 @@ def test_request_json_uses_session_after_first_response():
     session.request = request
     weibo_client.request_json(session, "GET", "https://m.weibo.cn/api/config", cookies={"SUB": "old"})
     weibo_client.request_json(session, "GET", "https://m.weibo.cn/api/config", cookies={"SUB": "old"})
-    assert calls == [{"SUB": "old"}, None]
+    assert calls == [{"SUB": "old"}, {"SUB": "old"}]
     assert session.cookies["SUB"] == "new"
 
 
