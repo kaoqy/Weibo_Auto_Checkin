@@ -9,7 +9,11 @@ function gotoLogin() {
 
 function handleResp(r, path) {
   if (r.status === 401) { gotoLogin(); throw new Error('未登录'); }
-  if (!r.ok) throw new Error('请求失败 ' + r.status);
+  if (!r.ok) {
+    const error = new Error('请求失败 ' + r.status);
+    error.status = r.status;
+    throw error;
+  }
   return r;
 }
 
@@ -1230,7 +1234,16 @@ $('#btn-test-tg').onclick = async () => {
 };
 
 /* ===== 立即签到 + 运行状态轮询 ===== */
+let checkinStarting = false;
+function setCheckinStarting(starting) {
+  checkinStarting = starting;
+  $('#btn-run').disabled = starting;
+  if (starting) $('#btn-checkin-selected').disabled = true;
+  else updateSelCount();
+}
 async function startCheckin(path, body={}) {
+  if (checkinStarting) return {ok: true, attached: true, message: '正在连接签到任务'};
+  setCheckinStarting(true);
   $('#runModal').hidden = false;
   document.body.classList.add('modal-open');
   $('#runBar').style.width='0%';
@@ -1240,8 +1253,15 @@ async function startCheckin(path, body={}) {
     pollRun();
     return result;
   } catch(e) {
+    if (e.status === 409) {
+      $('#runInfo').textContent='已有任务正在运行，正在同步进度…';
+      pollRun();
+      return {ok: true, attached: true, message: '已连接到正在运行的签到任务'};
+    }
     $('#runInfo').textContent='启动失败：'+(e.message||'请求失败');
     throw e;
+  } finally {
+    setCheckinStarting(false);
   }
 }
 $('#btn-run').onclick = () => startCheckin('/api/checkin/run').catch(e=>toast(e.message||'启动失败','err'));
